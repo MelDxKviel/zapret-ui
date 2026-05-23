@@ -1,0 +1,169 @@
+import { ThemePalette } from "../tokens.slint";
+import { AppSwitch } from "../components/switch.slint";
+import { AppInput } from "../components/input.slint";
+import { AppButton } from "../components/button.slint";
+
+export component SettingsPage inherits Rectangle {
+    in-out property <bool> autostart;
+    in-out property <bool> autoupdate_check;
+    in-out property <string> install_dir;
+    in-out property <bool> minimize_to_tray;
+    in-out property <string> theme; // "dark" | "light"
+
+    callback open_folder_clicked();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 20px;
+        padding: 24px;
+        alignment: start;
+
+        // Header
+        VerticalLayout {
+            spacing: 4px;
+            Text {
+                text: "Settings";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-lg;
+                font-weight: 700;
+                color: ThemePalette.text-primary;
+            }
+            Text {
+                text: "Configure zapret-ui application and path options";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-xs;
+                color: ThemePalette.text-muted;
+            }
+        }
+
+        // Section 1: General settings
+        Rectangle {
+            background: ThemePalette.glass-bg;
+            border-radius: ThemePalette.border-radius-md;
+            border-width: 1px;
+            border-color: ThemePalette.glass-border;
+            
+            VerticalLayout {
+                padding: 16px;
+                spacing: 16px;
+
+                Text {
+                    text: "Application Preferences";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-sm;
+                    font-weight: 700;
+                    color: ThemePalette.text-primary;
+                }
+
+                // Autostart switch
+                AppSwitch {
+                    text: "Start automatically with Windows";
+                    checked: root.autostart;
+                    toggled(val) => { root.autostart = val; }
+                }
+
+                // Minimize to tray
+                AppSwitch {
+                    text: "Minimize to system tray on close";
+                    checked: root.minimize_to_tray;
+                    toggled(val) => { root.minimize_to_tray = val; }
+                }
+            }
+        }
+
+        // Section 2: Updates & paths
+        Rectangle {
+            background: ThemePalette.glass-bg;
+            border-radius: ThemePalette.border-radius-md;
+            border-width: 1px;
+            border-color: ThemePalette.glass-border;
+            
+            VerticalLayout {
+                padding: 16px;
+                spacing: 16px;
+
+                Text {
+                    text: "Updates & Paths";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-sm;
+                    font-weight: 700;
+                    color: ThemePalette.text-primary;
+                }
+
+                // Auto update switch
+                AppSwitch {
+                    text: "Check for updates on launch";
+                    checked: root.autoupdate_check;
+                    toggled(val) => { root.autoupdate_check = val; }
+                }
+
+                // Path input
+                VerticalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "Zapret Installation Folder";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-xs;
+                        font-weight: 600;
+                        color: ThemePalette.text-secondary;
+                    }
+                    
+                    HorizontalLayout {
+                        spacing: 8px;
+                        AppInput {
+                            text: root.install_dir;
+                            placeholder: "C:\\Users\\...\\AppData\\Roaming\\zapret-ui\\zapret";
+                            enabled: false; // Managed by backend / read-only file dialog
+                        }
+                        AppButton {
+                            text: "Open Folder";
+                            icon: @image-url("../../assets/icons/folder.svg");
+                            variant: "secondary";
+                            clicked => { root.open_folder_clicked(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 3: Appearance
+        Rectangle {
+            background: ThemePalette.glass-bg;
+            border-radius: ThemePalette.border-radius-md;
+            border-width: 1px;
+            border-color: ThemePalette.glass-border;
+            
+            VerticalLayout {
+                padding: 16px;
+                spacing: 16px;
+
+                Text {
+                    text: "Theme Options";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-sm;
+                    font-weight: 700;
+                    color: ThemePalette.text-primary;
+                }
+
+                HorizontalLayout {
+                    alignment: space-between;
+
+                    Text {
+                        text: "Enable Dark Theme";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-sm;
+                        color: ThemePalette.text-secondary;
+                    }
+
+                    AppSwitch {
+                        checked: root.theme == "dark";
+                        toggled(val) => {
+                            root.theme = val ? "dark" : "light";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

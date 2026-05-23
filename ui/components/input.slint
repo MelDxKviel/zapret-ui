@@ -1,0 +1,56 @@
+import { ThemePalette } from "../tokens.slint";
+
+export component AppInput inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    in property <image> icon;
+    
+    callback edited(string);
+
+    height: 36px;
+    border-radius: ThemePalette.border-radius-md;
+    border-width: 1px;
+    border-color: focus-scope.has-focus ? ThemePalette.accent-primary : ThemePalette.border;
+    background: ThemePalette.is-dark ? #161a22 : #ffffff;
+
+    animate border-color { duration: 120ms; }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+
+        if (root.icon.width > 0 && root.icon.height > 0) : Image {
+            source: root.icon;
+            width: 16px;
+            height: 16px;
+            colorize: ThemePalette.text-muted;
+            vertical-alignment: center;
+        }
+
+        focus-scope := FocusScope {
+            input := TextInput {
+                text: root.text;
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-sm;
+                color: ThemePalette.text-primary;
+                vertical-alignment: center;
+                single-line: true;
+                enabled: root.enabled;
+                edited => {
+                    root.text = self.text;
+                    root.edited(self.text);
+                }
+            }
+
+            if (root.text == "") : Text {
+                text: root.placeholder;
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-sm;
+                color: ThemePalette.text-muted;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

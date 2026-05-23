@@ -1,0 +1,360 @@
+import { ThemePalette, AppStatus } from "../tokens.slint";
+import { AppButton } from "../components/button.slint";
+
+export component HomePage inherits Rectangle {
+    in property <AppStatus> status;
+    in property <string> selected_strategy;
+    in property <float> progress;
+    in property <bool> is_busy;
+
+    callback start_clicked();
+    callback stop_clicked();
+    callback install_clicked();
+    callback update_clicked();
+    callback open_folder_clicked();
+    callback pick_strategy_clicked();
+    callback run_as_service_clicked();
+    callback service_stop_clicked();
+    callback service_remove_clicked();
+
+    background: transparent;
+
+    property <bool> running: root.status.running_mode != "None";
+    // The strategy we will act on: the running one if active, otherwise the user's pick.
+    property <string> chosen: root.status.active_strategy != "" ? root.status.active_strategy : root.selected_strategy;
+    property <bool> has_strategy: root.chosen != "";
+
+    VerticalLayout {
+        spacing: 20px;
+        padding: 28px;
+        alignment: start;
+
+        // HEADER
+        HorizontalLayout {
+            spacing: 16px;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Bypass Dashboard";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-lg;
+                    font-weight: 700;
+                    color: ThemePalette.text-primary;
+                }
+                Text {
+                    text: "Manage zapret process and service status";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-xs;
+                    color: ThemePalette.text-muted;
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 0;
+                background: root.running ? ThemePalette.accent-success-glow :
+                            (root.status.installed ? ThemePalette.surface : ThemePalette.accent-danger-glow);
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: root.running ? ThemePalette.accent-success :
+                              (root.status.installed ? ThemePalette.border : ThemePalette.accent-danger);
+                height: 28px;
+                width: pill-layout.preferred-width + 24px;
+                y: 4px;
+
+                pill-layout := HorizontalLayout {
+                    spacing: 8px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        y: parent.height / 2 - 4px;
+                        border-radius: 4px;
+                        background: root.running ? ThemePalette.accent-success :
+                                    (root.status.installed ? ThemePalette.text-muted : ThemePalette.accent-danger);
+                    }
+                    Text {
+                        text: root.status.running_mode == "UserProcess" ? "Running" :
+                              (root.status.running_mode == "WindowsService" ? "Service active" :
+                              (root.status.installed ? "Stopped" : "Not installed"));
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-xs;
+                        font-weight: 700;
+                        color: root.running ? ThemePalette.accent-success :
+                               (root.status.installed ? ThemePalette.text-secondary : ThemePalette.accent-danger);
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // BIG CONTROL CARD
+        Rectangle {
+            background: @linear-gradient(180deg, ThemePalette.glass-bg 0%, ThemePalette.surface 100%);
+            border-radius: 18px;
+            border-width: 1px;
+            border-color: ThemePalette.glass-border;
+            height: 280px;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 16px;
+                padding: 24px;
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    big-btn := Rectangle {
+                        width: 132px;
+                        height: 132px;
+                        border-radius: 66px;
+
+                        property <bool> clickable: root.status.installed && !root.is_busy && root.has_strategy;
+
+                        background: !root.status.installed ?
+                            (ThemePalette.is-dark ? #232a3a : #d1d5db) :
+                            (root.running ?
+                                @linear-gradient(135deg, #f87171 0%, #b91c1c 100%) :
+                                (root.has_strategy ?
+                                    @linear-gradient(135deg, #60a5fa 0%, #1d4ed8 100%) :
+                                    (ThemePalette.is-dark ? #232a3a : #d1d5db)));
+
+                        border-width: 2px;
+                        border-color: !big-btn.clickable ? ThemePalette.text-muted :
+                            (root.running ? ThemePalette.accent-danger : ThemePalette.accent-primary);
+
+                        // Glow ring (behind, non-interactive)
+                        Rectangle {
+                            x: -10px;
+                            y: -10px;
+                            width: parent.width + 20px;
+                            height: parent.height + 20px;
+                            border-radius: (parent.width + 20px) / 2;
+                            background: root.running ? ThemePalette.accent-danger-glow :
+                                        (big-btn.clickable ? ThemePalette.accent-primary-glow : transparent);
+                            opacity: btn-ta.has-hover ? 1.0 : 0.5;
+                            animate opacity { duration: 200ms; }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Image {
+                                    source: root.running ?
+                                        @image-url("../../assets/icons/stop.svg") :
+                                        @image-url("../../assets/icons/play.svg");
+                                    width: 30px;
+                                    height: 30px;
+                                    colorize: #ffffff;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Text {
+                                    text: root.running ? "STOP" : "START";
+                                    font-family: ThemePalette.font-family;
+                                    font-size: ThemePalette.font-size-sm;
+                                    font-weight: 800;
+                                    color: #ffffff;
+                                }
+                            }
+                        }
+
+                        // TouchArea on TOP so clicks always register.
+                        btn-ta := TouchArea {
+                            enabled: big-btn.clickable;
+                            mouse-cursor: big-btn.clickable ? MouseCursor.pointer : MouseCursor.default;
+                            clicked => {
+                                if (root.running) {
+                                    root.stop_clicked();
+                                } else {
+                                    root.start_clicked();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    text: !root.status.installed ? "Install zapret first to activate bypass" :
+                          (!root.has_strategy ? "Pick a strategy, then press START or run it as a service" :
+                          (root.running ? "Bypass active — " + root.chosen :
+                          "Ready: " + root.chosen + " — press START or run as service"));
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-xs;
+                    color: ThemePalette.text-muted;
+                    horizontal-alignment: center;
+                }
+
+                if !root.has_strategy && root.status.installed : HorizontalLayout {
+                    alignment: center;
+                    AppButton {
+                        text: "Pick a strategy";
+                        variant: "primary";
+                        clicked => { root.pick_strategy_clicked(); }
+                    }
+                }
+            }
+        }
+
+        // TWO COLUMN ROW: Strategy + Service
+        HorizontalLayout {
+            spacing: 16px;
+
+            Rectangle {
+                background: ThemePalette.glass-bg;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: ThemePalette.glass-border;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "Selected strategy";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-xs;
+                        font-weight: 700;
+                        color: ThemePalette.text-secondary;
+                    }
+
+                    Text {
+                        text: root.has_strategy ? root.chosen : "— none —";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-base;
+                        font-weight: 700;
+                        color: root.has_strategy ? ThemePalette.text-primary : ThemePalette.text-muted;
+                        overflow: elide;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        AppButton {
+                            text: "Change strategy";
+                            variant: "secondary";
+                            clicked => { root.pick_strategy_clicked(); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                background: ThemePalette.glass-bg;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: ThemePalette.glass-border;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "Windows Service";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-xs;
+                        font-weight: 700;
+                        color: ThemePalette.text-secondary;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        AppButton {
+                            text: "Run as service";
+                            variant: "success";
+                            enabled: !root.is_busy && root.has_strategy;
+                            clicked => { root.run_as_service_clicked(); }
+                        }
+                        AppButton {
+                            text: "Stop";
+                            variant: "secondary";
+                            enabled: !root.is_busy;
+                            clicked => { root.service_stop_clicked(); }
+                        }
+                        AppButton {
+                            text: "Uninstall";
+                            variant: "danger";
+                            enabled: !root.is_busy;
+                            clicked => { root.service_remove_clicked(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Install / Update / Folder row
+        HorizontalLayout {
+            spacing: 12px;
+
+            AppButton {
+                text: root.status.installed ? "Reinstall zapret" : "Install zapret";
+                icon: @image-url("../../assets/icons/download.svg");
+                variant: root.status.installed ? "secondary" : "primary";
+                enabled: !root.is_busy;
+                clicked => { root.install_clicked(); }
+            }
+
+            AppButton {
+                text: root.status.update_available ? "Update available!" : "Check for update";
+                icon: @image-url("../../assets/icons/download.svg");
+                variant: root.status.update_available ? "warning" : "secondary";
+                enabled: !root.is_busy;
+                clicked => { root.update_clicked(); }
+            }
+
+            AppButton {
+                text: "Open folder";
+                icon: @image-url("../../assets/icons/folder.svg");
+                variant: "secondary";
+                enabled: root.status.installed;
+                clicked => { root.open_folder_clicked(); }
+            }
+        }
+
+        // Progress bar
+        if root.is_busy || root.progress > 0 : VerticalLayout {
+            spacing: 6px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Processing...";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-xs;
+                    color: ThemePalette.text-secondary;
+                }
+                Text {
+                    text: round(root.progress * 100) + "%";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-xs;
+                    font-weight: 700;
+                    color: ThemePalette.accent-primary;
+                }
+            }
+
+            Rectangle {
+                height: 6px;
+                background: ThemePalette.is-dark ? #1e2430 : #e5e7eb;
+                border-radius: 3px;
+                clip: true;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.progress;
+                    height: parent.height;
+                    background: @linear-gradient(90deg, ThemePalette.accent-primary 0%, ThemePalette.accent-success 100%);
+                    border-radius: 3px;
+                    animate width { duration: 150ms; easing: ease-out; }
+                }
+            }
+        }
+    }
+}

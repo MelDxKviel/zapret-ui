@@ -1,0 +1,75 @@
+import { ThemePalette } from "../tokens.slint";
+
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <string> variant: "primary"; // "primary" | "secondary" | "danger" | "success" | "warning"
+    in property <bool> enabled: true;
+    in property <length> icon-width: 16px;
+    
+    callback clicked;
+
+    has-hover := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+
+    border-radius: ThemePalette.border-radius-md;
+    border-width: 1px;
+    
+    background: !root.enabled ? 
+        (ThemePalette.is-dark ? #1e2430 : #e5e7eb) : 
+        (root.variant == "primary" ? (has-hover.has-hover ? ThemePalette.accent-primary-hover : ThemePalette.accent-primary) :
+        (root.variant == "danger" ? (has-hover.has-hover ? ThemePalette.accent-danger-hover : ThemePalette.accent-danger) :
+        (root.variant == "success" ? (has-hover.has-hover ? ThemePalette.accent-success-hover : ThemePalette.accent-success) :
+        (root.variant == "warning" ? (has-hover.has-hover ? ThemePalette.accent-warning-hover : ThemePalette.accent-warning) :
+        // secondary
+        (has-hover.has-hover ? ThemePalette.surface-hover : ThemePalette.surface)))));
+
+    border-color: !root.enabled ?
+        (ThemePalette.is-dark ? #283042 : #d1d5db) :
+        (root.variant == "primary" ? (has-hover.has-hover ? ThemePalette.accent-primary-hover : ThemePalette.accent-primary) :
+        (root.variant == "danger" ? (has-hover.has-hover ? ThemePalette.accent-danger-hover : ThemePalette.accent-danger) :
+        (root.variant == "success" ? (has-hover.has-hover ? ThemePalette.accent-success-hover : ThemePalette.accent-success) :
+        (root.variant == "warning" ? (has-hover.has-hover ? ThemePalette.accent-warning-hover : ThemePalette.accent-warning) :
+        ThemePalette.border))));
+
+    height: 36px;
+    
+    animate background { duration: 120ms; easing: ease-out; }
+    animate border-color { duration: 120ms; easing: ease-out; }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        padding-left: 14px;
+        padding-right: 14px;
+
+        if (root.icon.width > 0 && root.icon.height > 0) : VerticalLayout {
+            alignment: center;
+            width: root.icon-width;
+            Image {
+                source: root.icon;
+                width: root.icon-width;
+                height: root.icon-width;
+                colorize: !root.enabled ?
+                    ThemePalette.text-muted :
+                    (root.variant == "primary" || root.variant == "danger" || root.variant == "success" ? #ffffff : ThemePalette.text-primary);
+                animate colorize { duration: 120ms; }
+            }
+        }
+
+        Text {
+            text: root.text;
+            font-family: ThemePalette.font-family;
+            font-size: ThemePalette.font-size-sm;
+            font-weight: 600;
+            color: !root.enabled ? 
+                ThemePalette.text-muted :
+                (root.variant == "primary" || root.variant == "danger" || root.variant == "success" ? #ffffff : ThemePalette.text-primary);
+            vertical-alignment: center;
+            animate color { duration: 120ms; }
+        }
+    }
+}

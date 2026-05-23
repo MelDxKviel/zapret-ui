@@ -1,0 +1,169 @@
+import { ThemePalette, AppStatus } from "../tokens.slint";
+import { AppButton } from "../components/button.slint";
+
+export component AboutPage inherits Rectangle {
+    in property <AppStatus> status;
+    in property <string> app_version: "v0.1.0";
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 24px;
+        padding: 24px;
+        alignment: start;
+
+        // Logo & Branding
+        VerticalLayout {
+            spacing: 8px;
+            alignment: center;
+            
+            // Shield logo representation
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 72px;
+                    height: 72px;
+                    border-radius: 36px;
+                    background: @linear-gradient(135deg, ThemePalette.accent-primary 0%, ThemePalette.accent-success 100%);
+                    
+                    Image {
+                        source: @image-url("../../assets/icons/about.svg");
+                        width: 36px;
+                        height: 36px;
+                        colorize: #ffffff;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Text {
+                text: "zapret-ui";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-xl;
+                font-weight: 900;
+                color: ThemePalette.text-primary;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Windows GUI for Deep Packet Inspection bypass";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-xs;
+                color: ThemePalette.text-muted;
+                horizontal-alignment: center;
+            }
+        }
+
+        // Versions Info
+        Rectangle {
+            background: ThemePalette.glass-bg;
+            border-radius: ThemePalette.border-radius-md;
+            border-width: 1px;
+            border-color: ThemePalette.glass-border;
+            
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                Text {
+                    text: "System Information";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-sm;
+                    font-weight: 700;
+                    color: ThemePalette.text-primary;
+                }
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "App Version";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-sm;
+                        color: ThemePalette.text-secondary;
+                    }
+                    Text {
+                        text: root.app_version;
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-sm;
+                        font-weight: 700;
+                        color: ThemePalette.accent-primary;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "Zapret Version";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-sm;
+                        color: ThemePalette.text-secondary;
+                    }
+                    Text {
+                        text: root.status.installed ? root.status.installed_version : "Not Installed";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-sm;
+                        font-weight: 700;
+                        color: root.status.installed ? ThemePalette.accent-success : ThemePalette.accent-danger;
+                    }
+                }
+            }
+        }
+
+        // Warning Callout (Antivirus)
+        Rectangle {
+            background: ThemePalette.accent-danger-glow;
+            border-radius: ThemePalette.border-radius-md;
+            border-width: 1px;
+            border-color: ThemePalette.accent-danger;
+            
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "Antivirus Notice";
+                        font-family: ThemePalette.font-family;
+                        font-size: ThemePalette.font-size-sm;
+                        font-weight: 700;
+                        color: ThemePalette.accent-danger;
+                    }
+                }
+
+                Text {
+                    text: "Some antivirus programs might flag winws.exe due to raw socket packet manipulation. This is a false positive. If issues occur, add the installation folder to exclusions.";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-xs;
+                    color: ThemePalette.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // Links
+        VerticalLayout {
+            spacing: 8px;
+            alignment: center;
+
+            Text {
+                text: "GitHub Repository:";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-xs;
+                color: ThemePalette.text-muted;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "github.com/Flowseal/zapret-discord-youtube";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-xs;
+                font-weight: 600;
+                color: ThemePalette.accent-primary;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

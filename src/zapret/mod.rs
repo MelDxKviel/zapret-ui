@@ -1,0 +1,10 @@
+pub mod batparse;
+pub mod catalog;
+pub mod strategies;
+pub mod installer;
+pub mod updater;
+pub mod github;
+pub mod paths;
+pub mod process;
+pub mod service;
+pub mod elevation;

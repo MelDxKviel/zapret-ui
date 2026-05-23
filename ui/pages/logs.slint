@@ -1,0 +1,75 @@
+import { ThemePalette } from "../tokens.slint";
+import { AppButton } from "../components/button.slint";
+import { TextEdit } from "std-widgets.slint";
+
+export component LogsPage inherits Rectangle {
+    in property <string> log_text;
+
+    callback open_folder_clicked();
+    callback clear_clicked();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 16px;
+        padding: 24px;
+
+        // Header and Actions
+        HorizontalLayout {
+            alignment: space-between;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Activity Logs";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-lg;
+                    font-weight: 700;
+                    color: ThemePalette.text-primary;
+                }
+                Text {
+                    text: "Real-time winws process and installer output — select text to copy";
+                    font-family: ThemePalette.font-family;
+                    font-size: ThemePalette.font-size-xs;
+                    color: ThemePalette.text-muted;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                AppButton {
+                    text: "Open Log File";
+                    icon: @image-url("../../assets/icons/folder.svg");
+                    variant: "secondary";
+                    clicked => { root.open_folder_clicked(); }
+                }
+                AppButton {
+                    text: "Clear Logs";
+                    icon: @image-url("../../assets/icons/trash.svg");
+                    variant: "danger";
+                    clicked => { root.clear_clicked(); }
+                }
+            }
+        }
+
+        // Terminal Console — read-only TextEdit so the user can select & copy (Ctrl+C)
+        Rectangle {
+            background: #090b10;
+            border-radius: ThemePalette.border-radius-md;
+            border-width: 1px;
+            border-color: ThemePalette.is-dark ? #202635 : #cbd5e1;
+            vertical-stretch: 1;
+            clip: true;
+
+            log-edit := TextEdit {
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                height: parent.height - 16px;
+                read-only: true;
+                wrap: word-wrap;
+                text: root.log_text;
+            }
+        }
+    }
+}

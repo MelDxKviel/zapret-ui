@@ -1,0 +1,81 @@
+export struct AppStatus {
+    installed: bool,
+    installed_version: string,
+    latest_version: string,
+    update_available: bool,
+    running_mode: string, // "None" | "UserProcess" | "WindowsService"
+    active_strategy: string,
+    winws_pid: int,
+}
+
+export struct StrategyItem {
+    id: string,
+    display_name: string,
+    category: string,
+    description: string,
+}
+
+export global ThemePalette {
+    in-out property <bool> is-dark: true;
+
+    // Dark Mode Palette
+    out property <color> dark-bg: #0d0f12;
+    out property <color> dark-surface: #161a22;
+    out property <color> dark-surface-hover: #202635;
+    out property <color> dark-border: #283042;
+    out property <color> dark-text-primary: #f3f4f6;
+    out property <color> dark-text-secondary: #9ca3af;
+    out property <color> dark-text-muted: #6b7280;
+    out property <color> dark-glass-bg: rgba(22, 26, 34, 0.7);
+    out property <color> dark-glass-border: rgba(40, 48, 66, 0.5);
+
+    // Light Mode Palette
+    out property <color> light-bg: #f3f4f6;
+    out property <color> light-surface: #ffffff;
+    out property <color> light-surface-hover: #f9fafb;
+    out property <color> light-border: #e5e7eb;
+    out property <color> light-text-primary: #111827;
+    out property <color> light-text-secondary: #4b5563;
+    out property <color> light-text-muted: #9ca3af;
+    out property <color> light-glass-bg: rgba(255, 255, 255, 0.7);
+    out property <color> light-glass-border: rgba(229, 231, 235, 0.8);
+
+    // Active colors mapped dynamically
+    out property <color> bg: is-dark ? dark-bg : light-bg;
+    out property <color> surface: is-dark ? dark-surface : light-surface;
+    out property <color> surface-hover: is-dark ? dark-surface-hover : light-surface-hover;
+    out property <color> border: is-dark ? dark-border : light-border;
+    out property <color> text-primary: is-dark ? dark-text-primary : light-text-primary;
+    out property <color> text-secondary: is-dark ? dark-text-secondary : light-text-secondary;
+    out property <color> text-muted: is-dark ? dark-text-muted : light-text-muted;
+    out property <color> glass-bg: is-dark ? dark-glass-bg : light-glass-bg;
+    out property <color> glass-border: is-dark ? dark-glass-border : light-glass-border;
+
+    // Vibrant Gradients & Accents
+    out property <color> accent-primary: #3b82f6;      // Royal Blue
+    out property <color> accent-primary-hover: #2563eb;
+    out property <color> accent-primary-glow: rgba(59, 130, 246, 0.2);
+    out property <color> accent-success: #10b981;      // Emerald Green
+    out property <color> accent-success-hover: #059669;
+    out property <color> accent-success-glow: rgba(16, 185, 129, 0.2);
+    out property <color> accent-danger: #ef4444;       // Rose Red
+    out property <color> accent-danger-hover: #dc2626;
+    out property <color> accent-danger-glow: rgba(239, 68, 68, 0.2);
+    out property <color> accent-warning: #f59e0b;      // Amber Yellow
+    out property <color> accent-warning-hover: #d97706;
+
+    // Typography
+    out property <string> font-family: "Segoe UI";
+    out property <length> font-size-xs: 11px;
+    out property <length> font-size-sm: 13px;
+    out property <length> font-size-base: 15px;
+    out property <length> font-size-md: 18px;
+    out property <length> font-size-lg: 22px;
+    out property <length> font-size-xl: 28px;
+    
+    // Layout Config
+    out property <length> border-radius-sm: 6px;
+    out property <length> border-radius-md: 10px;
+    out property <length> border-radius-lg: 16px;
+    out property <length> border-radius-xl: 24px;
+}

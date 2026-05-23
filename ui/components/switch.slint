@@ -1,0 +1,53 @@
+import { ThemePalette } from "../tokens.slint";
+
+export component AppSwitch inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    
+    callback toggled(bool);
+
+    height: 24px;
+    background: transparent;
+
+    HorizontalLayout {
+        alignment: start;
+        spacing: 12px;
+
+        track := Rectangle {
+            width: 42px;
+            height: 22px;
+            border-radius: 11px;
+            background: root.checked ? ThemePalette.accent-primary : (ThemePalette.is-dark ? #202635 : #e5e7eb);
+            border-width: 1px;
+            border-color: root.checked ? ThemePalette.accent-primary : ThemePalette.border;
+            
+            animate background { duration: 120ms; }
+            
+            thumb := Rectangle {
+                x: root.checked ? 21px : 2px;
+                y: 2px;
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                background: #ffffff;
+                
+                animate x { duration: 120ms; easing: ease-in-out; }
+            }
+        }
+
+        if (root.text != "") : Text {
+            text: root.text;
+            font-family: ThemePalette.font-family;
+            font-size: ThemePalette.font-size-sm;
+            color: ThemePalette.text-primary;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}

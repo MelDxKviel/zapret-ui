@@ -1,0 +1,132 @@
+import { ThemePalette, StrategyItem } from "../tokens.slint";
+import { AppButton } from "../components/button.slint";
+import { ListView } from "std-widgets.slint";
+
+component CategoryBadge inherits Rectangle {
+    in property <string> label;
+    in property <bool> highlight: false;
+
+    background: root.highlight ? ThemePalette.accent-success-glow : ThemePalette.border;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.highlight ? ThemePalette.accent-success : transparent;
+    height: 20px;
+    horizontal-stretch: 0;
+    width: badge-layout.preferred-width + 16px;
+
+    badge-layout := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.label;
+            font-family: ThemePalette.font-family;
+            font-size: ThemePalette.font-size-xs;
+            font-weight: 700;
+            color: root.highlight ? ThemePalette.accent-success : ThemePalette.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component StrategiesPage inherits Rectangle {
+    in property <[StrategyItem]> strategies_model;
+    in property <string> active_strategy_id;
+    in property <string> selected_strategy;
+    in property <bool> is_busy;
+
+    callback strategy_selected(string);
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 14px;
+        padding: 24px;
+
+        VerticalLayout {
+            spacing: 4px;
+            Text {
+                text: "Strategies";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-lg;
+                font-weight: 700;
+                color: ThemePalette.text-primary;
+            }
+            Text {
+                text: "Pick a preset, then start it from Home. If one doesn't work for your ISP, try the next ALT.";
+                font-family: ThemePalette.font-family;
+                font-size: ThemePalette.font-size-xs;
+                color: ThemePalette.text-muted;
+            }
+        }
+
+        ListView {
+                vertical-stretch: 1;
+                for item in root.strategies_model : Rectangle {
+                    property <bool> is_active: root.active_strategy_id == item.id;
+                    property <bool> is_selected: root.selected_strategy == item.id;
+
+                    // Outer slot includes bottom gap so cards don't touch
+                    height: 128px;
+                    background: transparent;
+
+                    card := Rectangle {
+                        y: 0;
+                        height: 116px;
+                        background: (is_active || is_selected) ? ThemePalette.accent-primary-glow : ThemePalette.glass-bg;
+                        border-radius: 12px;
+                        border-width: 1px;
+                        border-color: is_active ? ThemePalette.accent-success :
+                                      (is_selected ? ThemePalette.accent-primary : ThemePalette.glass-border);
+
+                        HorizontalLayout {
+                            padding: 16px;
+                            spacing: 16px;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 6px;
+
+                                Text {
+                                    text: item.display_name;
+                                    font-family: ThemePalette.font-family;
+                                    font-size: ThemePalette.font-size-base;
+                                    font-weight: 700;
+                                    color: ThemePalette.text-primary;
+                                    overflow: elide;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: start;
+                                    CategoryBadge { label: item.category; }
+                                    if is_active : CategoryBadge { label: "Running"; highlight: true; }
+                                    if is_selected && !is_active : CategoryBadge { label: "Selected"; highlight: true; }
+                                }
+
+                                Text {
+                                    text: item.description;
+                                    font-family: ThemePalette.font-family;
+                                    font-size: ThemePalette.font-size-xs;
+                                    color: ThemePalette.text-secondary;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                }
+                            }
+
+                            VerticalLayout {
+                                width: 150px;
+                                spacing: 8px;
+                                alignment: center;
+
+                                AppButton {
+                                    text: is_selected ? "Selected ✓" : "Select";
+                                    variant: is_selected ? "success" : "primary";
+                                    clicked => { root.strategy_selected(item.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+    }
+}

@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+
+# Backed-up / generated config
+*.bak
+
+# Local screenshots & scratch
+v*.png
+*.tmp
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+
+# Claude local state
+.claude/
