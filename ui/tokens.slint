@@ -31,6 +31,7 @@ export struct StrategyItem {
     description: string,
     pretty: string,   // display name without the "(ALT…)" suffix
     alt: string,       // text inside the parentheses, e.g. "ALT2" (empty if none)
+    favorite: bool,    // starred by the user (floats to the top of the list)
 }
 
 // One row in the strategy-tester results table. `ok`/`total` are the reachable
@@ -46,6 +47,7 @@ export struct TestResultItem {
     latency: int,
     rank: int,
     is_best: bool,
+    favorite: bool,   // starred by the user
 }
 
 export global ThemePalette {

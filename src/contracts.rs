@@ -162,6 +162,9 @@ pub enum BackendCmd {
     UpdateIpsetList,
     /// Compare the system hosts file to the repo hosts and open it for merge if stale.
     UpdateHostsFile,
+    /// Persist the user's favorite-strategy ids (toggled with the star on the
+    /// Strategies / Tester pages).
+    SetFavorites(Vec<String>),
 }
 
 /// Outcome of testing a single strategy against the target endpoints.

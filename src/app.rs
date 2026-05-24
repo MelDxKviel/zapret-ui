@@ -17,9 +17,52 @@ thread_local! {
     static LOG_FILTER: RefCell<(String, String)> = RefCell::new((String::new(), "ALL".to_string()));
     // Strategy-test results, in arrival order until the final ranked list lands.
     static TEST_RESULTS: RefCell<Vec<crate::contracts::StrategyTestResult>> = const { RefCell::new(Vec::new()) };
+    // Favorite strategy ids (mirrors AppConfig::favorites). Lives on the UI thread
+    // so the model rebuilders (search, toggle, test results) can read it cheaply.
+    static FAVORITES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 const LOG_BUF_CAP: usize = 4000;
+
+/// Whether `id` is currently a favorite (reads the UI-thread mirror).
+fn is_favorite(id: &str) -> bool {
+    FAVORITES.with(|f| f.borrow().iter().any(|x| x == id))
+}
+
+/// Map a catalog strategy to its Slint row, tagging its current favorite state.
+fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
+    let (pretty, alt) = split_alt(&s.id);
+    StrategyItem {
+        id: s.id.as_str().into(),
+        display_name: s.display_name.as_str().into(),
+        category: format!("{:?}", s.category).into(),
+        description: s.description.as_str().into(),
+        pretty: pretty.into(),
+        alt: alt.into(),
+        favorite: is_favorite(&s.id),
+    }
+}
+
+/// Rebuild the Slint `strategies` model from the catalog, applying the current
+/// search query and floating favorites to the top (keeping catalog order within
+/// each group). Runs on the UI thread.
+fn rebuild_strategies(ui: &MainWindow, catalog: &Arc<dyn StrategyCatalog>) {
+    let q = ui.get_strategies_query().to_string().trim().to_lowercase();
+    let mut list: Vec<crate::contracts::Strategy> = catalog
+        .all()
+        .into_iter()
+        .filter(|s| {
+            q.is_empty()
+                || format!("{} {} {}", s.id, s.display_name, s.description)
+                    .to_lowercase()
+                    .contains(&q)
+        })
+        .collect();
+    // Stable sort: favorites first, original (catalog) order preserved otherwise.
+    list.sort_by_key(|s| if is_favorite(&s.id) { 0 } else { 1 });
+    let items: Vec<StrategyItem> = list.iter().map(to_item).collect();
+    ui.set_strategies(Rc::new(slint::VecModel::from(items)).into());
+}
 
 /// Split a raw log line into (timestamp, level, message) for coloured display.
 fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
@@ -118,6 +161,7 @@ fn rebuild_test_results(ui: &MainWindow) {
                 latency: r.avg_latency_ms as i32,
                 rank: i as i32 + 1,
                 is_best: !best_id.is_empty() && r.id == best_id,
+                favorite: is_favorite(&r.id),
             }
         })
         .collect();
@@ -253,40 +297,59 @@ impl App {
             });
         }
 
-        // Populate strategies list (full)
-        fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
-            let (pretty, alt) = split_alt(&s.id);
-            StrategyItem {
-                id: s.id.as_str().into(),
-                display_name: s.display_name.as_str().into(),
-                category: format!("{:?}", s.category).into(),
-                description: s.description.as_str().into(),
-                pretty: pretty.into(),
-                alt: alt.into(),
+        // Seed favorites + the last-used strategy from the saved config, so a
+        // restart restores the user's selection instead of asking them to pick
+        // again. (Both fall back to empty/default if the config can't be read.)
+        let (fav_seed, last_strategy) = self
+            .config
+            .try_read()
+            .map(|c| (c.favorites.clone(), c.last_strategy.clone()))
+            .unwrap_or_default();
+        FAVORITES.with(|f| *f.borrow_mut() = fav_seed);
+
+        // Populate strategies list (favorites first).
+        rebuild_strategies(&ui, &self.catalog);
+
+        // Restore the previously selected strategy as the user's current pick.
+        if let Some(id) = last_strategy {
+            if let Some(s) = self.catalog.by_id(&id) {
+                ui.set_selected_item(to_item(&s));
+                ui.set_selected_strategy(id.as_str().into());
             }
         }
-        let all_items: Vec<StrategyItem> = self.catalog.all().iter().map(to_item).collect();
-        ui.set_strategies(Rc::new(slint::VecModel::from(all_items)).into());
 
         // Search: rebuild the model from the catalog filtered by the query string.
         {
             let catalog = self.catalog.clone();
             let ui_weak = ui.as_weak();
-            ui.on_strategies_search(move |query| {
+            ui.on_strategies_search(move |_query| {
                 if let Some(ui) = ui_weak.upgrade() {
-                    let q = query.to_string().trim().to_lowercase();
-                    let filtered: Vec<StrategyItem> = catalog
-                        .all()
-                        .iter()
-                        .filter(|s| {
-                            q.is_empty()
-                                || format!("{} {} {}", s.id, s.display_name, s.description)
-                                    .to_lowercase()
-                                    .contains(&q)
-                        })
-                        .map(to_item)
-                        .collect();
-                    ui.set_strategies(Rc::new(slint::VecModel::from(filtered)).into());
+                    rebuild_strategies(&ui, &catalog);
+                }
+            });
+        }
+
+        // Favorite toggle (Strategies + Tester pages): flip the UI-thread mirror,
+        // rebuild both models so the star + ordering update, and persist.
+        {
+            let catalog = self.catalog.clone();
+            let cmd_tx_c = self.cmd_tx.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_toggle_favorite(move |id| {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let id = id.to_string();
+                    let favs = FAVORITES.with(|f| {
+                        let mut b = f.borrow_mut();
+                        if let Some(pos) = b.iter().position(|x| *x == id) {
+                            b.remove(pos);
+                        } else {
+                            b.push(id);
+                        }
+                        b.clone()
+                    });
+                    rebuild_strategies(&ui, &catalog);
+                    rebuild_test_results(&ui);
+                    let _ = cmd_tx_c.try_send(BackendCmd::SetFavorites(favs));
                 }
             });
         }
@@ -382,7 +445,19 @@ impl App {
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_strategy_selected(move |_| {
+            let config = self.config.clone();
+            ui.on_strategy_selected(move |id| {
+                // Remember the pick immediately so it survives a restart even if
+                // the user never presses Engage.
+                let id = id.to_string();
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let mut cfg = config.write().await;
+                    cfg.last_strategy = Some(id);
+                    if let Err(e) = cfg.save() {
+                        tracing::warn!("Failed to persist selected strategy: {}", e);
+                    }
+                });
                 let _ = cmd_tx_c.try_send(BackendCmd::RefreshStatus);
             });
         }
@@ -542,6 +617,7 @@ impl App {
                                     description: desc.into(),
                                     pretty: pretty.into(),
                                     alt: alt.into(),
+                                    favorite: is_favorite(&active),
                                 };
                                 ui.set_active_item(active_item.clone());
                                 // Seed the user's selection if they haven't picked one yet.
@@ -617,16 +693,7 @@ impl App {
                                 // Auto-select the winner as the user's strategy.
                                 if !best.is_empty() {
                                     if let Some(s) = catalog.by_id(&best) {
-                                        let (pretty, alt) = split_alt(&s.id);
-                                        let item = StrategyItem {
-                                            id: s.id.as_str().into(),
-                                            display_name: s.display_name.as_str().into(),
-                                            category: format!("{:?}", s.category).into(),
-                                            description: s.description.as_str().into(),
-                                            pretty: pretty.into(),
-                                            alt: alt.into(),
-                                        };
-                                        ui.set_selected_item(item);
+                                        ui.set_selected_item(to_item(&s));
                                         ui.set_selected_strategy(best.as_str().into());
                                     }
                                 }
@@ -922,6 +989,13 @@ impl App {
                     }
                     BackendCmd::CancelTest => {
                         tester.cancel();
+                    }
+                    BackendCmd::SetFavorites(favs) => {
+                        let mut cfg = config.write().await;
+                        cfg.favorites = favs;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist favorites: {}", e);
+                        }
                     }
                     BackendCmd::SetGameFilter(mode) => {
                         match maintenance.set_game_filter(mode).await {

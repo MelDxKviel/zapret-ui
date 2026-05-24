@@ -1,0 +1,32 @@
+import { ThemePalette } from "../tokens.slint";
+
+// A small star toggle used to (un)favorite a strategy row. Filled + accent when
+// starred, hollow + muted otherwise; brightens on hover. Emits `toggled` — the
+// caller flips the persisted favorite state.
+export component StarToggle inherits Rectangle {
+    in property <bool> favorite: false;
+    callback toggled();
+
+    width: 28px;
+    height: 28px;
+    border-radius: ThemePalette.r-8;
+    background: ta.has-hover ? ThemePalette.surface-2 : transparent;
+    animate background { duration: 120ms; }
+
+    Image {
+        source: root.favorite
+            ? @image-url("../../assets/icons/star-filled.svg")
+            : @image-url("../../assets/icons/star.svg");
+        width: 16px;
+        height: 16px;
+        colorize: root.favorite
+            ? ThemePalette.accent
+            : (ta.has-hover ? ThemePalette.text-2 : ThemePalette.text-4);
+        animate colorize { duration: 120ms; }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}

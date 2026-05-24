@@ -5,7 +5,7 @@
 *.bak
 
 # Local screenshots & scratch
-*.png
+# *.png
 *.tmp
 
 # OS / editor

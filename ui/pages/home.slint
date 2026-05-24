@@ -281,17 +281,21 @@ component DetailRow inherits Rectangle {
     HorizontalLayout {
         padding-top: 6px;
         padding-bottom: 6px;
+        spacing: 12px;
+        // Key keeps its natural width; the value takes the rest and elides,
+        // so a long value can never overrun the key label.
         Text {
             text: root.key;
+            horizontal-stretch: 0;
             font-family: ThemePalette.font-mono;
             font-size: ThemePalette.fs-11;
             color: ThemePalette.text-4;
             letter-spacing: 0.8px;
             vertical-alignment: center;
         }
-        Rectangle { }
         Text {
             text: root.value;
+            horizontal-stretch: 1;
             font-family: ThemePalette.font-mono;
             font-size: ThemePalette.fs-12;
             color: ThemePalette.text;
@@ -703,7 +707,6 @@ export component HomePage inherits Rectangle {
                             VerticalLayout {
                                 padding: 16px;
                                 spacing: 0px;
-                                DetailRow { key: I18n.t(I18n.lang, "home.detail_id"); value: root.has_strategy ? root.chosen_item.id : "—"; }
                                 DetailRow { key: I18n.t(I18n.lang, "home.detail_profile"); value: root.has_strategy ? root.chosen_item.pretty : "—"; }
                                 DetailRow { key: I18n.t(I18n.lang, "home.detail_variant"); value: root.chosen_item.alt != "" ? root.chosen_item.alt : I18n.t(I18n.lang, "home.variant_default"); }
                                 DetailRow { key: I18n.t(I18n.lang, "home.detail_core"); value: root.status.installed_version != "" ? root.status.installed_version : "—"; last: true; }

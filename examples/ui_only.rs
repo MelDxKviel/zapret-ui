@@ -128,24 +128,56 @@ fn main() -> anyhow::Result<()> {
     ui.global::<I18n>().set_lang("ru".into());
     ui.on_set_language(|code| println!("UI: Set language: {}", code));
 
-    // Populate strategies
+    // Populate strategies. Favorites are kept in a shared set and the model is
+    // rebuilt (favorites first) whenever the star is toggled.
     let catalog = MockCatalog;
-    let slint_strategies: Vec<StrategyItem> = catalog
-        .all()
-        .iter()
-        .map(|s| {
-            let (pretty, alt) = zapret_ui::contracts::split_alt(&s.id);
-            StrategyItem {
-                id: s.id.as_str().into(),
-                display_name: s.display_name.as_str().into(),
-                category: format!("{:?}", s.category).into(),
-                description: s.description.as_str().into(),
-                pretty: pretty.into(),
-                alt: alt.into(),
+    let favorites = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let rebuild_strategies = {
+        let favorites = favorites.clone();
+        let ui_weak = ui.as_weak();
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let favs = favorites.borrow();
+                let mut list = MockCatalog.all();
+                list.sort_by_key(|s| if favs.iter().any(|f| f == &s.id) { 0 } else { 1 });
+                let items: Vec<StrategyItem> = list
+                    .iter()
+                    .map(|s| {
+                        let (pretty, alt) = zapret_ui::contracts::split_alt(&s.id);
+                        StrategyItem {
+                            id: s.id.as_str().into(),
+                            display_name: s.display_name.as_str().into(),
+                            category: format!("{:?}", s.category).into(),
+                            description: s.description.as_str().into(),
+                            pretty: pretty.into(),
+                            alt: alt.into(),
+                            favorite: favs.iter().any(|f| f == &s.id),
+                        }
+                    })
+                    .collect();
+                ui.set_strategies(Rc::new(slint::VecModel::from(items)).into());
             }
-        })
-        .collect();
-    ui.set_strategies(Rc::new(slint::VecModel::from(slint_strategies)).into());
+        }
+    };
+    let _ = &catalog;
+    rebuild_strategies();
+    {
+        let favorites = favorites.clone();
+        let rebuild_strategies = rebuild_strategies.clone();
+        ui.on_toggle_favorite(move |id| {
+            println!("UI: Toggle favorite: {}", id);
+            let id = id.to_string();
+            {
+                let mut favs = favorites.borrow_mut();
+                if let Some(pos) = favs.iter().position(|x| *x == id) {
+                    favs.remove(pos);
+                } else {
+                    favs.push(id);
+                }
+            }
+            rebuild_strategies();
+        });
+    }
 
     // Set initial status
     ui.set_status_installed(true);
@@ -198,6 +230,7 @@ fn main() -> anyhow::Result<()> {
                     latency,
                     rank,
                     is_best: best,
+                    favorite: false,
                 };
                 let rows = vec![
                     mk("general (ALT2)", "general", "ALT2", 12, 12, 184, 1, true),

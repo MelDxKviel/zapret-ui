@@ -49,6 +49,11 @@ pub struct AppConfig {
     /// was added loadable (they fall back to the default, Russian).
     #[serde(default)]
     pub language: Language,
+    /// Strategy ids the user has starred as favorites. Surfaced on the Strategies
+    /// and Tester pages (favorites float to the top of the list). `#[serde(default)]`
+    /// keeps older configs loadable.
+    #[serde(default)]
+    pub favorites: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -61,6 +66,7 @@ impl Default for AppConfig {
             theme: Theme::default(),
             minimize_to_tray: false,
             language: Language::default(),
+            favorites: Vec::new(),
         }
     }
 }

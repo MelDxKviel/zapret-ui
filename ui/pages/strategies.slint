@@ -2,6 +2,7 @@ import { ThemePalette, StrategyItem } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { AppInput } from "../components/input.slint";
+import { StarToggle } from "../components/star.slint";
 import { ListView } from "std-widgets.slint";
 
 export component StrategiesPage inherits Rectangle {
@@ -13,6 +14,7 @@ export component StrategiesPage inherits Rectangle {
 
     callback picked(StrategyItem);
     callback search_changed(string);
+    callback toggle_favorite(string);
 
     background: transparent;
 
@@ -207,6 +209,16 @@ export component StrategiesPage inherits Rectangle {
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
+                                }
+                            }
+
+                            // favorite star
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 0;
+                                StarToggle {
+                                    favorite: item.favorite;
+                                    toggled => { root.toggle_favorite(item.id); }
                                 }
                             }
 

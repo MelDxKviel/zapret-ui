@@ -218,6 +218,7 @@ export component MainWindow inherits Window {
     callback test_start_clicked();
     callback test_cancel_clicked();
     callback test_use_strategy(string);
+    callback toggle_favorite(string);
     callback logs_query_changed(string, string);
     callback logs_clear_clicked();
     callback open_log_file_clicked();
@@ -468,6 +469,7 @@ export component MainWindow inherits Window {
                         root.strategy_selected(item.id);
                         root.current_page = "home";
                     }
+                    toggle_favorite(id) => { root.toggle_favorite(id); }
                 }
             }
 
@@ -487,6 +489,7 @@ export component MainWindow inherits Window {
                     start_clicked => { root.test_start_clicked(); }
                     cancel_clicked => { root.test_cancel_clicked(); }
                     use_strategy(id) => { root.test_use_strategy(id); }
+                    toggle_favorite(id) => { root.toggle_favorite(id); }
                 }
             }
 

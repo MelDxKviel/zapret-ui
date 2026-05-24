@@ -24,7 +24,7 @@
   "nav.about": "О программе",
 
   "sidebar.status_service_running": "Service running",
-  "sidebar.status_bypass_active": "ОBypass active",
+  "sidebar.status_bypass_active": "Bypass active",
   "sidebar.status_idle": "Idle",
   "sidebar.status_not_installed": "Not installed",
 

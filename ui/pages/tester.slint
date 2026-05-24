@@ -2,6 +2,7 @@ import { ThemePalette, TestResultItem } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { StatusDot } from "../components/status_dot.slint";
+import { StarToggle } from "../components/star.slint";
 import { ListView } from "std-widgets.slint";
 
 // ── One ranked result row ──
@@ -9,6 +10,7 @@ component ResultRow inherits Rectangle {
     in property <TestResultItem> item;
     in property <bool> is_active;   // currently the user's selected strategy
     callback use_clicked();
+    callback toggle_favorite();
 
     height: 64px;
     background: ta.has-hover ? ThemePalette.surface-hover : transparent;
@@ -112,6 +114,16 @@ component ResultRow inherits Rectangle {
             }
         }
 
+        // favorite star
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            StarToggle {
+                favorite: root.item.favorite;
+                toggled => { root.toggle_favorite(); }
+            }
+        }
+
         // action
         VerticalLayout {
             alignment: center;
@@ -151,6 +163,7 @@ export component TesterPage inherits Rectangle {
     callback start_clicked();
     callback cancel_clicked();
     callback use_strategy(string);
+    callback toggle_favorite(string);
 
     background: transparent;
 
@@ -307,6 +320,7 @@ export component TesterPage inherits Rectangle {
                         item: item;
                         is_active: root.selected_strategy == item.id;
                         use_clicked => { root.use_strategy(item.id); }
+                        toggle_favorite => { root.toggle_favorite(item.id); }
                     }
                 }
             }
