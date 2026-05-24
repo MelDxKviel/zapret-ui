@@ -58,6 +58,10 @@ pub struct RuntimeStatus {
     pub winws_pid: Option<u32>,
     /// Whether a Windows service is registered with the SCM (running or stopped).
     pub service_installed: bool,
+    /// How long the bypass (winws) process has been running, in seconds. `None`
+    /// when not running. Sourced from the OS, so it survives app restarts and
+    /// page navigation instead of resetting.
+    pub uptime_secs: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

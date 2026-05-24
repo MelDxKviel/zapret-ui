@@ -73,15 +73,19 @@ fn line_passes(raw: &str, grep: &str, level: &str) -> bool {
 /// Re-parse + re-filter the whole buffer into the Slint `log_lines` model.
 fn rebuild_logs(ui: &MainWindow) {
     let (grep, level) = LOG_FILTER.with(|f| f.borrow().clone());
-    let items: Vec<LogLineItem> = LOG_BUF.with(|b| {
-        b.borrow()
-            .iter()
-            .enumerate()
-            .filter(|(_, raw)| line_passes(raw, &grep, &level))
-            .map(|(i, raw)| parse_log_line(i + 1, raw))
-            .collect()
+    let (items, text) = LOG_BUF.with(|b| {
+        let mut items: Vec<LogLineItem> = Vec::new();
+        let mut text = String::new();
+        for raw in b.borrow().iter().filter(|raw| line_passes(raw, &grep, &level)) {
+            items.push(parse_log_line(items.len() + 1, raw));
+            text.push_str(raw);
+            text.push('\n');
+        }
+        (items, text)
     });
     ui.set_log_lines(Rc::new(slint::VecModel::from(items)).into());
+    // Plain-text mirror for the selectable / copyable terminal view.
+    ui.set_log_text(text.into());
 }
 
 /// Open a path with the OS default handler (folder in Explorer, URL in browser).
@@ -380,6 +384,9 @@ impl App {
                                 ui.set_status_active_strategy(active.as_str().into());
                                 ui.set_status_winws_pid(status.winws_pid.unwrap_or(0) as i32);
                                 ui.set_status_service_installed(status.service_installed);
+                                // Authoritative bypass uptime from the OS; the UI ticks
+                                // locally between polls and re-syncs to this each refresh.
+                                ui.set_status_uptime(status.uptime_secs.unwrap_or(0) as i32);
 
                                 // Resolve the running strategy to a display item.
                                 let (pretty, alt) = split_alt(&active);

@@ -6,6 +6,8 @@ import { ScrollView } from "std-widgets.slint";
 
 export component LogsPage inherits Rectangle {
     in property <[LogLineItem]> log_lines;
+    // Plain-text mirror of the (filtered) log buffer for select & copy.
+    in property <string> log_text;
     in-out property <string> query;
     in-out property <string> level: "ALL";
     in-out property <bool> autoscroll: true;
@@ -165,69 +167,29 @@ export component LogsPage inherits Rectangle {
                         Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.border; }
                     }
 
-                    // terminal body
+                    // terminal body — read-only, selectable text so the whole log
+                    // can be selected and copied (Ctrl+C), as it was before.
                     Rectangle {
                         vertical-stretch: 1;
                         background: ThemePalette.logs-bg;
                         clip: true;
                         term := ScrollView {
+                            viewport-width: term.visible-width;
                             VerticalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                padding-top: 8px;
+                                padding-bottom: 8px;
                                 alignment: start;
-                                for line in root.log_lines : Rectangle {
-                                    height: msg-txt.preferred-height + 2px;
-                                    background: ln-ta.has-hover ? #ffffff08 : transparent;
-                                    ln-ta := TouchArea { }
-                                    HorizontalLayout {
-                                        spacing: 14px;
-                                        // line number gutter
-                                        Rectangle {
-                                            width: 48px;
-                                            Text {
-                                                x: 0; width: parent.width - 8px;
-                                                text: "\{line.line_no}";
-                                                font-family: ThemePalette.font-mono;
-                                                font-size: ThemePalette.fs-12;
-                                                color: ThemePalette.log-ln;
-                                                horizontal-alignment: right;
-                                                vertical-alignment: top;
-                                            }
-                                            Rectangle {
-                                                x: parent.width - 1px; width: 1px;
-                                                background: ThemePalette.log-ln-border;
-                                            }
-                                        }
-                                        // message: muted timestamp + colored level tag + body
-                                        HorizontalLayout {
-                                            horizontal-stretch: 1;
-                                            padding-right: 14px;
-                                            spacing: 0px;
-                                            if line.timestamp != "" : Text {
-                                                text: line.timestamp + " ";
-                                                font-family: ThemePalette.font-mono;
-                                                font-size: ThemePalette.fs-12;
-                                                color: ThemePalette.log-ts;
-                                                vertical-alignment: top;
-                                            }
-                                            if line.level != "" : Text {
-                                                text: line.level + " ";
-                                                font-family: ThemePalette.font-mono;
-                                                font-size: ThemePalette.fs-12;
-                                                color: line.level == "ERROR" ? ThemePalette.danger
-                                                    : line.level == "WARN" ? ThemePalette.warning
-                                                    : ThemePalette.info;
-                                                vertical-alignment: top;
-                                            }
-                                            msg-txt := Text {
-                                                horizontal-stretch: 1;
-                                                text: line.message;
-                                                font-family: ThemePalette.font-mono;
-                                                font-size: ThemePalette.fs-12;
-                                                color: ThemePalette.logs-fg;
-                                                wrap: word-wrap;
-                                                vertical-alignment: top;
-                                            }
-                                        }
-                                    }
+                                log-input := TextInput {
+                                    text: root.log_text;
+                                    read-only: true;
+                                    single-line: false;
+                                    wrap: word-wrap;
+                                    font-family: ThemePalette.font-mono;
+                                    font-size: ThemePalette.fs-12;
+                                    color: ThemePalette.logs-fg;
+                                    selection-background-color: ThemePalette.accent;
                                 }
                             }
                         }

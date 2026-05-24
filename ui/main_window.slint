@@ -116,6 +116,9 @@ export component MainWindow inherits Window {
     in-out property <string> status_active_strategy: "";
     in-out property <int> status_winws_pid: 0;
     in-out property <bool> status_service_installed: false;
+    // Authoritative bypass uptime in seconds (from the OS, via Rust). Re-synced
+    // on every status poll; the UI ticks `uptime` locally between polls.
+    in-out property <int> status_uptime: 0;
 
     in-out property <float> progress: 0.0;
     in-out property <bool> is_busy: false;
@@ -127,6 +130,7 @@ export component MainWindow inherits Window {
     in-out property <string> selected_strategy: "";
     in-out property <string> strategies_query: "";
     in-out property <[LogLineItem]> log_lines: [];
+    in-out property <string> log_text: "";
 
     // Resolved strategy items for display. `selected_item` is set when the user
     // picks on the Strategies page; `active_item` is resolved by Rust from the
@@ -158,6 +162,18 @@ export component MainWindow inherits Window {
     property <bool> running: root.status_running_mode != "None";
     property <StrategyItem> chosen_item: root.running && root.active_item.id != "" ? root.active_item : root.selected_item;
     property <bool> has_strategy: root.chosen_item.id != "";
+
+    // ── Live bypass uptime ──
+    // Owned by the window (not the page) so it survives page navigation. Seeded
+    // from the OS-reported `status_uptime` on every poll, ticked locally each second.
+    in-out property <int> uptime: 0;
+    changed status_uptime => { root.uptime = root.status_uptime; }
+    changed running => { if (!root.running) { root.uptime = 0; } }
+    Timer {
+        interval: 1s;
+        running: root.running;
+        triggered => { root.uptime += 1; }
+    }
 
     // ── Callbacks to Rust ──
     callback start_clicked(string);
@@ -293,7 +309,10 @@ export component MainWindow inherits Window {
                         animate background { duration: 120ms; }
                         pill-ta := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.refresh_status_clicked(); }
+                            clicked => {
+                                root.current_page = "home";
+                                root.refresh_status_clicked();
+                            }
                         }
                         HorizontalLayout {
                             padding-left: 10px;
@@ -336,15 +355,16 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             padding: 2px;
                             spacing: 2px;
-                            ThemeToggleBtn {
-                                icon: @image-url("../assets/icons/sun.svg");
-                                active: root.theme == "light";
-                                clicked => { root.theme = "light"; }
-                            }
+                            // Order matches the Settings → Appearance segmented control.
                             ThemeToggleBtn {
                                 icon: @image-url("../assets/icons/moon.svg");
                                 active: root.theme == "dark";
                                 clicked => { root.theme = "dark"; }
+                            }
+                            ThemeToggleBtn {
+                                icon: @image-url("../assets/icons/sun.svg");
+                                active: root.theme == "light";
+                                clicked => { root.theme = "light"; }
                             }
                             ThemeToggleBtn {
                                 icon: @image-url("../assets/icons/system.svg");
@@ -371,6 +391,7 @@ export component MainWindow inherits Window {
                     has_strategy: root.has_strategy;
                     is_busy: root.is_busy;
                     strategy_count: root.strategies.length;
+                    uptime: root.uptime;
                     start_clicked => { root.start_clicked(root.chosen_item.id); }
                     stop_clicked => { root.stop_clicked(); }
                     install_clicked => { root.install_clicked(); }
@@ -424,6 +445,7 @@ export component MainWindow inherits Window {
                     width: 100%;
                     height: 100%;
                     log_lines: root.log_lines;
+                    log_text: root.log_text;
                     open_file_clicked => { root.open_log_file_clicked(); }
                     clear_clicked => { root.logs_clear_clicked(); }
                     query_changed(g, l) => { root.logs_query_changed(g, l); }

@@ -48,7 +48,7 @@ export component StrategiesPage inherits Rectangle {
             Rectangle { height: 1px; background: ThemePalette.divider; }
             Rectangle { height: 18px; }
 
-            // search + sort row
+            // search row
             HorizontalLayout {
                 spacing: 12px;
                 AppInput {
@@ -64,10 +64,6 @@ export component StrategiesPage inherits Rectangle {
                         size: "sm";
                         clicked => { root.query = ""; root.search_changed(""); }
                     }
-                }
-                AppButton {
-                    text: "Sort: name";
-                    icon: @image-url("../../assets/icons/filter.svg");
                 }
             }
 

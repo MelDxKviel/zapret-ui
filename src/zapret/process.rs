@@ -247,6 +247,28 @@ impl Runner for ProcessRunner {
 
         let detected_strategy = if mode == RunningMode::None { None } else { active_strategy_id };
 
+        // Real uptime of the bypass: read the winws process run-time from the OS so
+        // it reflects the actual bypass session (survives app restarts / page nav).
+        let uptime_secs = if mode == RunningMode::None {
+            None
+        } else {
+            let mut sys = System::new();
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            let mut found = None;
+            for (pid, process) in sys.processes() {
+                let name = process.name().to_string_lossy();
+                if name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws") {
+                    // Prefer the exact pid we identified; fall back to any winws.
+                    if Some(pid.as_u32()) == winws_pid {
+                        found = Some(process.run_time());
+                        break;
+                    }
+                    found.get_or_insert(process.run_time());
+                }
+            }
+            found
+        };
+
         RuntimeStatus {
             installed: winws_exists,
             installed_version: version,
@@ -254,6 +276,7 @@ impl Runner for ProcessRunner {
             active_strategy: detected_strategy,
             winws_pid,
             service_installed: false,
+            uptime_secs,
         }
     }
 }

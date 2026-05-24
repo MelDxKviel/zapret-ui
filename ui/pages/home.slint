@@ -311,6 +311,9 @@ export component HomePage inherits Rectangle {
     in property <bool> has_strategy;
     in property <bool> is_busy;
     in property <int> strategy_count;
+    // Live bypass uptime in seconds — owned by MainWindow so it persists across
+    // page navigation and reflects the real bypass session.
+    in property <int> uptime;
 
     callback start_clicked();
     callback stop_clicked();
@@ -340,19 +343,11 @@ export component HomePage inherits Rectangle {
 
     property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy;
 
-    // Live uptime (counts from when the bypass became active this session).
-    property <int> uptime: 0;
+    // Uptime is supplied by MainWindow (see `uptime` property above).
     property <int> up-h: floor(root.uptime / 3600);
     property <int> up-m: floor((root.uptime - root.up-h * 3600) / 60);
     property <int> up-s: root.uptime - root.up-h * 3600 - root.up-m * 60;
     pure function pad2(n: int) -> string { return n < 10 ? "0\{n}" : "\{n}"; }
-
-    Timer {
-        interval: 1s;
-        running: root.running;
-        triggered => { root.uptime += 1; }
-    }
-    changed running => { root.uptime = 0; }
 
     sv := ScrollView {
         viewport-width: sv.visible-width;

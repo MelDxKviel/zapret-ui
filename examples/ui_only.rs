@@ -52,6 +52,7 @@ impl Runner for MockRunner {
             active_strategy: None,
             winws_pid: None,
             service_installed: false,
+            uptime_secs: None,
         }
     }
 }
