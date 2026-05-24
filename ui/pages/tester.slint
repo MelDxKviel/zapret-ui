@@ -1,4 +1,5 @@
 import { ThemePalette, TestResultItem } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { StatusDot } from "../components/status_dot.slint";
 import { ListView } from "std-widgets.slint";
@@ -74,7 +75,7 @@ component ResultRow inherits Rectangle {
                 }
             }
             if root.item.is_best : Text {
-                text: "best · auto-selected";
+                text: I18n.t(I18n.lang, "tester.best_label");
                 font-family: ThemePalette.font-mono;
                 font-size: ThemePalette.fs-10;
                 color: ThemePalette.accent;
@@ -103,8 +104,8 @@ component ResultRow inherits Rectangle {
                 }
             }
             Text {
-                text: "\{root.item.ok} / \{root.item.total} reachable"
-                    + (root.item.latency > 0 ? "  ·  \{root.item.latency} ms avg" : "");
+                text: "\{root.item.ok} / \{root.item.total}" + I18n.t(I18n.lang, "tester.reachable")
+                    + (root.item.latency > 0 ? "  ·  \{root.item.latency}" + I18n.t(I18n.lang, "tester.ms_avg") : "");
                 font-family: ThemePalette.font-mono;
                 font-size: ThemePalette.fs-10;
                 color: ThemePalette.text-3;
@@ -119,13 +120,13 @@ component ResultRow inherits Rectangle {
             HorizontalLayout {
                 alignment: end;
                 if root.is_active : AppButton {
-                    text: "Selected";
+                    text: I18n.t(I18n.lang, "tester.selected_btn");
                     size: "sm";
                     icon: @image-url("../../assets/icons/check.svg");
                     enabled: false;
                 }
                 if !root.is_active : AppButton {
-                    text: "Use";
+                    text: I18n.t(I18n.lang, "tester.use_btn");
                     variant: root.item.is_best ? "primary" : "default";
                     size: "sm";
                     enabled: root.item.ok > 0;
@@ -170,14 +171,14 @@ export component TesterPage inherits Rectangle {
                 spacing: 2px;
                 padding-bottom: 20px;
                 Text {
-                    text: "Strategy Tester";
+                    text: I18n.t(I18n.lang, "tester.title");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-22;
                     font-weight: 600;
                     color: ThemePalette.text;
                 }
                 Text {
-                    text: "Probe every strategy against Discord / YouTube / Google endpoints and auto-pick the one that unblocks the most.";
+                    text: I18n.t(I18n.lang, "tester.subtitle");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
                     color: ThemePalette.text-3;
@@ -207,7 +208,7 @@ export component TesterPage inherits Rectangle {
                             spacing: 6px;
                             alignment: center;
                             Text {
-                                text: root.running ? "TESTING IN PROGRESS" : root.has-results ? "TEST COMPLETE" : "READY TO TEST";
+                                text: root.running ? I18n.t(I18n.lang, "tester.state_testing") : root.has-results ? I18n.t(I18n.lang, "tester.state_complete") : I18n.t(I18n.lang, "tester.state_ready");
                                 font-family: ThemePalette.font-mono;
                                 font-size: ThemePalette.fs-10;
                                 color: ThemePalette.text-4;
@@ -215,10 +216,10 @@ export component TesterPage inherits Rectangle {
                             }
                             Text {
                                 text: root.running
-                                        ? "Testing \{root.current} of \{root.total}: \{root.current_strategy}"
+                                        ? I18n.t(I18n.lang, "tester.progress_testing") + root.current + I18n.t(I18n.lang, "tester.progress_of") + root.total + ": " + root.current_strategy
                                         : root.has-results
-                                            ? (root.best_id != "" ? "Best strategy: \{root.best_id}" : "No strategy unblocked any endpoint.")
-                                            : "Runs each of \{root.strategy_count} strategies for a few seconds — the full sweep can take several minutes.";
+                                            ? (root.best_id != "" ? I18n.t(I18n.lang, "tester.best_strategy_prefix") + root.best_id : I18n.t(I18n.lang, "tester.none_unblocked"))
+                                            : I18n.t(I18n.lang, "tester.ready_desc_a") + root.strategy_count + I18n.t(I18n.lang, "tester.ready_desc_b");
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-14;
                                 font-weight: root.running || (root.has-results && root.best_id != "") ? 600 : 400;
@@ -231,13 +232,13 @@ export component TesterPage inherits Rectangle {
                             alignment: center;
                             horizontal-stretch: 0;
                             if root.running : AppButton {
-                                text: "Cancel";
+                                text: I18n.t(I18n.lang, "common.cancel");
                                 variant: "danger";
                                 icon: @image-url("../../assets/icons/stop.svg");
                                 clicked => { root.cancel_clicked(); }
                             }
                             if !root.running : AppButton {
-                                text: root.has-results ? "Run again" : "Run test";
+                                text: root.has-results ? I18n.t(I18n.lang, "tester.run_again") : I18n.t(I18n.lang, "tester.run_test");
                                 variant: "primary";
                                 icon: @image-url("../../assets/icons/rocket.svg");
                                 enabled: root.installed && root.strategy_count > 0;
@@ -263,7 +264,7 @@ export component TesterPage inherits Rectangle {
                     }
 
                     if !root.installed : Text {
-                        text: "Install zapret first to run tests.";
+                        text: I18n.t(I18n.lang, "tester.install_first");
                         font-family: ThemePalette.font-mono;
                         font-size: ThemePalette.fs-11;
                         color: ThemePalette.text-3;
@@ -286,14 +287,14 @@ export component TesterPage inherits Rectangle {
                     alignment: center;
                     spacing: 8px;
                     Text {
-                        text: root.running ? "Collecting results…" : "No results yet";
+                        text: root.running ? I18n.t(I18n.lang, "tester.collecting") : I18n.t(I18n.lang, "tester.no_results");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-14;
                         color: ThemePalette.text-2;
                         horizontal-alignment: center;
                     }
                     Text {
-                        text: root.running ? "Each strategy appears here as it finishes." : "Run a test to rank your strategies by reachability.";
+                        text: root.running ? I18n.t(I18n.lang, "tester.collecting_sub") : I18n.t(I18n.lang, "tester.no_results_sub");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-12;
                         color: ThemePalette.text-3;

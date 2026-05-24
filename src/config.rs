@@ -14,6 +14,29 @@ impl Default for Theme {
     }
 }
 
+/// UI language. Defaults to Russian, switchable on the Settings page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    Ru,
+    En,
+}
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::Ru
+    }
+}
+
+impl Language {
+    /// Map a Slint language code ("ru" | "en") back to the enum.
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "en" => Self::En,
+            _ => Self::Ru,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     pub last_strategy: Option<String>,
@@ -22,6 +45,10 @@ pub struct AppConfig {
     pub install_dir_override: Option<PathBuf>,
     pub theme: Theme,
     pub minimize_to_tray: bool,
+    /// UI language. `#[serde(default)]` keeps configs written before this field
+    /// was added loadable (they fall back to the default, Russian).
+    #[serde(default)]
+    pub language: Language,
 }
 
 impl Default for AppConfig {
@@ -33,6 +60,7 @@ impl Default for AppConfig {
             install_dir_override: None,
             theme: Theme::default(),
             minimize_to_tray: false,
+            language: Language::default(),
         }
     }
 }

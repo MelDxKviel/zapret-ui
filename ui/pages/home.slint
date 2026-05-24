@@ -1,4 +1,5 @@
 import { ThemePalette, AppStatus, StrategyItem } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { StatusDot } from "../components/status_dot.slint";
 import { Icon } from "../components/icon.slint";
@@ -40,7 +41,7 @@ component ServiceCard inherits Rectangle {
                 padding-left: 16px;
                 padding-right: 16px;
                 Text {
-                    text: "Windows Service";
+                    text: I18n.t(I18n.lang, "service.header");
                     font-family: ThemePalette.font-mono;
                     font-size: ThemePalette.fs-12;
                     font-weight: 600;
@@ -59,9 +60,9 @@ component ServiceCard inherits Rectangle {
                         }
                     }
                     Text {
-                        text: root.state == "running" ? "Installed · running"
-                            : root.state == "stopped" ? "Installed · stopped"
-                            : "Not configured";
+                        text: root.state == "running" ? I18n.t(I18n.lang, "service.installed_running")
+                            : root.state == "stopped" ? I18n.t(I18n.lang, "service.installed_stopped")
+                            : I18n.t(I18n.lang, "service.not_configured");
                         font-family: ThemePalette.font-mono;
                         font-size: ThemePalette.fs-12;
                         color: ThemePalette.text-2;
@@ -86,7 +87,7 @@ component ServiceCard inherits Rectangle {
             if root.state == "absent" : VerticalLayout {
                 spacing: 14px;
                 Text {
-                    text: "Install the bypass as a Windows service so it auto-starts on boot and keeps running without this app open.";
+                    text: I18n.t(I18n.lang, "service.absent_desc");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
                     color: ThemePalette.text-2;
@@ -95,7 +96,7 @@ component ServiceCard inherits Rectangle {
                 HorizontalLayout {
                     alignment: start;
                     AppButton {
-                        text: "Install as service";
+                        text: I18n.t(I18n.lang, "service.install_btn");
                         variant: "primary";
                         icon: @image-url("../../assets/icons/service.svg");
                         enabled: !root.is_busy && root.has_strategy && root.status.installed;
@@ -103,7 +104,7 @@ component ServiceCard inherits Rectangle {
                     }
                 }
                 if !root.has_strategy : Text {
-                    text: "Pick a strategy first.";
+                    text: I18n.t(I18n.lang, "service.pick_first");
                     font-family: ThemePalette.font-mono;
                     font-size: ThemePalette.fs-11;
                     color: ThemePalette.text-3;
@@ -113,7 +114,7 @@ component ServiceCard inherits Rectangle {
             if root.state == "stopped" : VerticalLayout {
                 spacing: 14px;
                 Text {
-                    text: "Service registered as \{root.chosen_item.id}. It will start on next boot — or start it now.";
+                    text: I18n.t(I18n.lang, "service.stopped_desc_a") + root.chosen_item.id + I18n.t(I18n.lang, "service.stopped_desc_b");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
                     color: ThemePalette.text-2;
@@ -123,14 +124,14 @@ component ServiceCard inherits Rectangle {
                     spacing: 8px;
                     alignment: start;
                     AppButton {
-                        text: "Start service";
+                        text: I18n.t(I18n.lang, "service.start_btn");
                         variant: "primary";
                         icon: @image-url("../../assets/icons/play.svg");
                         enabled: !root.is_busy;
                         clicked => { root.start_clicked(); }
                     }
                     AppButton {
-                        text: "Uninstall";
+                        text: I18n.t(I18n.lang, "service.uninstall_btn");
                         variant: "danger";
                         size: "sm";
                         icon: @image-url("../../assets/icons/trash.svg");
@@ -143,7 +144,7 @@ component ServiceCard inherits Rectangle {
             if root.state == "running" : VerticalLayout {
                 spacing: 14px;
                 Text {
-                    text: "Bypass active as service · running \{root.chosen_item.id}. Restarts automatically every boot.";
+                    text: I18n.t(I18n.lang, "service.running_desc_a") + root.chosen_item.id + I18n.t(I18n.lang, "service.running_desc_b");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
                     color: ThemePalette.text-2;
@@ -153,14 +154,14 @@ component ServiceCard inherits Rectangle {
                     spacing: 8px;
                     alignment: start;
                     AppButton {
-                        text: "Stop service";
+                        text: I18n.t(I18n.lang, "service.stop_btn");
                         variant: "default";
                         icon: @image-url("../../assets/icons/stop.svg");
                         enabled: !root.is_busy;
                         clicked => { root.stop_clicked(); }
                     }
                     AppButton {
-                        text: "Uninstall";
+                        text: I18n.t(I18n.lang, "service.uninstall_btn");
                         variant: "danger";
                         size: "sm";
                         icon: @image-url("../../assets/icons/trash.svg");
@@ -337,10 +338,10 @@ export component HomePage inherits Rectangle {
     property <bool> installed: root.status.installed;
     property <bool> has-update: root.status.update_available;
 
-    property <string> state-label: !root.installed ? "NOT INSTALLED"
-        : (root.running && root.status.running_mode == "WindowsService") ? "SERVICE ACTIVE"
-        : root.running ? "ACTIVE"
-        : "STOPPED";
+    property <string> state-label: !root.installed ? I18n.t(I18n.lang, "home.state_not_installed")
+        : (root.running && root.status.running_mode == "WindowsService") ? I18n.t(I18n.lang, "home.state_service_active")
+        : root.running ? I18n.t(I18n.lang, "home.state_active")
+        : I18n.t(I18n.lang, "home.state_stopped");
     property <color> state-color: !root.installed ? ThemePalette.danger
         : root.running ? ThemePalette.accent : ThemePalette.text;
     property <string> dot-variant: !root.installed ? "danger" : root.running ? "active" : "idle";
@@ -374,14 +375,14 @@ export component HomePage inherits Rectangle {
                         spacing: 2px;
                         alignment: end;
                         Text {
-                            text: "Dashboard";
+                            text: I18n.t(I18n.lang, "home.title");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-22;
                             font-weight: 600;
                             color: ThemePalette.text;
                         }
                         Text {
-                            text: "Manage zapret bypass — run as user process or install as Windows service.";
+                            text: I18n.t(I18n.lang, "home.subtitle");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-13;
                             color: ThemePalette.text-3;
@@ -391,7 +392,7 @@ export component HomePage inherits Rectangle {
                     VerticalLayout {
                         alignment: end;
                         AppButton {
-                            text: "Refresh";
+                            text: I18n.t(I18n.lang, "common.refresh");
                             variant: "ghost";
                             size: "sm";
                             icon: @image-url("../../assets/icons/refresh.svg");
@@ -427,7 +428,7 @@ export component HomePage inherits Rectangle {
                                 spacing: 6px;
                                 alignment: start;
                                 Text {
-                                    text: "BYPASS STATUS";
+                                    text: I18n.t(I18n.lang, "home.bypass_status");
                                     font-family: ThemePalette.font-mono;
                                     font-size: ThemePalette.fs-10;
                                     color: ThemePalette.text-4;
@@ -457,7 +458,7 @@ export component HomePage inherits Rectangle {
                                     spacing: 8px;
                                     alignment: end;
                                     Text {
-                                        text: "MODE";
+                                        text: I18n.t(I18n.lang, "home.mode");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-10;
                                         color: ThemePalette.text-4;
@@ -465,7 +466,7 @@ export component HomePage inherits Rectangle {
                                         vertical-alignment: center;
                                     }
                                     Text {
-                                        text: !root.running ? "—" : root.status.running_mode == "WindowsService" ? "service" : "user-process";
+                                        text: !root.running ? "—" : root.status.running_mode == "WindowsService" ? I18n.t(I18n.lang, "home.mode_service") : I18n.t(I18n.lang, "home.mode_user");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text;
@@ -475,7 +476,7 @@ export component HomePage inherits Rectangle {
                                     spacing: 8px;
                                     alignment: end;
                                     Text {
-                                        text: "PID";
+                                        text: I18n.t(I18n.lang, "home.pid");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-10;
                                         color: ThemePalette.text-4;
@@ -493,7 +494,7 @@ export component HomePage inherits Rectangle {
                                     spacing: 8px;
                                     alignment: end;
                                     Text {
-                                        text: "UPTIME";
+                                        text: I18n.t(I18n.lang, "home.uptime");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-10;
                                         color: ThemePalette.text-4;
@@ -530,7 +531,7 @@ export component HomePage inherits Rectangle {
                                     spacing: 6px;
                                     alignment: center;
                                     Text {
-                                        text: root.running ? "CURRENTLY RUNNING" : "READY TO ENGAGE";
+                                        text: root.running ? I18n.t(I18n.lang, "home.currently_running") : I18n.t(I18n.lang, "home.ready_to_engage");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-10;
                                         color: ThemePalette.text-3;
@@ -540,7 +541,7 @@ export component HomePage inherits Rectangle {
                                         spacing: 10px;
                                         alignment: start;
                                         Text {
-                                            text: root.has_strategy ? root.chosen_item.pretty : "No strategy selected";
+                                            text: root.has_strategy ? root.chosen_item.pretty : I18n.t(I18n.lang, "home.no_strategy");
                                             font-family: ThemePalette.font-sans;
                                             font-size: ThemePalette.fs-16;
                                             font-weight: 600;
@@ -567,10 +568,10 @@ export component HomePage inherits Rectangle {
                                         }
                                     }
                                     Text {
-                                        text: !root.installed ? "Install zapret first to enable the bypass"
-                                            : !root.has_strategy ? "Pick one from the Strategies tab, then return here to engage."
-                                            : root.running ? "Click Stop to terminate the bypass process"
-                                            : "Click Engage to start in user mode, or install as a service below";
+                                        text: !root.installed ? I18n.t(I18n.lang, "home.hint_install")
+                                            : !root.has_strategy ? I18n.t(I18n.lang, "home.hint_pick")
+                                            : root.running ? I18n.t(I18n.lang, "home.hint_stop")
+                                            : I18n.t(I18n.lang, "home.hint_engage");
                                         font-family: ThemePalette.font-sans;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text-3;
@@ -603,7 +604,7 @@ export component HomePage inherits Rectangle {
                                                 : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
                                         }
                                         Text {
-                                            text: !root.has_strategy ? "PICK STRATEGY" : root.running ? "STOP" : "ENGAGE";
+                                            text: !root.has_strategy ? I18n.t(I18n.lang, "home.btn_pick") : root.running ? I18n.t(I18n.lang, "home.btn_stop") : I18n.t(I18n.lang, "home.btn_engage");
                                             font-family: ThemePalette.font-sans;
                                             font-size: ThemePalette.fs-16;
                                             font-weight: 600;
@@ -636,18 +637,18 @@ export component HomePage inherits Rectangle {
                             background: ThemePalette.surface;
                             clip: true;
                             HorizontalLayout {
-                                Stat { label: "APP"; value: "v0.1.0"; }
+                                Stat { label: I18n.t(I18n.lang, "home.stat_app"); value: "v0.1.0"; }
                                 Stat {
-                                    label: "ZAPRET CORE";
-                                    value: root.installed ? root.status.installed_version : "not installed";
+                                    label: I18n.t(I18n.lang, "home.stat_core");
+                                    value: root.installed ? root.status.installed_version : I18n.t(I18n.lang, "common.not_installed");
                                     value-color: root.installed ? ThemePalette.text : ThemePalette.text-3;
                                 }
                                 Stat {
-                                    label: "LATEST";
+                                    label: I18n.t(I18n.lang, "home.stat_latest");
                                     value: (root.status.latest_version != "" ? root.status.latest_version : "—") + (root.has-update ? " ↑" : "");
                                     value-color: root.has-update ? ThemePalette.accent : ThemePalette.text;
                                 }
-                                Stat { label: "STRATEGIES"; value: "\{root.strategy_count}"; last: true; }
+                                Stat { label: I18n.t(I18n.lang, "home.stat_strategies"); value: "\{root.strategy_count}"; last: true; }
                             }
                         }
                     }
@@ -688,7 +689,7 @@ export component HomePage inherits Rectangle {
                                     padding-left: 16px;
                                     padding-right: 16px;
                                     Text {
-                                        text: "Strategy detail";
+                                        text: I18n.t(I18n.lang, "home.strategy_detail");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-12;
                                         font-weight: 600;
@@ -702,15 +703,15 @@ export component HomePage inherits Rectangle {
                             VerticalLayout {
                                 padding: 16px;
                                 spacing: 0px;
-                                DetailRow { key: "id"; value: root.has_strategy ? root.chosen_item.id : "—"; }
-                                DetailRow { key: "profile"; value: root.has_strategy ? root.chosen_item.pretty : "—"; }
-                                DetailRow { key: "variant"; value: root.chosen_item.alt != "" ? root.chosen_item.alt : "default"; }
-                                DetailRow { key: "core"; value: root.status.installed_version != "" ? root.status.installed_version : "—"; last: true; }
+                                DetailRow { key: I18n.t(I18n.lang, "home.detail_id"); value: root.has_strategy ? root.chosen_item.id : "—"; }
+                                DetailRow { key: I18n.t(I18n.lang, "home.detail_profile"); value: root.has_strategy ? root.chosen_item.pretty : "—"; }
+                                DetailRow { key: I18n.t(I18n.lang, "home.detail_variant"); value: root.chosen_item.alt != "" ? root.chosen_item.alt : I18n.t(I18n.lang, "home.variant_default"); }
+                                DetailRow { key: I18n.t(I18n.lang, "home.detail_core"); value: root.status.installed_version != "" ? root.status.installed_version : "—"; last: true; }
                                 Rectangle { height: 12px; }
                                 HorizontalLayout {
                                     alignment: start;
                                     AppButton {
-                                        text: "Change strategy";
+                                        text: I18n.t(I18n.lang, "home.change_strategy");
                                         size: "sm";
                                         icon: @image-url("../../assets/icons/strategies.svg");
                                         clicked => { root.pick_strategy_clicked(); }
@@ -758,7 +759,7 @@ export component HomePage inherits Rectangle {
                             spacing: 2px;
                             alignment: center;
                             Text {
-                                text: "Game filter";
+                                text: I18n.t(I18n.lang, "common.game_filter");
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-13;
                                 font-weight: 600;
@@ -766,8 +767,8 @@ export component HomePage inherits Rectangle {
                             }
                             Text {
                                 text: root.installed
-                                    ? "Route game traffic (high TCP/UDP ports) through the bypass. Restart to apply."
-                                    : "Install zapret first to configure the game filter.";
+                                    ? I18n.t(I18n.lang, "home.game_filter_hint")
+                                    : I18n.t(I18n.lang, "common.game_filter_hint_install");
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
                                 color: ThemePalette.text-3;
@@ -780,10 +781,10 @@ export component HomePage inherits Rectangle {
                                 enabled: root.installed;
                                 selected: root.game_filter;
                                 options: [
-                                    { value: "off", label: "Off" },
-                                    { value: "all", label: "TCP+UDP" },
-                                    { value: "tcp", label: "TCP" },
-                                    { value: "udp", label: "UDP" },
+                                    { value: "off", label: I18n.t(I18n.lang, "common.gf_off") },
+                                    { value: "all", label: I18n.t(I18n.lang, "common.gf_all") },
+                                    { value: "tcp", label: I18n.t(I18n.lang, "common.gf_tcp") },
+                                    { value: "udp", label: I18n.t(I18n.lang, "common.gf_udp") },
                                 ];
                                 changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
                             }
@@ -798,15 +799,15 @@ export component HomePage inherits Rectangle {
                     spacing: 10px;
                     ActionTile {
                         icon: @image-url("../../assets/icons/download.svg");
-                        title: root.installed ? "Reinstall zapret" : "Install zapret";
-                        sub: root.installed ? "redownload core" : "fetch v" + (root.status.latest_version != "" ? root.status.latest_version : "latest");
+                        title: root.installed ? I18n.t(I18n.lang, "home.reinstall") : I18n.t(I18n.lang, "home.install");
+                        sub: root.installed ? I18n.t(I18n.lang, "home.redownload") : I18n.t(I18n.lang, "home.fetch_prefix") + (root.status.latest_version != "" ? root.status.latest_version : I18n.t(I18n.lang, "common.latest_word"));
                         highlight: !root.installed;
                         enabled: !root.is_busy;
                         clicked => { root.install_clicked(); }
                     }
                     ActionTile {
                         icon: @image-url("../../assets/icons/refresh.svg");
-                        title: root.has-update ? "Update available" : "Check for updates";
+                        title: root.has-update ? I18n.t(I18n.lang, "home.update_available") : I18n.t(I18n.lang, "home.check_updates");
                         sub: root.has-update ? root.status.installed_version + " → " + root.status.latest_version : "github.com / flowseal";
                         highlight: root.has-update;
                         enabled: !root.is_busy;
@@ -814,7 +815,7 @@ export component HomePage inherits Rectangle {
                     }
                     ActionTile {
                         icon: @image-url("../../assets/icons/folder.svg");
-                        title: "Open installation folder";
+                        title: I18n.t(I18n.lang, "home.open_folder");
                         sub: "…AppData\\Roaming\\zapret-ui";
                         enabled: root.installed;
                         clicked => { root.open_folder_clicked(); }

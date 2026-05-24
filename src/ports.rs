@@ -68,9 +68,9 @@ pub trait Maintenance: Send + Sync {
     async fn set_game_filter(&self, mode: GameFilterMode) -> anyhow::Result<()>;
     /// Switch `ipset-all.txt` to the target any/none/loaded state (with backup).
     async fn set_ipset_mode(&self, mode: IpsetMode) -> anyhow::Result<()>;
-    /// Download the latest ipset list into `lists\ipset-all.txt`. Returns a
-    /// short human-readable summary on success.
-    async fn update_ipset_list(&self) -> anyhow::Result<String>;
+    /// Download the latest ipset list into `lists\ipset-all.txt`. Returns the
+    /// number of entries loaded (the caller builds the localized message).
+    async fn update_ipset_list(&self) -> anyhow::Result<usize>;
     /// Download the repo hosts file and compare it to the system hosts file.
     /// Returns the comparison plus the downloaded content for in-app review.
     async fn update_hosts_file(&self) -> anyhow::Result<HostsCheck>;

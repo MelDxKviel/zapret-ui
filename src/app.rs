@@ -226,6 +226,33 @@ impl App {
     ) -> anyhow::Result<()> {
         let ui = MainWindow::new()?;
 
+        // ── i18n ──
+        // Back the Slint `I18n.t(lang, key)` callback with the JSON catalogs, then
+        // seed the active language from the saved config (Russian by default).
+        ui.global::<I18n>().on_t(|lang, key| crate::i18n::tr(lang.as_str(), key.as_str()).into());
+        let initial_lang = self
+            .config
+            .try_read()
+            .map(|c| c.language)
+            .unwrap_or_default();
+        ui.global::<I18n>().set_lang(crate::i18n::code(initial_lang).into());
+        // Persist a language switch from the Settings page. The Slint side flips
+        // `I18n.lang` itself (so the UI re-renders instantly); we just save it.
+        {
+            let config = self.config.clone();
+            ui.on_set_language(move |code| {
+                let config = config.clone();
+                let lang = crate::config::Language::from_code(&code);
+                tokio::spawn(async move {
+                    let mut cfg = config.write().await;
+                    cfg.language = lang;
+                    if let Err(e) = cfg.save() {
+                        tracing::warn!("Failed to persist language: {}", e);
+                    }
+                });
+            });
+        }
+
         // Populate strategies list (full)
         fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
             let (pretty, alt) = split_alt(&s.id);
@@ -920,8 +947,13 @@ impl App {
                         let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
                     }
                     BackendCmd::UpdateIpsetList => {
+                        let lang = crate::i18n::code(config.read().await.language);
                         let (ok, message) = match maintenance.update_ipset_list().await {
-                            Ok(msg) => (true, msg),
+                            Ok(count) => (
+                                true,
+                                crate::i18n::tr(lang, "msg.ipset_updated")
+                                    .replace("{count}", &count.to_string()),
+                            ),
                             Err(e) => (false, e.to_string()),
                         };
                         let _ = event_tx.send(UiEvent::MaintenanceResult {
@@ -932,12 +964,13 @@ impl App {
                         let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
                     }
                     BackendCmd::UpdateHostsFile => {
+                        let lang = crate::i18n::code(config.read().await.language);
                         match maintenance.update_hosts_file().await {
                             Ok(check) => {
                                 let message = if check.up_to_date {
-                                    "Hosts file is already up to date".to_string()
+                                    crate::i18n::tr(lang, "msg.hosts_up_to_date")
                                 } else {
-                                    "Out of date — review the entries and update your hosts file".to_string()
+                                    crate::i18n::tr(lang, "msg.hosts_out_of_date")
                                 };
                                 let _ = event_tx.send(UiEvent::MaintenanceResult {
                                     kind: "hosts".to_string(),

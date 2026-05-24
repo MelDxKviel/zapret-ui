@@ -1,4 +1,5 @@
 import { ThemePalette } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { AppButton } from "button.slint";
 import { Icon } from "icon.slint";
 import { TextEdit } from "std-widgets.slint";
@@ -56,14 +57,14 @@ export component HostsDialog inherits Rectangle {
                         alignment: center;
                         spacing: 3px;
                         Text {
-                            text: "Update hosts file";
+                            text: I18n.t(I18n.lang, "hosts.title");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-16;
                             font-weight: 600;
                             color: ThemePalette.text;
                         }
                         Text {
-                            text: "Your hosts file is out of date. Copy these entries into it (editing it needs admin rights).";
+                            text: I18n.t(I18n.lang, "hosts.subtitle");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-12;
                             color: ThemePalette.text-3;
@@ -153,7 +154,7 @@ export component HostsDialog inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         AppButton {
-                            text: root.copied ? "Copied!" : "Copy all";
+                            text: root.copied ? I18n.t(I18n.lang, "hosts.copied") : I18n.t(I18n.lang, "hosts.copy_all");
                             variant: "primary";
                             icon: root.copied
                                 ? @image-url("../../assets/icons/check.svg")
@@ -167,7 +168,7 @@ export component HostsDialog inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         AppButton {
-                            text: "Open hosts folder";
+                            text: I18n.t(I18n.lang, "hosts.open_folder");
                             icon: @image-url("../../assets/icons/folder.svg");
                             clicked => { root.open_folder_clicked(); }
                         }
@@ -176,7 +177,7 @@ export component HostsDialog inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         AppButton {
-                            text: "Close";
+                            text: I18n.t(I18n.lang, "common.close");
                             variant: "ghost";
                             clicked => { root.close_clicked(); }
                         }

@@ -130,7 +130,7 @@ impl Maintenance for ZapretMaintenance {
         Ok(())
     }
 
-    async fn update_ipset_list(&self) -> Result<String> {
+    async fn update_ipset_list(&self) -> Result<usize> {
         let path = self.ipset_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("creating lists dir")?;
@@ -156,7 +156,7 @@ impl Maintenance for ZapretMaintenance {
         // list; drop the stale backup so "Loaded" reflects this list.
         let _ = std::fs::remove_file(self.ipset_backup_path());
         tracing::info!("ipset-all.txt updated — {count} entries");
-        Ok(format!("Updated — {count} IP entries loaded"))
+        Ok(count)
     }
 
     async fn update_hosts_file(&self) -> Result<HostsCheck> {

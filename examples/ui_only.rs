@@ -121,6 +121,13 @@ fn main() -> anyhow::Result<()> {
 
     let ui = MainWindow::new()?;
 
+    // i18n: back the `I18n.t` callback with the JSON catalogs so text renders.
+    // The Settings → Language control flips `I18n.lang` itself, so switching
+    // works in the preview without a persistence backend.
+    ui.global::<I18n>().on_t(|lang, key| zapret_ui::i18n::tr(lang.as_str(), key.as_str()).into());
+    ui.global::<I18n>().set_lang("ru".into());
+    ui.on_set_language(|code| println!("UI: Set language: {}", code));
+
     // Populate strategies
     let catalog = MockCatalog;
     let slint_strategies: Vec<StrategyItem> = catalog

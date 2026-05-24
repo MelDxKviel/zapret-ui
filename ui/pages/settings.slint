@@ -1,4 +1,5 @@
 import { ThemePalette } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { AppSwitch } from "../components/switch.slint";
 import { AppButton } from "../components/button.slint";
 import { Segmented, SegmentOption } from "../components/segmented.slint";
@@ -99,6 +100,7 @@ export component SettingsPage inherits Rectangle {
 
     callback open_folder_clicked();
     callback theme_changed(string);
+    callback language_changed(string);
     callback game_filter_changed(string);
     callback ipset_mode_changed(string);
     callback update_ipset_clicked();
@@ -124,14 +126,14 @@ export component SettingsPage inherits Rectangle {
                     spacing: 2px;
                     padding-bottom: 20px;
                     Text {
-                        text: "Settings";
+                        text: I18n.t(I18n.lang, "settings.title");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-22;
                         font-weight: 600;
                         color: ThemePalette.text;
                     }
                     Text {
-                        text: "Application preferences, paths and appearance.";
+                        text: I18n.t(I18n.lang, "settings.subtitle");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-13;
                         color: ThemePalette.text-3;
@@ -142,20 +144,20 @@ export component SettingsPage inherits Rectangle {
 
                 // Application
                 SettingsGroup {
-                    title: "Application";
+                    title: I18n.t(I18n.lang, "settings.group_application");
                     SettingsRow {
-                        label: "Start automatically with Windows";
-                        hint: "Launch zapret-ui silently on login. Doesn't engage the bypass — only opens the app.";
+                        label: I18n.t(I18n.lang, "settings.autostart_label");
+                        hint: I18n.t(I18n.lang, "settings.autostart_hint");
                         AppSwitch { checked <=> root.autostart; }
                     }
                     SettingsRow {
-                        label: "Minimize to system tray on close";
-                        hint: "Hide to tray instead of quitting. Right-click the tray icon to fully exit.";
+                        label: I18n.t(I18n.lang, "settings.tray_label");
+                        hint: I18n.t(I18n.lang, "settings.tray_hint");
                         AppSwitch { checked <=> root.minimize_to_tray; }
                     }
                     SettingsRow {
-                        label: "Engage bypass on app start";
-                        hint: "When zapret-ui starts, automatically start the last-used strategy in user mode.";
+                        label: I18n.t(I18n.lang, "settings.autoengage_label");
+                        hint: I18n.t(I18n.lang, "settings.autoengage_hint");
                         last: true;
                         AppSwitch { checked <=> root.autoengage; }
                     }
@@ -164,15 +166,15 @@ export component SettingsPage inherits Rectangle {
 
                 // Updates & paths
                 SettingsGroup {
-                    title: "Updates & paths";
+                    title: I18n.t(I18n.lang, "settings.group_updates");
                     SettingsRow {
-                        label: "Check for zapret updates on launch";
-                        hint: "Compares your installed core to the latest tag on GitHub.";
+                        label: I18n.t(I18n.lang, "settings.autoupdate_label");
+                        hint: I18n.t(I18n.lang, "settings.autoupdate_hint");
                         AppSwitch { checked <=> root.autoupdate_check; }
                     }
                     SettingsRow {
-                        label: "Zapret installation folder";
-                        hint: "Where the zapret core and host lists live. Managed by the app — open to inspect.";
+                        label: I18n.t(I18n.lang, "settings.installdir_label");
+                        hint: I18n.t(I18n.lang, "settings.installdir_hint");
                         last: true;
                         HorizontalLayout {
                             spacing: 8px;
@@ -205,7 +207,7 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                             AppButton {
-                                text: "Open";
+                                text: I18n.t(I18n.lang, "common.open");
                                 icon: @image-url("../../assets/icons/external.svg");
                                 clicked => { root.open_folder_clicked(); }
                             }
@@ -216,54 +218,54 @@ export component SettingsPage inherits Rectangle {
 
                 // DPI bypass tuning — the zapret service.bat filters & updaters.
                 SettingsGroup {
-                    title: "DPI bypass tuning";
+                    title: I18n.t(I18n.lang, "settings.group_dpi");
                     SettingsRow {
-                        label: "Game filter";
+                        label: I18n.t(I18n.lang, "common.game_filter");
                         hint: root.installed
-                            ? "Route game traffic (high TCP/UDP ports) through the bypass. Restart the bypass to apply."
-                            : "Install zapret first to configure the game filter.";
+                            ? I18n.t(I18n.lang, "settings.gf_hint")
+                            : I18n.t(I18n.lang, "common.game_filter_hint_install");
                         Segmented {
                             enabled: root.installed;
                             selected: root.game_filter;
                             options: [
-                                { value: "off", label: "Off" },
-                                { value: "all", label: "TCP+UDP" },
-                                { value: "tcp", label: "TCP" },
-                                { value: "udp", label: "UDP" },
+                                { value: "off", label: I18n.t(I18n.lang, "common.gf_off") },
+                                { value: "all", label: I18n.t(I18n.lang, "common.gf_all") },
+                                { value: "tcp", label: I18n.t(I18n.lang, "common.gf_tcp") },
+                                { value: "udp", label: I18n.t(I18n.lang, "common.gf_udp") },
                             ];
                             changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
                         }
                     }
                     SettingsRow {
-                        label: "IPSet filter";
+                        label: I18n.t(I18n.lang, "settings.ipset_label");
                         hint: root.ipset_mode == "loaded"
-                            ? "Match the downloaded IP list (\{root.ipset_lines} entries). Restart the bypass to apply."
+                            ? I18n.t(I18n.lang, "settings.ipset_hint_loaded_a") + root.ipset_lines + I18n.t(I18n.lang, "settings.ipset_hint_loaded_b")
                             : (root.ipset_mode == "none"
-                                ? "IP matching disabled. Restart the bypass to apply."
+                                ? I18n.t(I18n.lang, "settings.ipset_hint_none")
                                 : (root.ipset_mode == "any"
-                                    ? "Match any IP (no list). Restart the bypass to apply."
-                                    : "How ipset-all.txt is applied by winws."));
+                                    ? I18n.t(I18n.lang, "settings.ipset_hint_any")
+                                    : I18n.t(I18n.lang, "settings.ipset_hint_default")));
                         Segmented {
                             enabled: root.installed && root.ipset_mode != "unknown";
                             selected: root.ipset_mode;
                             options: [
-                                { value: "loaded", label: "Loaded" },
-                                { value: "none", label: "None" },
-                                { value: "any", label: "Any" },
+                                { value: "loaded", label: I18n.t(I18n.lang, "settings.ipset_loaded") },
+                                { value: "none", label: I18n.t(I18n.lang, "settings.ipset_none") },
+                                { value: "any", label: I18n.t(I18n.lang, "settings.ipset_any") },
                             ];
                             changed(v) => { root.ipset_mode = v; root.ipset_mode_changed(v); }
                         }
                     }
                     SettingsRow {
-                        label: "Update IPSet list";
-                        hint: "Download the latest blocked-IP list (ipset-all.txt) from the zapret repository.";
+                        label: I18n.t(I18n.lang, "settings.update_ipset_label");
+                        hint: I18n.t(I18n.lang, "settings.update_ipset_hint");
                         VerticalLayout {
                             spacing: 6px;
                             alignment: center;
                             HorizontalLayout {
                                 alignment: end;
                                 AppButton {
-                                    text: root.ipset_busy ? "Updating…" : "Update";
+                                    text: root.ipset_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "common.update");
                                     icon: @image-url("../../assets/icons/download.svg");
                                     enabled: root.installed && !root.ipset_busy;
                                     clicked => { root.update_ipset_clicked(); }
@@ -281,8 +283,8 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
                     SettingsRow {
-                        label: "Update hosts file";
-                        hint: "Compare your system hosts file with the repository's. If outdated, the downloaded copy opens for a manual merge.";
+                        label: I18n.t(I18n.lang, "settings.update_hosts_label");
+                        hint: I18n.t(I18n.lang, "settings.update_hosts_hint");
                         last: true;
                         VerticalLayout {
                             spacing: 6px;
@@ -290,7 +292,7 @@ export component SettingsPage inherits Rectangle {
                             HorizontalLayout {
                                 alignment: end;
                                 AppButton {
-                                    text: root.hosts_busy ? "Checking…" : "Check & update";
+                                    text: root.hosts_busy ? I18n.t(I18n.lang, "settings.checking") : I18n.t(I18n.lang, "settings.check_update");
                                     icon: @image-url("../../assets/icons/refresh.svg");
                                     enabled: !root.hosts_busy;
                                     clicked => { root.update_hosts_clicked(); }
@@ -312,23 +314,35 @@ export component SettingsPage inherits Rectangle {
 
                 // Appearance
                 SettingsGroup {
-                    title: "Appearance";
+                    title: I18n.t(I18n.lang, "settings.group_appearance");
                     SettingsRow {
-                        label: "Theme";
-                        hint: "Dark by default. Light theme uses a warm off-white background.";
+                        label: I18n.t(I18n.lang, "settings.language_label");
+                        hint: I18n.t(I18n.lang, "settings.language_hint");
+                        Segmented {
+                            selected: I18n.lang;
+                            options: [
+                                { value: "ru", label: "Русский" },
+                                { value: "en", label: "English" },
+                            ];
+                            changed(v) => { I18n.lang = v; root.language_changed(v); }
+                        }
+                    }
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "settings.theme_label");
+                        hint: I18n.t(I18n.lang, "settings.theme_hint");
                         Segmented {
                             selected: root.theme;
                             options: [
-                                { value: "dark",   label: "Dark",   icon: @image-url("../../assets/icons/moon.svg") },
-                                { value: "light",  label: "Light",  icon: @image-url("../../assets/icons/sun.svg") },
-                                { value: "system", label: "System", icon: @image-url("../../assets/icons/system.svg") },
+                                { value: "dark",   label: I18n.t(I18n.lang, "settings.theme_dark"),   icon: @image-url("../../assets/icons/moon.svg") },
+                                { value: "light",  label: I18n.t(I18n.lang, "settings.theme_light"),  icon: @image-url("../../assets/icons/sun.svg") },
+                                { value: "system", label: I18n.t(I18n.lang, "settings.theme_system"), icon: @image-url("../../assets/icons/system.svg") },
                             ];
                             changed(v) => { root.theme = v; root.theme_changed(v); }
                         }
                     }
                     SettingsRow {
-                        label: "Compact density";
-                        hint: "Tighten paddings and line heights — better on small laptop screens.";
+                        label: I18n.t(I18n.lang, "settings.compact_label");
+                        hint: I18n.t(I18n.lang, "settings.compact_hint");
                         last: true;
                         AppSwitch { checked <=> root.compact; }
                     }

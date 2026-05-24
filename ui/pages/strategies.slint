@@ -1,4 +1,5 @@
 import { ThemePalette, StrategyItem } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { AppInput } from "../components/input.slint";
 import { ListView } from "std-widgets.slint";
@@ -32,14 +33,14 @@ export component StrategiesPage inherits Rectangle {
                 spacing: 2px;
                 padding-bottom: 20px;
                 Text {
-                    text: "Strategies";
+                    text: I18n.t(I18n.lang, "strategies.title");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-22;
                     font-weight: 600;
                     color: ThemePalette.text;
                 }
                 Text {
-                    text: "Pick a desync preset. If the default doesn't unblock your ISP, try ALT1 → ALT2 → ALT3…";
+                    text: I18n.t(I18n.lang, "strategies.subtitle");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
                     color: ThemePalette.text-3;
@@ -55,11 +56,11 @@ export component StrategiesPage inherits Rectangle {
                     horizontal-stretch: 1;
                     field-height: 36px;
                     icon: @image-url("../../assets/icons/search.svg");
-                    placeholder: "Search by id, ALT number, or description…";
+                    placeholder: I18n.t(I18n.lang, "strategies.search_placeholder");
                     text <=> root.query;
                     edited(t) => { root.search_changed(t); }
                     if root.query != "" : AppButton {
-                        text: "clear";
+                        text: I18n.t(I18n.lang, "common.clear_lower");
                         variant: "ghost";
                         size: "sm";
                         clicked => { root.query = ""; root.search_changed(""); }
@@ -79,7 +80,7 @@ export component StrategiesPage inherits Rectangle {
                 clip: true;
 
                 if root.strategies_model.length == 0 : Text {
-                    text: "No strategies match \"" + root.query + "\".";
+                    text: I18n.t(I18n.lang, "strategies.no_match_a") + root.query + I18n.t(I18n.lang, "strategies.no_match_b");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
                     color: ThemePalette.text-3;
@@ -183,7 +184,7 @@ export component StrategiesPage inherits Rectangle {
                                             Rectangle { width: 6px; height: 6px; border-radius: 3px; background: ThemePalette.accent; }
                                         }
                                         Text {
-                                            text: "running";
+                                            text: I18n.t(I18n.lang, "strategies.running_badge");
                                             font-family: ThemePalette.font-mono;
                                             font-size: ThemePalette.fs-11;
                                             color: ThemePalette.accent;
@@ -199,7 +200,7 @@ export component StrategiesPage inherits Rectangle {
                                     border-width: 1px;
                                     border-color: ThemePalette.border-strong;
                                     sel-txt := Text {
-                                        text: "selected";
+                                        text: I18n.t(I18n.lang, "strategies.selected_badge");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-11;
                                         color: ThemePalette.text;
@@ -217,19 +218,19 @@ export component StrategiesPage inherits Rectangle {
                                 HorizontalLayout {
                                     alignment: end;
                                     if row.is-active : AppButton {
-                                        text: "Active";
+                                        text: I18n.t(I18n.lang, "strategies.active_btn");
                                         size: "sm";
                                         icon: @image-url("../../assets/icons/check.svg");
                                         enabled: false;
                                     }
                                     if row.is-selected && !row.is-active : AppButton {
-                                        text: "Selected ✓";
+                                        text: I18n.t(I18n.lang, "strategies.selected_btn");
                                         variant: "primary";
                                         size: "sm";
                                         clicked => { root.picked(item); }
                                     }
                                     if !row.is-active && !row.is-selected : AppButton {
-                                        text: "Select";
+                                        text: I18n.t(I18n.lang, "strategies.select_btn");
                                         size: "sm";
                                         clicked => { root.picked(item); }
                                     }

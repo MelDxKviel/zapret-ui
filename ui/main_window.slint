@@ -7,6 +7,7 @@ import "assets/fonts/GeistMono-Regular.ttf";
 import "assets/fonts/GeistMono-Medium.ttf";
 
 import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem } from "tokens.slint";
+import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
@@ -17,7 +18,7 @@ import { SettingsPage } from "pages/settings.slint";
 import { LogsPage } from "pages/logs.slint";
 import { AboutPage } from "pages/about.slint";
 
-export { StrategyItem, AppStatus, LogLineItem, TestResultItem }
+export { StrategyItem, AppStatus, LogLineItem, TestResultItem, I18n }
 
 // ── Sidebar nav row ──
 component NavItem inherits Rectangle {
@@ -221,6 +222,7 @@ export component MainWindow inherits Window {
     callback logs_clear_clicked();
     callback open_log_file_clicked();
     callback open_url_clicked(string);
+    callback set_language(string);
     callback set_game_filter(string);
     callback set_ipset_mode(string);
     callback update_ipset_clicked();
@@ -285,7 +287,7 @@ export component MainWindow inherits Window {
                     padding-right: 12px;
                     spacing: 1px;
                     Text {
-                        text: "WORKSPACE";
+                        text: I18n.t(I18n.lang, "nav.workspace");
                         font-family: ThemePalette.font-mono;
                         font-size: ThemePalette.fs-10;
                         color: ThemePalette.text-4;
@@ -294,37 +296,37 @@ export component MainWindow inherits Window {
                     }
                     Rectangle { height: 6px; }
                     NavItem {
-                        label: "Dashboard";
+                        label: I18n.t(I18n.lang, "nav.dashboard");
                         icon: @image-url("../assets/icons/home.svg");
                         active: root.current_page == "home";
                         clicked => { root.current_page = "home"; }
                     }
                     NavItem {
-                        label: "Strategies";
+                        label: I18n.t(I18n.lang, "nav.strategies");
                         icon: @image-url("../assets/icons/strategies.svg");
                         active: root.current_page == "strategies";
                         clicked => { root.current_page = "strategies"; }
                     }
                     NavItem {
-                        label: "Tester";
+                        label: I18n.t(I18n.lang, "nav.tester");
                         icon: @image-url("../assets/icons/rocket.svg");
                         active: root.current_page == "tester";
                         clicked => { root.current_page = "tester"; }
                     }
                     NavItem {
-                        label: "Logs";
+                        label: I18n.t(I18n.lang, "nav.logs");
                         icon: @image-url("../assets/icons/logs.svg");
                         active: root.current_page == "logs";
                         clicked => { root.current_page = "logs"; }
                     }
                     NavItem {
-                        label: "Settings";
+                        label: I18n.t(I18n.lang, "nav.settings");
                         icon: @image-url("../assets/icons/settings.svg");
                         active: root.current_page == "settings";
                         clicked => { root.current_page = "settings"; }
                     }
                     NavItem {
-                        label: "About";
+                        label: I18n.t(I18n.lang, "nav.about");
                         icon: @image-url("../assets/icons/about.svg");
                         active: root.current_page == "about";
                         clicked => { root.current_page = "about"; }
@@ -368,8 +370,8 @@ export component MainWindow inherits Window {
                             }
                             Text {
                                 text: root.running
-                                        ? (root.status_running_mode == "WindowsService" ? "Service running" : "Bypass active")
-                                        : (root.status_installed ? "Idle" : "Not installed");
+                                        ? (root.status_running_mode == "WindowsService" ? I18n.t(I18n.lang, "sidebar.status_service_running") : I18n.t(I18n.lang, "sidebar.status_bypass_active"))
+                                        : (root.status_installed ? I18n.t(I18n.lang, "sidebar.status_idle") : I18n.t(I18n.lang, "sidebar.status_not_installed"));
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
                                 font-weight: 500;
@@ -514,6 +516,7 @@ export component MainWindow inherits Window {
                     ipset_mode_changed(v) => { root.set_ipset_mode(v); }
                     update_ipset_clicked => { root.update_ipset_clicked(); }
                     update_hosts_clicked => { root.update_hosts_clicked(); }
+                    language_changed(v) => { root.set_language(v); }
                 }
             }
 

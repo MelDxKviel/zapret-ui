@@ -1,4 +1,5 @@
 import { ThemePalette, AppStatus } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { BrandMark } from "../components/brand_mark.slint";
 import { Icon } from "../components/icon.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -109,14 +110,14 @@ export component AboutPage inherits Rectangle {
                     spacing: 2px;
                     padding-bottom: 20px;
                     Text {
-                        text: "About";
+                        text: I18n.t(I18n.lang, "about.title");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-22;
                         font-weight: 600;
                         color: ThemePalette.text;
                     }
                     Text {
-                        text: "A native Windows GUI for the zapret DPI bypass core.";
+                        text: I18n.t(I18n.lang, "about.subtitle");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-13;
                         color: ThemePalette.text-3;
@@ -200,7 +201,7 @@ export component AboutPage inherits Rectangle {
                             }
                             Rectangle { height: 16px; }
                             Text {
-                                text: "A focused, native control surface for Flowseal's zapret-discord-youtube core. Pick a desync strategy, engage as a user process, or install as a Windows service — no command-line required.";
+                                text: I18n.t(I18n.lang, "about.description");
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-13;
                                 color: ThemePalette.text-2;
@@ -217,13 +218,13 @@ export component AboutPage inherits Rectangle {
                             }
                             AboutLink {
                                 icon: @image-url("../../assets/icons/rocket.svg");
-                                label: "Release notes & changelog";
+                                label: I18n.t(I18n.lang, "about.release_notes");
                                 url: "https://github.com/Flowseal/zapret-discord-youtube/releases";
                                 clicked(u) => { root.open_url(u); }
                             }
                             AboutLink {
                                 icon: @image-url("../../assets/icons/shield.svg");
-                                label: "How DPI bypass works — README";
+                                label: I18n.t(I18n.lang, "about.how_it_works");
                                 url: "https://github.com/Flowseal/zapret-discord-youtube#readme";
                                 clicked(u) => { root.open_url(u); }
                             }
@@ -252,7 +253,7 @@ export component AboutPage inherits Rectangle {
                                         padding-left: 16px;
                                         padding-right: 16px;
                                         Text {
-                                            text: "System";
+                                            text: I18n.t(I18n.lang, "about.system");
                                             font-family: ThemePalette.font-mono;
                                             font-size: ThemePalette.fs-11;
                                             font-weight: 600;
@@ -264,11 +265,11 @@ export component AboutPage inherits Rectangle {
                                     Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
                                 }
                                 VRow {
-                                    key: "App version";
+                                    key: I18n.t(I18n.lang, "about.app_version");
                                     AccentPill { text: "v0.1.0"; }
                                 }
                                 VRow {
-                                    key: "Zapret core";
+                                    key: I18n.t(I18n.lang, "about.zapret_core");
                                     HorizontalLayout {
                                         spacing: 6px;
                                         alignment: end;
@@ -283,7 +284,7 @@ export component AboutPage inherits Rectangle {
                                             text: "↑ " + root.status.latest_version;
                                         }
                                         if !root.status.installed : Text {
-                                            text: "not installed";
+                                            text: I18n.t(I18n.lang, "common.not_installed");
                                             font-family: ThemePalette.font-mono;
                                             font-size: ThemePalette.fs-12;
                                             color: ThemePalette.danger;
@@ -292,7 +293,7 @@ export component AboutPage inherits Rectangle {
                                     }
                                 }
                                 VRow {
-                                    key: "Platform";
+                                    key: I18n.t(I18n.lang, "about.platform");
                                     Text {
                                         text: "Windows 10 / 11";
                                         font-family: ThemePalette.font-mono;
@@ -302,7 +303,7 @@ export component AboutPage inherits Rectangle {
                                     }
                                 }
                                 VRow {
-                                    key: "Architecture";
+                                    key: I18n.t(I18n.lang, "about.architecture");
                                     Text {
                                         text: "x86_64";
                                         font-family: ThemePalette.font-mono;
@@ -312,10 +313,10 @@ export component AboutPage inherits Rectangle {
                                     }
                                 }
                                 VRow {
-                                    key: "Build channel";
+                                    key: I18n.t(I18n.lang, "about.build_channel");
                                     last: true;
                                     Text {
-                                        text: "stable";
+                                        text: I18n.t(I18n.lang, "about.stable");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text;
@@ -345,14 +346,14 @@ export component AboutPage inherits Rectangle {
                                     horizontal-stretch: 1;
                                     spacing: 4px;
                                     Text {
-                                        text: "Antivirus may flag winws.exe";
+                                        text: I18n.t(I18n.lang, "about.av_title");
                                         font-family: ThemePalette.font-sans;
                                         font-size: ThemePalette.fs-13;
                                         font-weight: 600;
                                         color: ThemePalette.text;
                                     }
                                     Text {
-                                        text: "The bypass works by manipulating raw socket packets — some AVs read that as malware-like behavior. It's a false positive. If you hit one, add the installation folder to your AV exclusions.";
+                                        text: I18n.t(I18n.lang, "about.av_desc");
                                         font-family: ThemePalette.font-sans;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text-2;

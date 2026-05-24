@@ -1,4 +1,5 @@
 import { ThemePalette, LogLineItem } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { AppInput } from "../components/input.slint";
 import { Segmented } from "../components/segmented.slint";
@@ -42,14 +43,14 @@ export component LogsPage inherits Rectangle {
                     spacing: 2px;
                     alignment: end;
                     Text {
-                        text: "Activity Logs";
+                        text: I18n.t(I18n.lang, "logs.title");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-22;
                         font-weight: 600;
                         color: ThemePalette.text;
                     }
                     Text {
-                        text: "Real-time winws and installer output. Select text to copy.";
+                        text: I18n.t(I18n.lang, "logs.subtitle");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-13;
                         color: ThemePalette.text-3;
@@ -61,12 +62,12 @@ export component LogsPage inherits Rectangle {
                     HorizontalLayout {
                         spacing: 8px;
                         AppButton {
-                            text: "Open log file";
+                            text: I18n.t(I18n.lang, "logs.open_file");
                             icon: @image-url("../../assets/icons/external.svg");
                             clicked => { root.open_file_clicked(); }
                         }
                         AppButton {
-                            text: "Clear";
+                            text: I18n.t(I18n.lang, "common.clear");
                             variant: "danger";
                             icon: @image-url("../../assets/icons/trash.svg");
                             clicked => { root.clear_clicked(); }
@@ -112,7 +113,7 @@ export component LogsPage inherits Rectangle {
                                     }
                                 }
                                 Text {
-                                    text: "streaming · \{root.count} lines";
+                                    text: I18n.t(I18n.lang, "logs.streaming_a") + root.count + I18n.t(I18n.lang, "logs.streaming_b");
                                     font-family: ThemePalette.font-mono;
                                     font-size: ThemePalette.fs-11;
                                     color: ThemePalette.text-3;
@@ -128,7 +129,7 @@ export component LogsPage inherits Rectangle {
                                 field-height: 28px;
                                 font-size: ThemePalette.fs-12;
                                 icon: @image-url("../../assets/icons/search.svg");
-                                placeholder: "grep…";
+                                placeholder: I18n.t(I18n.lang, "logs.grep_placeholder");
                                 text <=> root.query;
                                 edited(t) => { root.query_changed(t, root.level); }
                             }
@@ -150,7 +151,7 @@ export component LogsPage inherits Rectangle {
 
                             // autoscroll
                             AppButton {
-                                text: "Auto";
+                                text: I18n.t(I18n.lang, "logs.auto");
                                 size: "sm";
                                 variant: root.autoscroll ? "primary" : "default";
                                 icon: @image-url("../../assets/icons/pin.svg");

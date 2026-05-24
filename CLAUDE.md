@@ -51,6 +51,12 @@ Slint compiled by `build.rs` (`slint_build::compile("ui/main_window.slint")`); `
 
 **Callback and property names in `main_window.slint` are a hand-maintained contract with both `src/app.rs` and `examples/ui_only.rs`.** Adding/renaming a `callback` or `in-out property` means updating the `on_*`/`set_*` calls in both Rust files or the build breaks. `DESIGN.md` is the design spec the UI was ported from.
 
+### i18n (runtime translations)
+
+Every user-visible string is written as `I18n.t(I18n.lang, "some.key")` — `I18n` is the global singleton in `ui/i18n.slint` (re-exported from `main_window.slint`). `lang` is threaded through as the first argument *purely* to make each binding depend on it, so flipping the language re-renders every translated string with no extra plumbing. The `t` callback is implemented in Rust (`src/i18n.rs`) and looks the key up in the flat JSON catalogs `src/locales/{ru,en}.json` (embedded via `include_str!`). A unit test asserts `ru.json` and `en.json` have identical key sets — keep them in sync when adding strings.
+
+`app.rs` registers the callback (`ui.global::<I18n>().on_t(...)`) and seeds `I18n.lang` from `AppConfig::language` (default `Ru`); the Settings → Language control flips `I18n.lang` itself (instant re-render) and fires `set_language` so Rust persists it. `examples/ui_only.rs` registers the same callback. The few status strings the backend builds (hosts/ipset messages) are also localized via `crate::i18n::tr` using the config language. `ui_only.rs` must register `on_t` too or all text renders blank.
+
 ### Slint 1.x gotchas (this project has hit all of these)
 
 - Fonts are imported at compile time only; bundled `.ttf`s live in `ui/assets/fonts/` and are referenced from Slint.

@@ -1,0 +1,19 @@
+// ──────────────────────────────────────────────────────────────────────────
+//  zapret-ui · runtime i18n
+//
+//  `I18n` is an app-wide singleton. Every user-visible string is written as
+//  `I18n.t(I18n.lang, "some.key")`. Passing the reactive `lang` property as an
+//  argument makes each binding depend on it, so flipping the language re-renders
+//  every translated string with no extra plumbing.
+//
+//  The `t` callback is implemented in Rust (`src/i18n.rs`), which looks the key
+//  up in the JSON catalogs under `src/locales/`. `lang` is seeded from the saved
+//  config ("ru" by default) and updated by the Settings → Language control.
+// ──────────────────────────────────────────────────────────────────────────
+export global I18n {
+    // Active language code: "ru" | "en".
+    in-out property <string> lang: "ru";
+    // Translate a key for the given language. `lang` is threaded through purely
+    // to establish the reactive dependency — the Rust handler reads the key.
+    pure callback t(string, string) -> string;
+}

@@ -1,6 +1,7 @@
 pub mod contracts;
 pub mod ports;
 pub mod config;
+pub mod i18n;
 pub mod state;
 pub mod log;
 pub mod tray;
