@@ -2,6 +2,7 @@ import { ThemePalette, AppStatus, StrategyItem } from "../tokens.slint";
 import { AppButton } from "../components/button.slint";
 import { StatusDot } from "../components/status_dot.slint";
 import { Icon } from "../components/icon.slint";
+import { Segmented } from "../components/segmented.slint";
 import { ScrollView } from "std-widgets.slint";
 
 // ── Windows-service card: renders ONE of three states (absent / stopped /
@@ -314,7 +315,10 @@ export component HomePage inherits Rectangle {
     // Live bypass uptime in seconds — owned by MainWindow so it persists across
     // page navigation and reflects the real bypass session.
     in property <int> uptime;
+    // Game filter mode (off | all | tcp | udp), shared with the Settings page.
+    in-out property <string> game_filter;
 
+    callback game_filter_changed(string);
     callback start_clicked();
     callback stop_clicked();
     callback install_clicked();
@@ -712,6 +716,76 @@ export component HomePage inherits Rectangle {
                                         clicked => { root.pick_strategy_clicked(); }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 16px; }
+
+                // ── GAME FILTER ──
+                Rectangle {
+                    background: ThemePalette.surface;
+                    border-width: 1px;
+                    border-color: ThemePalette.border;
+                    border-radius: ThemePalette.r-12;
+                    clip: true;
+                    vertical-stretch: 0;
+                    HorizontalLayout {
+                        padding-left: 18px;
+                        padding-right: 18px;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        spacing: 16px;
+                        // icon badge
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 32px;
+                                height: 32px;
+                                border-radius: ThemePalette.r-8;
+                                background: ThemePalette.surface-2;
+                                Image {
+                                    source: @image-url("../../assets/icons/filter.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: ThemePalette.text-2;
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            alignment: center;
+                            Text {
+                                text: "Game filter";
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-13;
+                                font-weight: 600;
+                                color: ThemePalette.text;
+                            }
+                            Text {
+                                text: root.installed
+                                    ? "Route game traffic (high TCP/UDP ports) through the bypass. Restart to apply."
+                                    : "Install zapret first to configure the game filter.";
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: ThemePalette.text-3;
+                                wrap: word-wrap;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                enabled: root.installed;
+                                selected: root.game_filter;
+                                options: [
+                                    { value: "off", label: "Off" },
+                                    { value: "all", label: "TCP+UDP" },
+                                    { value: "tcp", label: "TCP" },
+                                    { value: "udp", label: "UDP" },
+                                ];
+                                changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
                             }
                         }
                     }

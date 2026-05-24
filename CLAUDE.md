@@ -19,7 +19,7 @@ cargo run --example ui_only    # launch the Slint UI with mock backends (no real
 
 ## Architecture
 
-**Ports-and-adapters.** `src/ports.rs` defines five traits — `Installer`, `Runner`, `ServiceCtl`, `StrategyCatalog`, `StrategyTester`. `src/contracts.rs` holds the shared data types (`Strategy`, `RuntimeStatus`, `BackendCmd`, `UiEvent`). The `src/zapret/` modules are the concrete adapters. `src/app.rs` is the orchestrator that owns `Arc<dyn Trait>` handles and never depends on a concrete adapter — so `examples/ui_only.rs` swaps in mocks trivially.
+**Ports-and-adapters.** `src/ports.rs` defines six traits — `Installer`, `Runner`, `ServiceCtl`, `StrategyCatalog`, `StrategyTester`, `Maintenance`. `src/contracts.rs` holds the shared data types (`Strategy`, `RuntimeStatus`, `BackendCmd`, `UiEvent`). The `src/zapret/` modules are the concrete adapters. `src/app.rs` is the orchestrator that owns `Arc<dyn Trait>` handles and never depends on a concrete adapter — so `examples/ui_only.rs` swaps in mocks trivially.
 
 **Two-channel message passing between UI and backend** (`src/app.rs`):
 - UI callbacks (`on_start_clicked`, etc.) `try_send` a `BackendCmd` over an mpsc channel. `run_backend_loop` consumes them on a tokio task.
@@ -31,7 +31,8 @@ Do not call Slint setters directly from backend tasks — always go through a `U
 
 ### Key adapters (`src/zapret/`)
 
-- **`batparse.rs`** — the heart of strategy handling. Parses a `.bat` preset by extracting the `^`-continued `winws.exe` command line, tokenizing (quote-aware), and substituting batch vars (`%BIN%`, `%LISTS%`, `%~dp0`, `%GameFilter*%`) into absolute paths. `ensure_user_lists` recreates the `lists\*-user.txt` files that `winws.exe` refuses to start without.
+- **`batparse.rs`** — the heart of strategy handling. Parses a `.bat` preset by extracting the `^`-continued `winws.exe` command line, tokenizing (quote-aware), and substituting batch vars (`%BIN%`, `%LISTS%`, `%~dp0`, `%GameFilter*%`) into absolute paths. The `%GameFilter*%` values come from `read_game_filter(install_dir)`, which reads the `utils\game_filter.enabled` flag file (so the catalog re-resolves them on every scan). `ensure_user_lists` recreates the `lists\*-user.txt` files that `winws.exe` refuses to start without.
+- **`maintenance.rs`** (`ZapretMaintenance`) — the in-app port of `service.bat`'s SETTINGS/UPDATES menu: the **game filter** (writes `utils\game_filter.enabled`, consumed by `batparse`), the **IPSet filter** (switches `lists\ipset-all.txt` between any/none/loaded with a `.backup`), **Update IPSet List** (downloads `ipset-service.txt` from the repo) and **Update Hosts File** (compares the system hosts file to the repo's; opens the downloaded copy for a manual merge if stale — no elevation, faithful to the .bat). None of these need admin. Surfaced as the **DPI bypass tuning** group on the Settings page; changes apply on the next bypass start (or service reinstall).
 - **`catalog.rs`** (`LocalStrategyCatalog`) — strategies are discovered **at runtime** by scanning `.bat` files in the install dir, *not* hardcoded. If nothing is installed, the catalog is empty.
 - **`github.rs`** — deliberately avoids `api.github.com`, which is DPI-blocked on the ISPs this tool targets. Version comes from `raw.githubusercontent.com/.../version.txt` and the archive from `codeload.github.com`; both reachable when the API is not. Falls back to a cached release on failure.
 - **`installer.rs`** — downloads + extracts to a temp dir, promotes a single root subdir, then atomically swaps it into place (renaming the old install to `zapret.old.<ts>` with rollback).

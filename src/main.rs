@@ -109,13 +109,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Instantiate ports
     let client = reqwest::Client::builder().build()?;
-    let github_client = zapret::github::GithubClient::new(client, None);
+    let github_client = zapret::github::GithubClient::new(client.clone(), None);
 
     let installer = Arc::new(zapret::installer::ZapretInstaller::new(install_dir.clone(), github_client));
     let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone(), event_tx.clone()));
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
     let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(install_dir.clone()));
     let tester = Arc::new(zapret::tester::ConnectivityTester::new(runner.clone(), install_dir.clone()));
+    let maintenance = Arc::new(zapret::maintenance::ZapretMaintenance::new(install_dir.clone(), client.clone()));
 
     // Instantiate and run App
     let mut app = app::App::new(
@@ -124,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         service_ctl,
         catalog,
         tester,
+        maintenance,
         config,
         state,
         event_tx,

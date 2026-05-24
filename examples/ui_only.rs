@@ -213,6 +213,59 @@ fn main() -> anyhow::Result<()> {
         println!("UI: Use tested strategy: {}", id);
     });
 
+    // DPI bypass tuning (mock): seed initial state and echo the callbacks.
+    ui.set_game_filter("off".into());
+    ui.set_ipset_mode("loaded".into());
+    ui.set_ipset_lines(2048);
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_set_game_filter(move |slug| {
+            println!("UI: Set game filter: {}", slug);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_game_filter(slug);
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_set_ipset_mode(move |slug| {
+            println!("UI: Set ipset mode: {}", slug);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_ipset_mode(slug);
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_update_ipset_clicked(move || {
+            println!("UI: Update ipset list clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_ipset_ok(true);
+                ui.set_ipset_msg("Updated — 2048 IP entries loaded".into());
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_update_hosts_clicked(move || {
+            println!("UI: Update hosts file clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_hosts_ok(true);
+                ui.set_hosts_msg("Out of date — review the entries and update your hosts file".into());
+                // Demo the review modal with sample content.
+                ui.set_hosts_content(
+                    "# zapret hosts\n127.0.0.1 localhost\n\n# YouTube\n0.0.0.0 example.googlevideo.com\n0.0.0.0 r1---sn-example.googlevideo.com\n# Discord\n0.0.0.0 example.discord.com\n".into(),
+                );
+                ui.set_hosts_path("C:\\Windows\\System32\\drivers\\etc\\hosts".into());
+                ui.set_hosts_dir("C:\\Windows\\System32\\drivers\\etc".into());
+                ui.set_hosts_modal_open(true);
+            }
+        });
+    }
+    ui.on_copy_to_clipboard(|text| {
+        println!("UI: Copy to clipboard ({} chars)", text.len());
+    });
+
     // Mock log lines
     let mk = |no: i32, ts: &str, lvl: &str, msg: &str| LogLineItem {
         line_no: no,

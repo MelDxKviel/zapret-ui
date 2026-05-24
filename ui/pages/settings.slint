@@ -85,8 +85,24 @@ export component SettingsPage inherits Rectangle {
     in-out property <string> install_dir;
     in-out property <string> theme; // "dark" | "light" | "system"
 
+    // ── DPI bypass tuning (zapret service.bat filters) ──
+    in property <bool> installed;
+    in-out property <string> game_filter; // off | all | tcp | udp
+    in-out property <string> ipset_mode;  // any | none | loaded | unknown
+    in property <int> ipset_lines;
+    in property <bool> ipset_busy;
+    in property <string> ipset_msg;
+    in property <bool> ipset_ok;
+    in property <bool> hosts_busy;
+    in property <string> hosts_msg;
+    in property <bool> hosts_ok;
+
     callback open_folder_clicked();
     callback theme_changed(string);
+    callback game_filter_changed(string);
+    callback ipset_mode_changed(string);
+    callback update_ipset_clicked();
+    callback update_hosts_clicked();
 
     background: transparent;
 
@@ -192,6 +208,102 @@ export component SettingsPage inherits Rectangle {
                                 text: "Open";
                                 icon: @image-url("../../assets/icons/external.svg");
                                 clicked => { root.open_folder_clicked(); }
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 16px; }
+
+                // DPI bypass tuning — the zapret service.bat filters & updaters.
+                SettingsGroup {
+                    title: "DPI bypass tuning";
+                    SettingsRow {
+                        label: "Game filter";
+                        hint: root.installed
+                            ? "Route game traffic (high TCP/UDP ports) through the bypass. Restart the bypass to apply."
+                            : "Install zapret first to configure the game filter.";
+                        Segmented {
+                            enabled: root.installed;
+                            selected: root.game_filter;
+                            options: [
+                                { value: "off", label: "Off" },
+                                { value: "all", label: "TCP+UDP" },
+                                { value: "tcp", label: "TCP" },
+                                { value: "udp", label: "UDP" },
+                            ];
+                            changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
+                        }
+                    }
+                    SettingsRow {
+                        label: "IPSet filter";
+                        hint: root.ipset_mode == "loaded"
+                            ? "Match the downloaded IP list (\{root.ipset_lines} entries). Restart the bypass to apply."
+                            : (root.ipset_mode == "none"
+                                ? "IP matching disabled. Restart the bypass to apply."
+                                : (root.ipset_mode == "any"
+                                    ? "Match any IP (no list). Restart the bypass to apply."
+                                    : "How ipset-all.txt is applied by winws."));
+                        Segmented {
+                            enabled: root.installed && root.ipset_mode != "unknown";
+                            selected: root.ipset_mode;
+                            options: [
+                                { value: "loaded", label: "Loaded" },
+                                { value: "none", label: "None" },
+                                { value: "any", label: "Any" },
+                            ];
+                            changed(v) => { root.ipset_mode = v; root.ipset_mode_changed(v); }
+                        }
+                    }
+                    SettingsRow {
+                        label: "Update IPSet list";
+                        hint: "Download the latest blocked-IP list (ipset-all.txt) from the zapret repository.";
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: end;
+                                AppButton {
+                                    text: root.ipset_busy ? "Updating…" : "Update";
+                                    icon: @image-url("../../assets/icons/download.svg");
+                                    enabled: root.installed && !root.ipset_busy;
+                                    clicked => { root.update_ipset_clicked(); }
+                                }
+                            }
+                            if root.ipset_msg != "" : Text {
+                                text: root.ipset_msg;
+                                width: 240px;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: root.ipset_ok ? ThemePalette.text-3 : ThemePalette.danger;
+                            }
+                        }
+                    }
+                    SettingsRow {
+                        label: "Update hosts file";
+                        hint: "Compare your system hosts file with the repository's. If outdated, the downloaded copy opens for a manual merge.";
+                        last: true;
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: end;
+                                AppButton {
+                                    text: root.hosts_busy ? "Checking…" : "Check & update";
+                                    icon: @image-url("../../assets/icons/refresh.svg");
+                                    enabled: !root.hosts_busy;
+                                    clicked => { root.update_hosts_clicked(); }
+                                }
+                            }
+                            if root.hosts_msg != "" : Text {
+                                text: root.hosts_msg;
+                                width: 240px;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: root.hosts_ok ? ThemePalette.text-3 : ThemePalette.danger;
                             }
                         }
                     }

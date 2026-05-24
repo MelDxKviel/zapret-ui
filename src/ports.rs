@@ -1,4 +1,4 @@
-use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage, StrategyTestResult};
+use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage, StrategyTestResult, GameFilterMode, IpsetMode, MaintenanceStatus, HostsCheck};
 
 pub type ProgressCb = Box<dyn Fn(InstallStage, u64, Option<u64>) + Send + Sync>;
 
@@ -56,3 +56,22 @@ pub trait StrategyTester: Send + Sync {
 
 /// Called as soon as a single strategy's result is ready (for incremental UI).
 pub type TestResultCb = Box<dyn Fn(StrategyTestResult) + Send + Sync>;
+
+/// The in-app port of the `service.bat` SETTINGS / UPDATES menu items: the game
+/// filter, the ipset filter, and the ipset-list / hosts-file updaters. All
+/// operations act on files inside the install dir (no elevation required).
+#[async_trait::async_trait]
+pub trait Maintenance: Send + Sync {
+    /// Read the current game-filter + ipset state from the install dir.
+    async fn status(&self) -> MaintenanceStatus;
+    /// Persist the game filter mode (writes/removes `utils\game_filter.enabled`).
+    async fn set_game_filter(&self, mode: GameFilterMode) -> anyhow::Result<()>;
+    /// Switch `ipset-all.txt` to the target any/none/loaded state (with backup).
+    async fn set_ipset_mode(&self, mode: IpsetMode) -> anyhow::Result<()>;
+    /// Download the latest ipset list into `lists\ipset-all.txt`. Returns a
+    /// short human-readable summary on success.
+    async fn update_ipset_list(&self) -> anyhow::Result<String>;
+    /// Download the repo hosts file and compare it to the system hosts file.
+    /// Returns the comparison plus the downloaded content for in-app review.
+    async fn update_hosts_file(&self) -> anyhow::Result<HostsCheck>;
+}

@@ -12,6 +12,7 @@ export struct SegmentOption {
 export component Segmented inherits Rectangle {
     in property <[SegmentOption]> options;
     in-out property <string> selected;
+    in property <bool> enabled: true;
     in property <length> seg-height: 26px;
     in property <length> seg-pad: 12px;
     in property <length> seg-fs: ThemePalette.fs-12;
@@ -26,6 +27,7 @@ export component Segmented inherits Rectangle {
     border-width: 1px;
     border-color: ThemePalette.border;
     background: ThemePalette.bg-2;
+    opacity: root.enabled ? 1.0 : 0.45;
 
     track := HorizontalLayout {
         padding: 2px;
@@ -62,7 +64,8 @@ export component Segmented inherits Rectangle {
             }
 
             TouchArea {
-                mouse-cursor: pointer;
+                enabled: root.enabled;
+                mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
                 clicked => {
                     root.selected = opt.value;
                     root.changed(opt.value);

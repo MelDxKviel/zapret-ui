@@ -17,11 +17,14 @@ impl LocalStrategyCatalog {
 
     fn scan(&self) -> Vec<Strategy> {
         let mut out = Vec::new();
+        // Resolve %GameFilter*% the way service.bat would, from the flag file.
+        // Re-read on every scan so a toggle takes effect on the next start.
+        let gf = batparse::read_game_filter(&self.install_dir);
         if let Ok(rd) = std::fs::read_dir(&self.install_dir) {
             for entry in rd.flatten() {
                 let path = entry.path();
                 if path.extension().map(|e| e.eq_ignore_ascii_case("bat")).unwrap_or(false) {
-                    if let Some(s) = batparse::strategy_from_bat(&path, &self.install_dir) {
+                    if let Some(s) = batparse::strategy_from_bat(&path, &self.install_dir, gf) {
                         out.push(s);
                     }
                 }

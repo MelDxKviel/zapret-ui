@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use tokio::sync::{mpsc, broadcast, RwLock};
-use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, split_alt};
-use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester};
+use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, GameFilterMode, IpsetMode, split_alt};
+use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester, Maintenance};
 use crate::config::AppConfig;
 use crate::state::AppState;
 use crate::tray::SystemTray;
@@ -182,6 +182,7 @@ pub struct App {
     service_ctl: Arc<dyn ServiceCtl>,
     catalog: Arc<dyn StrategyCatalog>,
     tester: Arc<dyn StrategyTester>,
+    maintenance: Arc<dyn Maintenance>,
     config: Arc<RwLock<AppConfig>>,
     state: AppState,
     cmd_tx: mpsc::Sender<BackendCmd>,
@@ -190,12 +191,14 @@ pub struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         installer: Arc<dyn Installer>,
         runner: Arc<dyn Runner>,
         service_ctl: Arc<dyn ServiceCtl>,
         catalog: Arc<dyn StrategyCatalog>,
         tester: Arc<dyn StrategyTester>,
+        maintenance: Arc<dyn Maintenance>,
         config: AppConfig,
         state: AppState,
         event_tx: broadcast::Sender<UiEvent>,
@@ -208,6 +211,7 @@ impl App {
             service_ctl,
             catalog,
             tester,
+            maintenance,
             config: Arc::new(RwLock::new(config)),
             state,
             cmd_tx,
@@ -384,6 +388,48 @@ impl App {
             });
         }
 
+        // ── DPI bypass tuning (Settings page) ──
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_game_filter(move |slug| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetGameFilter(GameFilterMode::from_slug(&slug)));
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_ipset_mode(move |slug| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetIpsetMode(IpsetMode::from_slug(&slug)));
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_update_ipset_clicked(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_ipset_busy(true);
+                    ui.set_ipset_msg("".into());
+                }
+                let _ = cmd_tx_c.try_send(BackendCmd::UpdateIpsetList);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_update_hosts_clicked(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_hosts_busy(true);
+                    ui.set_hosts_msg("".into());
+                }
+                let _ = cmd_tx_c.try_send(BackendCmd::UpdateHostsFile);
+            });
+        }
+        // Copy arbitrary text to the system clipboard (used by the hosts window).
+        ui.on_copy_to_clipboard(move |text| {
+            if let Err(e) = clipboard_win::set_clipboard_string(&text) {
+                tracing::warn!("Failed to copy to clipboard: {}", e);
+            }
+        });
+
         // Handle Tray minimizing on close
         let tray = SystemTray::new()?;
         let window = ui.window();
@@ -558,6 +604,32 @@ impl App {
                                     }
                                 }
                             }
+                            UiEvent::Maintenance(m) => {
+                                ui.set_game_filter(m.game_filter.slug().into());
+                                ui.set_ipset_mode(m.ipset_mode.slug().into());
+                                ui.set_ipset_lines(m.ipset_lines as i32);
+                            }
+                            UiEvent::MaintenanceResult { kind, ok, message } => {
+                                match kind.as_str() {
+                                    "ipset" => {
+                                        ui.set_ipset_busy(false);
+                                        ui.set_ipset_msg(message.into());
+                                        ui.set_ipset_ok(ok);
+                                    }
+                                    "hosts" => {
+                                        ui.set_hosts_busy(false);
+                                        ui.set_hosts_msg(message.into());
+                                        ui.set_hosts_ok(ok);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            UiEvent::HostsContent { content, hosts_path, hosts_dir } => {
+                                ui.set_hosts_content(content.into());
+                                ui.set_hosts_path(hosts_path.into());
+                                ui.set_hosts_dir(hosts_dir.into());
+                                ui.set_hosts_modal_open(true);
+                            }
                         }
                     }
                 });
@@ -597,6 +669,7 @@ impl App {
         let service_ctl = self.service_ctl.clone();
         let catalog = self.catalog.clone();
         let tester = self.tester.clone();
+        let maintenance = self.maintenance.clone();
         let event_tx = self.event_tx.clone();
         let config = self.config.clone();
         let state = self.state.clone();
@@ -807,6 +880,8 @@ impl App {
                         }
                         state.set_status(status.clone()).await;
                         let _ = event_tx.send(UiEvent::Status(status));
+                        // Keep the Settings filter toggles in sync with disk.
+                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
                     }
                     BackendCmd::OpenInstallFolder => {
                         let install_dir = {
@@ -820,6 +895,74 @@ impl App {
                     }
                     BackendCmd::CancelTest => {
                         tester.cancel();
+                    }
+                    BackendCmd::SetGameFilter(mode) => {
+                        match maintenance.set_game_filter(mode).await {
+                            Ok(_) => {
+                                tracing::info!("Game filter changed — restart the bypass to apply");
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                            }
+                        }
+                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
+                    }
+                    BackendCmd::SetIpsetMode(mode) => {
+                        if let Err(e) = maintenance.set_ipset_mode(mode).await {
+                            let _ = event_tx.send(UiEvent::MaintenanceResult {
+                                kind: "ipset".to_string(),
+                                ok: false,
+                                message: e.to_string(),
+                            });
+                        } else {
+                            tracing::info!("IPSet filter changed — restart the bypass to apply");
+                        }
+                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
+                    }
+                    BackendCmd::UpdateIpsetList => {
+                        let (ok, message) = match maintenance.update_ipset_list().await {
+                            Ok(msg) => (true, msg),
+                            Err(e) => (false, e.to_string()),
+                        };
+                        let _ = event_tx.send(UiEvent::MaintenanceResult {
+                            kind: "ipset".to_string(),
+                            ok,
+                            message,
+                        });
+                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
+                    }
+                    BackendCmd::UpdateHostsFile => {
+                        match maintenance.update_hosts_file().await {
+                            Ok(check) => {
+                                let message = if check.up_to_date {
+                                    "Hosts file is already up to date".to_string()
+                                } else {
+                                    "Out of date — review the entries and update your hosts file".to_string()
+                                };
+                                let _ = event_tx.send(UiEvent::MaintenanceResult {
+                                    kind: "hosts".to_string(),
+                                    ok: true,
+                                    message,
+                                });
+                                if !check.up_to_date {
+                                    // Open the folder containing the hosts file (so the
+                                    // user can paste), then open the in-app review window.
+                                    open_external(&check.hosts_dir);
+                                    let _ = event_tx.send(UiEvent::HostsContent {
+                                        content: check.content,
+                                        hosts_path: check.hosts_path,
+                                        hosts_dir: check.hosts_dir,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(UiEvent::MaintenanceResult {
+                                    kind: "hosts".to_string(),
+                                    ok: false,
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
                     }
                     BackendCmd::TestStrategies => {
                         let strategies = catalog.all();
