@@ -33,6 +33,21 @@ export struct StrategyItem {
     alt: string,       // text inside the parentheses, e.g. "ALT2" (empty if none)
 }
 
+// One row in the strategy-tester results table. `ok`/`total` are the reachable
+// endpoint counts; `latency` is the average latency in ms (0 if nothing passed).
+// `rank` is 1-based (0 while still streaming); `is_best` flags the winner.
+export struct TestResultItem {
+    id: string,
+    display_name: string,
+    pretty: string,
+    alt: string,
+    ok: int,
+    total: int,
+    latency: int,
+    rank: int,
+    is_best: bool,
+}
+
 export global ThemePalette {
     in-out property <bool> is-dark: true;
 

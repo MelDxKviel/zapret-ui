@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use tokio::sync::{mpsc, broadcast, RwLock};
 use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, split_alt};
-use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog};
+use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester};
 use crate::config::AppConfig;
 use crate::state::AppState;
 use crate::tray::SystemTray;
@@ -15,6 +15,8 @@ slint::include_modules!();
 thread_local! {
     static LOG_BUF: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static LOG_FILTER: RefCell<(String, String)> = RefCell::new((String::new(), "ALL".to_string()));
+    // Strategy-test results, in arrival order until the final ranked list lands.
+    static TEST_RESULTS: RefCell<Vec<crate::contracts::StrategyTestResult>> = const { RefCell::new(Vec::new()) };
 }
 
 const LOG_BUF_CAP: usize = 4000;
@@ -88,6 +90,40 @@ fn rebuild_logs(ui: &MainWindow) {
     ui.set_log_text(text.into());
 }
 
+/// Rebuild the Slint `test_results` model from the thread-local buffer.
+/// Sorts live by reachability (then latency) so the best strategies bubble to
+/// the top as results stream in, rather than appearing in catalog/name order.
+fn rebuild_test_results(ui: &MainWindow) {
+    let best_id = ui.get_test_best_id().to_string();
+    let mut sorted = TEST_RESULTS.with(|b| b.borrow().clone());
+    sorted.sort_by(|a, b| {
+        b.ok.cmp(&a.ok).then_with(|| {
+            let al = if a.avg_latency_ms == 0 { u32::MAX } else { a.avg_latency_ms };
+            let bl = if b.avg_latency_ms == 0 { u32::MAX } else { b.avg_latency_ms };
+            al.cmp(&bl)
+        })
+    });
+    let items: Vec<TestResultItem> = sorted
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let (pretty, alt) = split_alt(&r.id);
+            TestResultItem {
+                id: r.id.as_str().into(),
+                display_name: r.display_name.as_str().into(),
+                pretty: pretty.into(),
+                alt: alt.into(),
+                ok: r.ok as i32,
+                total: r.total as i32,
+                latency: r.avg_latency_ms as i32,
+                rank: i as i32 + 1,
+                is_best: !best_id.is_empty() && r.id == best_id,
+            }
+        })
+        .collect();
+    ui.set_test_results(Rc::new(slint::VecModel::from(items)).into());
+}
+
 /// Open a path with the OS default handler (folder in Explorer, URL in browser).
 fn open_external(target: &str) {
     let _ = std::process::Command::new("cmd")
@@ -145,6 +181,7 @@ pub struct App {
     runner: Arc<dyn Runner>,
     service_ctl: Arc<dyn ServiceCtl>,
     catalog: Arc<dyn StrategyCatalog>,
+    tester: Arc<dyn StrategyTester>,
     config: Arc<RwLock<AppConfig>>,
     state: AppState,
     cmd_tx: mpsc::Sender<BackendCmd>,
@@ -158,6 +195,7 @@ impl App {
         runner: Arc<dyn Runner>,
         service_ctl: Arc<dyn ServiceCtl>,
         catalog: Arc<dyn StrategyCatalog>,
+        tester: Arc<dyn StrategyTester>,
         config: AppConfig,
         state: AppState,
         event_tx: broadcast::Sender<UiEvent>,
@@ -169,6 +207,7 @@ impl App {
             runner,
             service_ctl,
             catalog,
+            tester,
             config: Arc::new(RwLock::new(config)),
             state,
             cmd_tx,
@@ -316,6 +355,34 @@ impl App {
                 let _ = cmd_tx_c.try_send(BackendCmd::RefreshStatus);
             });
         }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_test_start_clicked(move || {
+                let _ = cmd_tx_c.try_send(BackendCmd::TestStrategies);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_test_cancel_clicked(move || {
+                let _ = cmd_tx_c.try_send(BackendCmd::CancelTest);
+            });
+        }
+        // "Use this strategy" from a test result row: resolve it from the catalog
+        // and apply it as the user's selection, then jump to the dashboard.
+        {
+            let catalog = self.catalog.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_test_use_strategy(move |id| {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let id = id.to_string();
+                    if let Some(s) = catalog.by_id(&id) {
+                        ui.set_selected_item(to_item(&s));
+                        ui.set_selected_strategy(id.as_str().into());
+                        ui.set_current_page("home".into());
+                    }
+                }
+            });
+        }
 
         // Handle Tray minimizing on close
         let tray = SystemTray::new()?;
@@ -446,6 +513,51 @@ impl App {
                                 tracing::error!("UI Error: {}", err);
                                 ui.set_is_busy(false);
                             }
+                            UiEvent::TestStarted { total } => {
+                                TEST_RESULTS.with(|b| b.borrow_mut().clear());
+                                ui.set_test_running(true);
+                                ui.set_test_best_id("".into());
+                                ui.set_test_current(0);
+                                ui.set_test_total(total as i32);
+                                ui.set_test_current_strategy("".into());
+                                rebuild_test_results(&ui);
+                            }
+                            UiEvent::TestProgress { index, total, strategy } => {
+                                ui.set_test_running(true);
+                                ui.set_test_current(index as i32);
+                                ui.set_test_total(total as i32);
+                                ui.set_test_current_strategy(strategy.into());
+                            }
+                            UiEvent::TestResult(result) => {
+                                TEST_RESULTS.with(|b| b.borrow_mut().push(result));
+                                rebuild_test_results(&ui);
+                            }
+                            UiEvent::TestComplete { best, results } => {
+                                // Replace the streamed (unranked) list with the
+                                // final ranked one.
+                                TEST_RESULTS.with(|b| *b.borrow_mut() = results);
+                                ui.set_test_best_id(best.as_str().into());
+                                ui.set_test_running(false);
+                                ui.set_test_current_strategy("".into());
+                                rebuild_test_results(&ui);
+
+                                // Auto-select the winner as the user's strategy.
+                                if !best.is_empty() {
+                                    if let Some(s) = catalog.by_id(&best) {
+                                        let (pretty, alt) = split_alt(&s.id);
+                                        let item = StrategyItem {
+                                            id: s.id.as_str().into(),
+                                            display_name: s.display_name.as_str().into(),
+                                            category: format!("{:?}", s.category).into(),
+                                            description: s.description.as_str().into(),
+                                            pretty: pretty.into(),
+                                            alt: alt.into(),
+                                        };
+                                        ui.set_selected_item(item);
+                                        ui.set_selected_strategy(best.as_str().into());
+                                    }
+                                }
+                            }
                         }
                     }
                 });
@@ -484,6 +596,7 @@ impl App {
         let runner = self.runner.clone();
         let service_ctl = self.service_ctl.clone();
         let catalog = self.catalog.clone();
+        let tester = self.tester.clone();
         let event_tx = self.event_tx.clone();
         let config = self.config.clone();
         let state = self.state.clone();
@@ -704,6 +817,58 @@ impl App {
                             })
                         };
                         let _ = std::process::Command::new("explorer").arg(&install_dir).spawn();
+                    }
+                    BackendCmd::CancelTest => {
+                        tester.cancel();
+                    }
+                    BackendCmd::TestStrategies => {
+                        let strategies = catalog.all();
+                        if strategies.is_empty() {
+                            let _ = event_tx.send(UiEvent::Error("No strategies installed to test".to_string()));
+                            continue;
+                        }
+                        let total = strategies.len() as u32;
+                        let _ = event_tx.send(UiEvent::TestStarted { total });
+
+                        // Stream per-strategy results + progress back to the UI.
+                        let ev_result = event_tx.clone();
+                        let on_each = Box::new(move |r| {
+                            let _ = ev_result.send(UiEvent::TestResult(r));
+                        });
+                        let ev_progress = event_tx.clone();
+                        let on_progress = Box::new(move |index, total, id: &str| {
+                            let _ = ev_progress.send(UiEvent::TestProgress {
+                                index,
+                                total,
+                                strategy: id.to_string(),
+                            });
+                        });
+
+                        match tester.test_all(strategies, on_each, on_progress).await {
+                            Ok(results) => {
+                                let best = results
+                                    .first()
+                                    .filter(|r| r.ok > 0)
+                                    .map(|r| r.id.clone())
+                                    .unwrap_or_default();
+                                if !best.is_empty() {
+                                    let mut cfg = config.write().await;
+                                    cfg.last_strategy = Some(best.clone());
+                                    let _ = cfg.save();
+                                }
+                                let _ = event_tx.send(UiEvent::TestComplete { best, results });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(UiEvent::Error(format!("Strategy test failed: {}", e)));
+                                let _ = event_tx.send(UiEvent::TestComplete { best: String::new(), results: Vec::new() });
+                            }
+                        }
+
+                        // Settle the status display after the test churns winws.
+                        let mut status = runner.detect_running().await;
+                        status.service_installed = service_ctl.is_installed().await;
+                        state.set_status(status.clone()).await;
+                        let _ = event_tx.send(UiEvent::Status(status));
                     }
                 }
             }

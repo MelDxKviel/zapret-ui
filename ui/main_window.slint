@@ -6,16 +6,17 @@ import "assets/fonts/Geist-Bold.ttf";
 import "assets/fonts/GeistMono-Regular.ttf";
 import "assets/fonts/GeistMono-Medium.ttf";
 
-import { ThemePalette, AppStatus, StrategyItem, LogLineItem } from "tokens.slint";
+import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem } from "tokens.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HomePage } from "pages/home.slint";
 import { StrategiesPage } from "pages/strategies.slint";
+import { TesterPage } from "pages/tester.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { LogsPage } from "pages/logs.slint";
 import { AboutPage } from "pages/about.slint";
 
-export { StrategyItem, AppStatus, LogLineItem }
+export { StrategyItem, AppStatus, LogLineItem, TestResultItem }
 
 // ── Sidebar nav row ──
 component NavItem inherits Rectangle {
@@ -132,6 +133,14 @@ export component MainWindow inherits Window {
     in-out property <[LogLineItem]> log_lines: [];
     in-out property <string> log_text: "";
 
+    // ── Strategy tester ──
+    in-out property <[TestResultItem]> test_results: [];
+    in-out property <bool> test_running: false;
+    in-out property <int> test_current: 0;
+    in-out property <int> test_total: 0;
+    in-out property <string> test_current_strategy: "";
+    in-out property <string> test_best_id: "";
+
     // Resolved strategy items for display. `selected_item` is set when the user
     // picks on the Strategies page; `active_item` is resolved by Rust from the
     // running strategy.
@@ -188,6 +197,9 @@ export component MainWindow inherits Window {
     callback open_folder_clicked();
     callback refresh_status_clicked();
     callback strategies_search(string);
+    callback test_start_clicked();
+    callback test_cancel_clicked();
+    callback test_use_strategy(string);
     callback logs_query_changed(string, string);
     callback logs_clear_clicked();
     callback open_log_file_clicked();
@@ -268,6 +280,12 @@ export component MainWindow inherits Window {
                         icon: @image-url("../assets/icons/strategies.svg");
                         active: root.current_page == "strategies";
                         clicked => { root.current_page = "strategies"; }
+                    }
+                    NavItem {
+                        label: "Tester";
+                        icon: @image-url("../assets/icons/rocket.svg");
+                        active: root.current_page == "tester";
+                        clicked => { root.current_page = "tester"; }
                     }
                     NavItem {
                         label: "Logs";
@@ -422,6 +440,25 @@ export component MainWindow inherits Window {
                         root.strategy_selected(item.id);
                         root.current_page = "home";
                     }
+                }
+            }
+
+            if root.current_page == "tester" : Fade {
+                TesterPage {
+                    width: 100%;
+                    height: 100%;
+                    results: root.test_results;
+                    running: root.test_running;
+                    current: root.test_current;
+                    total: root.test_total;
+                    current_strategy: root.test_current_strategy;
+                    best_id: root.test_best_id;
+                    selected_strategy: root.selected_item.id;
+                    installed: root.status_installed;
+                    strategy_count: root.strategies.length;
+                    start_clicked => { root.test_start_clicked(); }
+                    cancel_clicked => { root.test_cancel_clicked(); }
+                    use_strategy(id) => { root.test_use_strategy(id); }
                 }
             }
 

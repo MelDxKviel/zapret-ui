@@ -174,6 +174,45 @@ fn main() -> anyhow::Result<()> {
         println!("UI: Refresh status clicked");
     });
 
+    // Strategy tester (mock): fill the results table immediately so the page can
+    // be previewed without a real winws/test backend.
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_test_start_clicked(move || {
+            println!("UI: Test strategies clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                let mk = |id: &str, pretty: &str, alt: &str, ok: i32, total: i32, latency: i32, rank: i32, best: bool| TestResultItem {
+                    id: id.into(),
+                    display_name: id.into(),
+                    pretty: pretty.into(),
+                    alt: alt.into(),
+                    ok,
+                    total,
+                    latency,
+                    rank,
+                    is_best: best,
+                };
+                let rows = vec![
+                    mk("general (ALT2)", "general", "ALT2", 12, 12, 184, 1, true),
+                    mk("general", "general", "", 10, 12, 203, 2, false),
+                    mk("general (ALT)", "general", "ALT", 7, 12, 311, 3, false),
+                    mk("general (SIMPLE FAKE)", "general", "SIMPLE FAKE", 0, 12, 0, 4, false),
+                ];
+                ui.set_test_results(Rc::new(slint::VecModel::from(rows)).into());
+                ui.set_test_best_id("general (ALT2)".into());
+                ui.set_test_total(4);
+                ui.set_test_current(4);
+                ui.set_test_running(false);
+            }
+        });
+    }
+    ui.on_test_cancel_clicked(|| {
+        println!("UI: Test cancel clicked");
+    });
+    ui.on_test_use_strategy(|id| {
+        println!("UI: Use tested strategy: {}", id);
+    });
+
     // Mock log lines
     let mk = |no: i32, ts: &str, lvl: &str, msg: &str| LogLineItem {
         line_no: no,

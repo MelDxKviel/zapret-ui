@@ -1,0 +1,315 @@
+import { ThemePalette, TestResultItem } from "../tokens.slint";
+import { AppButton } from "../components/button.slint";
+import { StatusDot } from "../components/status_dot.slint";
+import { ListView } from "std-widgets.slint";
+
+// ── One ranked result row ──
+component ResultRow inherits Rectangle {
+    in property <TestResultItem> item;
+    in property <bool> is_active;   // currently the user's selected strategy
+    callback use_clicked();
+
+    height: 64px;
+    background: ta.has-hover ? ThemePalette.surface-hover : transparent;
+    animate background { duration: 120ms; }
+
+    Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.use_clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 14px;
+
+        // rank
+        VerticalLayout {
+            alignment: center;
+            width: 26px;
+            Text {
+                text: root.item.rank > 0 ? "#\{root.item.rank}" : "·";
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-12;
+                font-weight: 600;
+                color: root.item.is_best ? ThemePalette.accent : ThemePalette.text-4;
+                horizontal-alignment: right;
+            }
+        }
+
+        // name + alt
+        VerticalLayout {
+            horizontal-stretch: 0;
+            width: 200px;
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Text {
+                    text: root.item.pretty;
+                    font-family: ThemePalette.font-mono;
+                    font-size: ThemePalette.fs-13;
+                    font-weight: 600;
+                    color: ThemePalette.text;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.item.alt != "" : Rectangle {
+                    horizontal-stretch: 0;
+                    width: chip.preferred-width + 10px;
+                    height: 17px;
+                    border-radius: ThemePalette.r-4;
+                    background: ThemePalette.surface-2;
+                    chip := Text {
+                        text: root.item.alt;
+                        font-family: ThemePalette.font-mono;
+                        font-size: ThemePalette.fs-10;
+                        color: ThemePalette.text-3;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            if root.item.is_best : Text {
+                text: "best · auto-selected";
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-10;
+                color: ThemePalette.accent;
+            }
+        }
+
+        // score bar
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 5px;
+            Rectangle {
+                height: 8px;
+                border-radius: ThemePalette.r-4;
+                background: ThemePalette.surface-2;
+                clip: true;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.item.ok / max(root.item.total, 1);
+                    height: parent.height;
+                    border-radius: ThemePalette.r-4;
+                    background: root.item.ok == 0 ? ThemePalette.danger
+                        : root.item.ok >= root.item.total ? ThemePalette.accent
+                        : ThemePalette.warning;
+                    animate width { duration: 200ms; easing: ease-out; }
+                }
+            }
+            Text {
+                text: "\{root.item.ok} / \{root.item.total} reachable"
+                    + (root.item.latency > 0 ? "  ·  \{root.item.latency} ms avg" : "");
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-10;
+                color: ThemePalette.text-3;
+            }
+        }
+
+        // action
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            width: 96px;
+            HorizontalLayout {
+                alignment: end;
+                if root.is_active : AppButton {
+                    text: "Selected";
+                    size: "sm";
+                    icon: @image-url("../../assets/icons/check.svg");
+                    enabled: false;
+                }
+                if !root.is_active : AppButton {
+                    text: "Use";
+                    variant: root.item.is_best ? "primary" : "default";
+                    size: "sm";
+                    enabled: root.item.ok > 0;
+                    clicked => { root.use_clicked(); }
+                }
+            }
+        }
+    }
+}
+
+export component TesterPage inherits Rectangle {
+    in property <[TestResultItem]> results;
+    in property <bool> running;
+    in property <int> current;
+    in property <int> total;
+    in property <string> current_strategy;
+    in property <string> best_id;
+    in property <string> selected_strategy;
+    in property <bool> installed;
+    in property <int> strategy_count;
+
+    callback start_clicked();
+    callback cancel_clicked();
+    callback use_strategy(string);
+
+    background: transparent;
+
+    property <bool> has-results: root.results.length > 0;
+
+    HorizontalLayout {
+        VerticalLayout {
+            horizontal-stretch: 0;
+            width: min(parent.width - 64px, 980px);
+            padding-left: 32px;
+            padding-top: 28px;
+            padding-right: 32px;
+            padding-bottom: 28px;
+            spacing: 0px;
+
+            // page-head
+            VerticalLayout {
+                spacing: 2px;
+                padding-bottom: 20px;
+                Text {
+                    text: "Strategy Tester";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-22;
+                    font-weight: 600;
+                    color: ThemePalette.text;
+                }
+                Text {
+                    text: "Probe every strategy against Discord / YouTube / Google endpoints and auto-pick the one that unblocks the most.";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    color: ThemePalette.text-3;
+                }
+            }
+            Rectangle { height: 1px; background: ThemePalette.divider; }
+            Rectangle { height: 18px; }
+
+            // ── control card ──
+            Rectangle {
+                vertical-stretch: 0;
+                background: @linear-gradient(180deg, ThemePalette.surface 0%, ThemePalette.bg-2 100%);
+                border-width: 1px;
+                border-color: ThemePalette.border;
+                border-radius: ThemePalette.r-12;
+                clip: true;
+
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 16px;
+
+                    HorizontalLayout {
+                        spacing: 16px;
+                        // info
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 6px;
+                            alignment: center;
+                            Text {
+                                text: root.running ? "TESTING IN PROGRESS" : root.has-results ? "TEST COMPLETE" : "READY TO TEST";
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-10;
+                                color: ThemePalette.text-4;
+                                letter-spacing: 1.4px;
+                            }
+                            Text {
+                                text: root.running
+                                        ? "Testing \{root.current} of \{root.total}: \{root.current_strategy}"
+                                        : root.has-results
+                                            ? (root.best_id != "" ? "Best strategy: \{root.best_id}" : "No strategy unblocked any endpoint.")
+                                            : "Runs each of \{root.strategy_count} strategies for a few seconds — the full sweep can take several minutes.";
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-14;
+                                font-weight: root.running || (root.has-results && root.best_id != "") ? 600 : 400;
+                                color: root.has-results && root.best_id != "" && !root.running ? ThemePalette.accent : ThemePalette.text-2;
+                                wrap: word-wrap;
+                            }
+                        }
+                        // action button
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            if root.running : AppButton {
+                                text: "Cancel";
+                                variant: "danger";
+                                icon: @image-url("../../assets/icons/stop.svg");
+                                clicked => { root.cancel_clicked(); }
+                            }
+                            if !root.running : AppButton {
+                                text: root.has-results ? "Run again" : "Run test";
+                                variant: "primary";
+                                icon: @image-url("../../assets/icons/rocket.svg");
+                                enabled: root.installed && root.strategy_count > 0;
+                                clicked => { root.start_clicked(); }
+                            }
+                        }
+                    }
+
+                    // progress bar (only while running)
+                    if root.running : Rectangle {
+                        height: 6px;
+                        border-radius: ThemePalette.r-4;
+                        background: ThemePalette.surface-2;
+                        clip: true;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * root.current / max(root.total, 1);
+                            height: parent.height;
+                            border-radius: ThemePalette.r-4;
+                            background: ThemePalette.accent;
+                            animate width { duration: 200ms; easing: ease-out; }
+                        }
+                    }
+
+                    if !root.installed : Text {
+                        text: "Install zapret first to run tests.";
+                        font-family: ThemePalette.font-mono;
+                        font-size: ThemePalette.fs-11;
+                        color: ThemePalette.text-3;
+                    }
+                }
+            }
+
+            Rectangle { height: 16px; }
+
+            // ── results list ──
+            Rectangle {
+                vertical-stretch: 1;
+                border-width: 1px;
+                border-color: ThemePalette.border;
+                border-radius: ThemePalette.r-12;
+                background: ThemePalette.surface;
+                clip: true;
+
+                if !root.has-results : VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    Text {
+                        text: root.running ? "Collecting results…" : "No results yet";
+                        font-family: ThemePalette.font-sans;
+                        font-size: ThemePalette.fs-14;
+                        color: ThemePalette.text-2;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: root.running ? "Each strategy appears here as it finishes." : "Run a test to rank your strategies by reachability.";
+                        font-family: ThemePalette.font-sans;
+                        font-size: ThemePalette.fs-12;
+                        color: ThemePalette.text-3;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                if root.has-results : ListView {
+                    for item in root.results : ResultRow {
+                        item: item;
+                        is_active: root.selected_strategy == item.id;
+                        use_clicked => { root.use_strategy(item.id); }
+                    }
+                }
+            }
+        }
+        Rectangle { }
+    }
+}

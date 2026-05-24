@@ -120,12 +120,11 @@ export component LogsPage inherits Rectangle {
                                 }
                             }
 
-                            Rectangle { }
-
-                            // grep
+                            // grep — fills the middle of the toolbar and grows
+                            // with the window instead of a fixed pinned-right box.
                             AppInput {
-                                horizontal-stretch: 0;
-                                width: 200px;
+                                horizontal-stretch: 1;
+                                min-width: 160px;
                                 field-height: 28px;
                                 font-size: ThemePalette.fs-12;
                                 icon: @image-url("../../assets/icons/search.svg");

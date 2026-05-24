@@ -37,6 +37,26 @@ pub enum BackendCmd {
     ServiceStop,
     RefreshStatus,
     OpenInstallFolder,
+    /// Run a connectivity test across every available strategy, scoring each
+    /// and picking the best (like upstream `test zapret.ps1`).
+    TestStrategies,
+    /// Request cancellation of a running strategy test.
+    CancelTest,
+}
+
+/// Outcome of testing a single strategy against the target endpoints.
+#[derive(Clone, Debug, Default)]
+pub struct StrategyTestResult {
+    pub id: String,
+    pub display_name: String,
+    /// Number of endpoints that became reachable with this strategy.
+    pub ok: u32,
+    /// Total number of endpoints checked.
+    pub total: u32,
+    /// Average latency (ms) over the reachable endpoints; 0 when none passed.
+    pub avg_latency_ms: u32,
+    /// 1-based rank after sorting (1 = best). 0 until ranking is computed.
+    pub rank: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +67,17 @@ pub enum UiEvent {
     LogLine(String),
     UpdateAvailable { current: String, latest: String, url: String },
     Error(String),
+    /// A strategy test run has begun; `total` strategies will be tested.
+    TestStarted { total: u32 },
+    /// Progress before testing strategy `index` (1-based) of `total`.
+    TestProgress { index: u32, total: u32, strategy: String },
+    /// One strategy finished testing; its result is ready to display (in test
+    /// order, not yet ranked).
+    TestResult(StrategyTestResult),
+    /// The whole test run finished. `results` is the final ranked list (best
+    /// first) and `best` is the auto-selected strategy id (empty when the run
+    /// was cancelled or no strategy passed any check).
+    TestComplete { best: String, results: Vec<StrategyTestResult> },
 }
 
 #[derive(Clone, Debug, Default)]

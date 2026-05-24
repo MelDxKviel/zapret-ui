@@ -1,6 +1,9 @@
-use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage};
+use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage, StrategyTestResult};
 
 pub type ProgressCb = Box<dyn Fn(InstallStage, u64, Option<u64>) + Send + Sync>;
+
+/// Called before each strategy is tested: `(index_1based, total, strategy_id)`.
+pub type TestProgressCb = Box<dyn Fn(u32, u32, &str) + Send + Sync>;
 
 #[async_trait::async_trait]
 pub trait Installer: Send + Sync {
@@ -33,3 +36,23 @@ pub trait StrategyCatalog: Send + Sync {
     fn by_id(&self, id: &str) -> Option<Strategy>;
     fn by_category(&self, c: Category) -> Vec<Strategy>;
 }
+
+#[async_trait::async_trait]
+pub trait StrategyTester: Send + Sync {
+    /// Run each strategy in turn, probe the target endpoints, and return the
+    /// per-strategy results ranked best-first. `on_progress` fires before each
+    /// strategy is started so the UI can show which one is being tested.
+    /// Returns an empty vec if cancelled before any strategy completed.
+    async fn test_all(
+        &self,
+        strategies: Vec<Strategy>,
+        on_each: TestResultCb,
+        on_progress: TestProgressCb,
+    ) -> anyhow::Result<Vec<StrategyTestResult>>;
+
+    /// Request cancellation of an in-flight `test_all`.
+    fn cancel(&self);
+}
+
+/// Called as soon as a single strategy's result is ready (for incremental UI).
+pub type TestResultCb = Box<dyn Fn(StrategyTestResult) + Send + Sync>;

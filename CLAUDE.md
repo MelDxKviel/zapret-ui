@@ -19,7 +19,7 @@ cargo run --example ui_only    # launch the Slint UI with mock backends (no real
 
 ## Architecture
 
-**Ports-and-adapters.** `src/ports.rs` defines four traits — `Installer`, `Runner`, `ServiceCtl`, `StrategyCatalog`. `src/contracts.rs` holds the shared data types (`Strategy`, `RuntimeStatus`, `BackendCmd`, `UiEvent`). The `src/zapret/` modules are the concrete adapters. `src/app.rs` is the orchestrator that owns `Arc<dyn Trait>` handles and never depends on a concrete adapter — so `examples/ui_only.rs` swaps in mocks trivially.
+**Ports-and-adapters.** `src/ports.rs` defines five traits — `Installer`, `Runner`, `ServiceCtl`, `StrategyCatalog`, `StrategyTester`. `src/contracts.rs` holds the shared data types (`Strategy`, `RuntimeStatus`, `BackendCmd`, `UiEvent`). The `src/zapret/` modules are the concrete adapters. `src/app.rs` is the orchestrator that owns `Arc<dyn Trait>` handles and never depends on a concrete adapter — so `examples/ui_only.rs` swaps in mocks trivially.
 
 **Two-channel message passing between UI and backend** (`src/app.rs`):
 - UI callbacks (`on_start_clicked`, etc.) `try_send` a `BackendCmd` over an mpsc channel. `run_backend_loop` consumes them on a tokio task.
@@ -36,6 +36,7 @@ Do not call Slint setters directly from backend tasks — always go through a `U
 - **`github.rs`** — deliberately avoids `api.github.com`, which is DPI-blocked on the ISPs this tool targets. Version comes from `raw.githubusercontent.com/.../version.txt` and the archive from `codeload.github.com`; both reachable when the API is not. Falls back to a cached release on failure.
 - **`installer.rs`** — downloads + extracts to a temp dir, promotes a single root subdir, then atomically swaps it into place (renaming the old install to `zapret.old.<ts>` with rollback).
 - **`process.rs`** (`ProcessRunner`) — spawns `winws.exe` with `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`, working dir `bin\`, piping stdout/stderr into `UiEvent::LogLine`. Stops via `CTRL_BREAK_EVENT` then kill.
+- **`tester.rs`** (`ConnectivityTester`) — the in-app port of `utils/test zapret.ps1`. For each strategy it reuses the shared `Runner` to start winws, waits `INIT_WAIT`, then probes a set of normally-blocked HTTPS endpoints (read from `utils/targets.txt`, `PING:` entries skipped; built-in Discord/YouTube/Google/Cloudflare fallback) concurrently via `reqwest`. Scores by reachable-endpoint count, tie-broken by average latency; ranks best-first and the `TestStrategies` handler in `app.rs` auto-selects + persists the winner. Streams `UiEvent::TestStarted/TestProgress/TestResult/TestComplete`; cancellable via an `AtomicBool`. Surfaced as the **Tester** page (`ui/pages/tester.slint`).
 - **`service.rs`** (`WindowsServiceCtl`) — SCM operations via `windows-service`. Service name is `"zapret"`. Install deletes any pre-existing service first.
 - **`elevation.rs`** — `check_elevation()` returns `Err(anyhow!("NeedsElevation"))` when not admin.
 

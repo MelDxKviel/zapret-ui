@@ -115,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
     let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone(), event_tx.clone()));
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
     let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(install_dir.clone()));
+    let tester = Arc::new(zapret::tester::ConnectivityTester::new(runner.clone(), install_dir.clone()));
 
     // Instantiate and run App
     let mut app = app::App::new(
@@ -122,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         runner,
         service_ctl,
         catalog,
+        tester,
         config,
         state,
         event_tx,
