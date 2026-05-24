@@ -1,75 +1,240 @@
-import { ThemePalette } from "../tokens.slint";
+import { ThemePalette, LogLineItem } from "../tokens.slint";
 import { AppButton } from "../components/button.slint";
-import { TextEdit } from "std-widgets.slint";
+import { AppInput } from "../components/input.slint";
+import { Segmented } from "../components/segmented.slint";
+import { ScrollView } from "std-widgets.slint";
 
 export component LogsPage inherits Rectangle {
-    in property <string> log_text;
+    in property <[LogLineItem]> log_lines;
+    in-out property <string> query;
+    in-out property <string> level: "ALL";
+    in-out property <bool> autoscroll: true;
 
-    callback open_folder_clicked();
+    callback open_file_clicked();
     callback clear_clicked();
+    callback query_changed(string, string); // grep, level
 
     background: transparent;
 
-    VerticalLayout {
-        spacing: 16px;
-        padding: 24px;
+    property <int> count: root.log_lines.length;
+    changed count => {
+        if (root.autoscroll) {
+            term.viewport-y = -(term.viewport-height - term.visible-height);
+        }
+    }
 
-        // Header and Actions
-        HorizontalLayout {
-            alignment: space-between;
+    HorizontalLayout {
+        VerticalLayout {
+            horizontal-stretch: 0;
+            width: min(parent.width - 64px, 980px);
+            padding-left: 32px;
+            padding-top: 28px;
+            padding-right: 32px;
+            padding-bottom: 28px;
+            spacing: 0px;
 
-            VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: "Activity Logs";
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-lg;
-                    font-weight: 700;
-                    color: ThemePalette.text-primary;
-                }
-                Text {
-                    text: "Real-time winws process and installer output — select text to copy";
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-xs;
-                    color: ThemePalette.text-muted;
-                }
-            }
-
+            // page-head
             HorizontalLayout {
-                spacing: 10px;
-                AppButton {
-                    text: "Open Log File";
-                    icon: @image-url("../../assets/icons/folder.svg");
-                    variant: "secondary";
-                    clicked => { root.open_folder_clicked(); }
+                padding-bottom: 20px;
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: end;
+                    Text {
+                        text: "Activity Logs";
+                        font-family: ThemePalette.font-sans;
+                        font-size: ThemePalette.fs-22;
+                        font-weight: 600;
+                        color: ThemePalette.text;
+                    }
+                    Text {
+                        text: "Real-time winws and installer output. Select text to copy.";
+                        font-family: ThemePalette.font-sans;
+                        font-size: ThemePalette.fs-13;
+                        color: ThemePalette.text-3;
+                    }
                 }
-                AppButton {
-                    text: "Clear Logs";
-                    icon: @image-url("../../assets/icons/trash.svg");
-                    variant: "danger";
-                    clicked => { root.clear_clicked(); }
+                Rectangle { }
+                VerticalLayout {
+                    alignment: end;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        AppButton {
+                            text: "Open log file";
+                            icon: @image-url("../../assets/icons/external.svg");
+                            clicked => { root.open_file_clicked(); }
+                        }
+                        AppButton {
+                            text: "Clear";
+                            variant: "danger";
+                            icon: @image-url("../../assets/icons/trash.svg");
+                            clicked => { root.clear_clicked(); }
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: ThemePalette.divider; }
+            Rectangle { height: 16px; }
+
+            // logs shell
+            Rectangle {
+                vertical-stretch: 1;
+                border-width: 1px;
+                border-color: ThemePalette.border;
+                border-radius: ThemePalette.r-12;
+                background: ThemePalette.surface;
+                clip: true;
+
+                VerticalLayout {
+                    // toolbar
+                    Rectangle {
+                        height: 48px;
+                        background: ThemePalette.bg-2;
+                        VerticalLayout {
+                          height: 100%;
+                          alignment: center;
+                          HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
+
+                            // streaming stat
+                            HorizontalLayout {
+                                horizontal-stretch: 0;
+                                spacing: 6px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 6px; height: 6px; border-radius: 3px;
+                                        background: ThemePalette.accent;
+                                    }
+                                }
+                                Text {
+                                    text: "streaming · \{root.count} lines";
+                                    font-family: ThemePalette.font-mono;
+                                    font-size: ThemePalette.fs-11;
+                                    color: ThemePalette.text-3;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle { }
+
+                            // grep
+                            AppInput {
+                                horizontal-stretch: 0;
+                                width: 200px;
+                                field-height: 28px;
+                                font-size: ThemePalette.fs-12;
+                                icon: @image-url("../../assets/icons/search.svg");
+                                placeholder: "grep…";
+                                text <=> root.query;
+                                edited(t) => { root.query_changed(t, root.level); }
+                            }
+
+                            // level filter
+                            Segmented {
+                                seg-height: 22px;
+                                seg-pad: 8px;
+                                seg-fs: ThemePalette.fs-11;
+                                selected: root.level;
+                                options: [
+                                    { value: "ALL",   label: "ALL" },
+                                    { value: "INFO",  label: "INFO" },
+                                    { value: "WARN",  label: "WARN" },
+                                    { value: "ERROR", label: "ERROR" },
+                                ];
+                                changed(v) => { root.level = v; root.query_changed(root.query, v); }
+                            }
+
+                            // autoscroll
+                            AppButton {
+                                text: "Auto";
+                                size: "sm";
+                                variant: root.autoscroll ? "primary" : "default";
+                                icon: @image-url("../../assets/icons/pin.svg");
+                                clicked => {
+                                    root.autoscroll = !root.autoscroll;
+                                    if (root.autoscroll) {
+                                        term.viewport-y = -(term.viewport-height - term.visible-height);
+                                    }
+                                }
+                            }
+                          }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.border; }
+                    }
+
+                    // terminal body
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: ThemePalette.logs-bg;
+                        clip: true;
+                        term := ScrollView {
+                            VerticalLayout {
+                                alignment: start;
+                                for line in root.log_lines : Rectangle {
+                                    height: msg-txt.preferred-height + 2px;
+                                    background: ln-ta.has-hover ? #ffffff08 : transparent;
+                                    ln-ta := TouchArea { }
+                                    HorizontalLayout {
+                                        spacing: 14px;
+                                        // line number gutter
+                                        Rectangle {
+                                            width: 48px;
+                                            Text {
+                                                x: 0; width: parent.width - 8px;
+                                                text: "\{line.line_no}";
+                                                font-family: ThemePalette.font-mono;
+                                                font-size: ThemePalette.fs-12;
+                                                color: ThemePalette.log-ln;
+                                                horizontal-alignment: right;
+                                                vertical-alignment: top;
+                                            }
+                                            Rectangle {
+                                                x: parent.width - 1px; width: 1px;
+                                                background: ThemePalette.log-ln-border;
+                                            }
+                                        }
+                                        // message: muted timestamp + colored level tag + body
+                                        HorizontalLayout {
+                                            horizontal-stretch: 1;
+                                            padding-right: 14px;
+                                            spacing: 0px;
+                                            if line.timestamp != "" : Text {
+                                                text: line.timestamp + " ";
+                                                font-family: ThemePalette.font-mono;
+                                                font-size: ThemePalette.fs-12;
+                                                color: ThemePalette.log-ts;
+                                                vertical-alignment: top;
+                                            }
+                                            if line.level != "" : Text {
+                                                text: line.level + " ";
+                                                font-family: ThemePalette.font-mono;
+                                                font-size: ThemePalette.fs-12;
+                                                color: line.level == "ERROR" ? ThemePalette.danger
+                                                    : line.level == "WARN" ? ThemePalette.warning
+                                                    : ThemePalette.info;
+                                                vertical-alignment: top;
+                                            }
+                                            msg-txt := Text {
+                                                horizontal-stretch: 1;
+                                                text: line.message;
+                                                font-family: ThemePalette.font-mono;
+                                                font-size: ThemePalette.fs-12;
+                                                color: ThemePalette.logs-fg;
+                                                wrap: word-wrap;
+                                                vertical-alignment: top;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-
-        // Terminal Console — read-only TextEdit so the user can select & copy (Ctrl+C)
-        Rectangle {
-            background: #090b10;
-            border-radius: ThemePalette.border-radius-md;
-            border-width: 1px;
-            border-color: ThemePalette.is-dark ? #202635 : #cbd5e1;
-            vertical-stretch: 1;
-            clip: true;
-
-            log-edit := TextEdit {
-                x: 8px;
-                y: 8px;
-                width: parent.width - 16px;
-                height: parent.height - 16px;
-                read-only: true;
-                wrap: word-wrap;
-                text: root.log_text;
-            }
-        }
+        Rectangle { }
     }
 }

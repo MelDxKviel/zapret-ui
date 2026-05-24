@@ -11,6 +11,19 @@ pub struct Strategy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Category { Discord, Youtube, Mixed, Mgts, Rostelecom, Mts, Beeline, Other }
 
+/// Split a strategy id like `general (ALT2)` into its pretty name (`general`)
+/// and ALT tag (`ALT2`). Returns an empty tag when there are no parentheses.
+pub fn split_alt(id: &str) -> (String, String) {
+    if let (Some(open), Some(close)) = (id.find('('), id.rfind(')')) {
+        if close > open {
+            let alt = id[open + 1..close].trim().to_string();
+            let pretty = id[..open].trim().to_string();
+            return (pretty, alt);
+        }
+    }
+    (id.trim().to_string(), String::new())
+}
+
 #[derive(Clone, Debug)]
 pub enum BackendCmd {
     Install,
@@ -43,6 +56,8 @@ pub struct RuntimeStatus {
     pub running_mode: RunningMode,
     pub active_strategy: Option<String>,
     pub winws_pid: Option<u32>,
+    /// Whether a Windows service is registered with the SCM (running or stopped).
+    pub service_installed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

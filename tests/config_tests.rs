@@ -78,6 +78,7 @@ async fn test_state_updates_and_broadcast() {
         running_mode: RunningMode::None,
         active_strategy: None,
         winws_pid: None,
+        service_installed: false,
     };
     
     let state = AppState::new(initial_status.clone());
@@ -94,6 +95,7 @@ async fn test_state_updates_and_broadcast() {
         running_mode: RunningMode::UserProcess,
         active_strategy: Some("discord_alt4".to_string()),
         winws_pid: Some(1234),
+        service_installed: false,
     };
     
     state.set_status(new_status.clone()).await;

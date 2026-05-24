@@ -1,56 +1,74 @@
 import { ThemePalette } from "../tokens.slint";
+import { Icon } from "icon.slint";
 
+// .search-bar / input field — default 32px high, leading icon slot, accent-line
+// focus ring (a soft glow behind + border colour change). Trailing controls can
+// be injected via @children (e.g. a "clear" button).
 export component AppInput inherits Rectangle {
     in-out property <string> text;
     in property <string> placeholder;
     in property <bool> enabled: true;
     in property <image> icon;
-    
+    in property <length> field-height: 32px;
+    in property <length> font-size: ThemePalette.fs-13;
+
     callback edited(string);
+    callback accepted(string);
 
-    height: 36px;
-    border-radius: ThemePalette.border-radius-md;
+    property <bool> focused: scope.has-focus;
+
+    height: root.field-height;
+    border-radius: ThemePalette.r-8;
     border-width: 1px;
-    border-color: focus-scope.has-focus ? ThemePalette.accent-primary : ThemePalette.border;
-    background: ThemePalette.is-dark ? #161a22 : #ffffff;
-
+    border-color: root.focused ? ThemePalette.accent-line : ThemePalette.border;
+    background: ThemePalette.surface;
     animate border-color { duration: 120ms; }
 
+    // Soft focus glow (≈ box-shadow 0 0 0 3px accent-soft).
+    if root.focused : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: parent.border-radius + 3px;
+        background: transparent;
+        border-width: 3px;
+        border-color: ThemePalette.accent-soft;
+    }
+
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
+        padding-left: 10px;
+        padding-right: 10px;
         spacing: 8px;
 
-        if (root.icon.width > 0 && root.icon.height > 0) : Image {
+        if root.icon.width > 0 : Icon {
             source: root.icon;
-            width: 16px;
-            height: 16px;
-            colorize: ThemePalette.text-muted;
-            vertical-alignment: center;
+            size: 14px;
+            tint: ThemePalette.text-3;
         }
 
-        focus-scope := FocusScope {
+        scope := FocusScope {
             input := TextInput {
-                text: root.text;
-                font-family: ThemePalette.font-family;
-                font-size: ThemePalette.font-size-sm;
-                color: ThemePalette.text-primary;
+                text <=> root.text;
+                font-family: ThemePalette.font-sans;
+                font-size: root.font-size;
+                color: ThemePalette.text;
                 vertical-alignment: center;
                 single-line: true;
                 enabled: root.enabled;
-                edited => {
-                    root.text = self.text;
-                    root.edited(self.text);
-                }
+                edited => { root.edited(self.text); }
+                accepted => { root.accepted(self.text); }
             }
 
-            if (root.text == "") : Text {
+            if root.text == "" : Text {
                 text: root.placeholder;
-                font-family: ThemePalette.font-family;
-                font-size: ThemePalette.font-size-sm;
-                color: ThemePalette.text-muted;
+                font-family: ThemePalette.font-sans;
+                font-size: root.font-size;
+                color: ThemePalette.text-4;
                 vertical-alignment: center;
             }
         }
+
+        @children
     }
 }

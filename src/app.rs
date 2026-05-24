@@ -1,14 +1,95 @@
 use std::sync::Arc;
 use std::rc::Rc;
+use std::cell::RefCell;
 use tokio::sync::{mpsc, broadcast, RwLock};
-use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage};
+use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, split_alt};
 use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog};
 use crate::config::AppConfig;
 use crate::state::AppState;
 use crate::tray::SystemTray;
-use slint::Model;
 
 slint::include_modules!();
+
+// ── Log buffer (lives on the Slint UI thread; both the event listener's
+//    invoke_from_event_loop closures and the UI callbacks run there) ──
+thread_local! {
+    static LOG_BUF: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static LOG_FILTER: RefCell<(String, String)> = RefCell::new((String::new(), "ALL".to_string()));
+}
+
+const LOG_BUF_CAP: usize = 4000;
+
+/// Split a raw log line into (timestamp, level, message) for coloured display.
+fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
+    let mut rest = raw.trim_end();
+    let mut timestamp = String::new();
+    let mut level = String::new();
+
+    // Leading ISO-8601 timestamp, e.g. 2026-05-23T16:14:34.808277Z
+    if let Some((first, tail)) = rest.split_once(char::is_whitespace) {
+        let looks_ts = first.len() >= 20
+            && first.as_bytes()[0].is_ascii_digit()
+            && first.contains('T')
+            && first.ends_with('Z');
+        if looks_ts {
+            timestamp = first.to_string();
+            rest = tail.trim_start();
+        }
+    }
+
+    // Level tag
+    if let Some((first, tail)) = rest.split_once(char::is_whitespace) {
+        let up = first.to_uppercase();
+        if matches!(up.as_str(), "INFO" | "WARN" | "WARNING" | "ERROR" | "ERR" | "DEBUG" | "TRACE") {
+            level = if up.starts_with("ERR") { "ERROR".to_string() }
+                else if up.starts_with("WARN") { "WARN".to_string() }
+                else { up };
+            rest = tail.trim_start();
+        }
+    }
+
+    LogLineItem {
+        line_no: no as i32,
+        timestamp: timestamp.into(),
+        level: level.into(),
+        message: rest.to_string().into(),
+    }
+}
+
+fn line_passes(raw: &str, grep: &str, level: &str) -> bool {
+    if level != "ALL" {
+        let up = raw.to_uppercase();
+        let want = if level == "ERROR" { "ERR" } else { level };
+        if !up.contains(want) {
+            return false;
+        }
+    }
+    if !grep.is_empty() && !raw.to_lowercase().contains(&grep.to_lowercase()) {
+        return false;
+    }
+    true
+}
+
+/// Re-parse + re-filter the whole buffer into the Slint `log_lines` model.
+fn rebuild_logs(ui: &MainWindow) {
+    let (grep, level) = LOG_FILTER.with(|f| f.borrow().clone());
+    let items: Vec<LogLineItem> = LOG_BUF.with(|b| {
+        b.borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, raw)| line_passes(raw, &grep, &level))
+            .map(|(i, raw)| parse_log_line(i + 1, raw))
+            .collect()
+    });
+    ui.set_log_lines(Rc::new(slint::VecModel::from(items)).into());
+}
+
+/// Open a path with the OS default handler (folder in Explorer, URL in browser).
+fn open_external(target: &str) {
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", target])
+        .spawn();
+}
 
 #[link(name = "shell32")]
 extern "system" {
@@ -98,36 +179,71 @@ impl App {
     ) -> anyhow::Result<()> {
         let ui = MainWindow::new()?;
 
-        // Populate strategies list (full, category "All")
+        // Populate strategies list (full)
         fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
+            let (pretty, alt) = split_alt(&s.id);
             StrategyItem {
                 id: s.id.as_str().into(),
                 display_name: s.display_name.as_str().into(),
                 category: format!("{:?}", s.category).into(),
                 description: s.description.as_str().into(),
+                pretty: pretty.into(),
+                alt: alt.into(),
             }
         }
         let all_items: Vec<StrategyItem> = self.catalog.all().iter().map(to_item).collect();
         ui.set_strategies(Rc::new(slint::VecModel::from(all_items)).into());
 
-        // Category filter: rebuild the model from the catalog when the user picks a category.
+        // Search: rebuild the model from the catalog filtered by the query string.
         {
             let catalog = self.catalog.clone();
             let ui_weak = ui.as_weak();
-            ui.on_category_changed(move |cat| {
+            ui.on_strategies_search(move |query| {
                 if let Some(ui) = ui_weak.upgrade() {
-                    let cat_s = cat.to_string();
+                    let q = query.to_string().trim().to_lowercase();
                     let filtered: Vec<StrategyItem> = catalog
                         .all()
                         .iter()
-                        .filter(|s| cat_s == "All" || format!("{:?}", s.category) == cat_s)
+                        .filter(|s| {
+                            q.is_empty()
+                                || format!("{} {} {}", s.id, s.display_name, s.description)
+                                    .to_lowercase()
+                                    .contains(&q)
+                        })
                         .map(to_item)
                         .collect();
-                    ui.set_selected_category(cat);
                     ui.set_strategies(Rc::new(slint::VecModel::from(filtered)).into());
                 }
             });
         }
+
+        // Logs: filter changes + clear + open file.
+        {
+            let ui_weak = ui.as_weak();
+            ui.on_logs_query_changed(move |grep, level| {
+                if let Some(ui) = ui_weak.upgrade() {
+                    LOG_FILTER.with(|f| *f.borrow_mut() = (grep.to_string(), level.to_string()));
+                    rebuild_logs(&ui);
+                }
+            });
+        }
+        {
+            let ui_weak = ui.as_weak();
+            ui.on_logs_clear_clicked(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    LOG_BUF.with(|b| b.borrow_mut().clear());
+                    rebuild_logs(&ui);
+                }
+            });
+        }
+        ui.on_open_log_file_clicked(move || {
+            let appdata = std::env::var("APPDATA").unwrap_or_default();
+            let path = format!("{}\\zapret-ui\\logs\\app.log", appdata);
+            open_external(&path);
+        });
+        ui.on_open_url_clicked(move |url| {
+            open_external(&url.to_string());
+        });
 
         // Connect UI callbacks to BackendCmd channel
         {
@@ -156,7 +272,7 @@ impl App {
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_set_strategy_as_service(move |strat_id| {
+            ui.on_service_install_clicked(move |strat_id| {
                 let _ = cmd_tx_c.try_send(BackendCmd::ServiceInstall(strat_id.to_string()));
             });
         }
@@ -243,10 +359,12 @@ impl App {
 
         // Listen to UiEvents and update Slint properties
         let ui_weak = ui.as_weak();
+        let catalog = self.catalog.clone();
         let mut event_rx = self.event_tx.subscribe();
         tokio::spawn(async move {
             while let Ok(event) = event_rx.recv().await {
                 let ui_weak = ui_weak.clone();
+                let catalog = catalog.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         match event {
@@ -258,8 +376,31 @@ impl App {
                                     RunningMode::UserProcess => "UserProcess".into(),
                                     RunningMode::WindowsService => "WindowsService".into(),
                                 });
-                                ui.set_status_active_strategy(status.active_strategy.unwrap_or_default().into());
+                                let active = status.active_strategy.clone().unwrap_or_default();
+                                ui.set_status_active_strategy(active.as_str().into());
                                 ui.set_status_winws_pid(status.winws_pid.unwrap_or(0) as i32);
+                                ui.set_status_service_installed(status.service_installed);
+
+                                // Resolve the running strategy to a display item.
+                                let (pretty, alt) = split_alt(&active);
+                                let display = catalog
+                                    .by_id(&active)
+                                    .map(|s| s.display_name)
+                                    .unwrap_or_else(|| active.clone());
+                                let desc = catalog.by_id(&active).map(|s| s.description).unwrap_or_default();
+                                let active_item = StrategyItem {
+                                    id: active.as_str().into(),
+                                    display_name: display.into(),
+                                    category: "".into(),
+                                    description: desc.into(),
+                                    pretty: pretty.into(),
+                                    alt: alt.into(),
+                                };
+                                ui.set_active_item(active_item.clone());
+                                // Seed the user's selection if they haven't picked one yet.
+                                if !active.is_empty() && ui.get_selected_item().id.is_empty() {
+                                    ui.set_selected_item(active_item);
+                                }
                                 ui.set_is_busy(false);
                             }
                             UiEvent::DownloadProgress { bytes, total } => {
@@ -280,16 +421,15 @@ impl App {
                                 }
                             }
                             UiEvent::LogLine(line) => {
-                                let mut text = ui.get_log_text().to_string();
-                                text.push_str(&line);
-                                text.push('\n');
-                                // Cap buffer to keep the last ~60k chars.
-                                if text.len() > 60_000 {
-                                    if let Some(pos) = text.char_indices().nth(text.chars().count() - 50_000).map(|(i, _)| i) {
-                                        text = text[pos..].to_string();
+                                LOG_BUF.with(|b| {
+                                    let mut buf = b.borrow_mut();
+                                    buf.push(line);
+                                    let len = buf.len();
+                                    if len > LOG_BUF_CAP {
+                                        buf.drain(0..len - LOG_BUF_CAP);
                                     }
-                                }
-                                ui.set_log_text(text.into());
+                                });
+                                rebuild_logs(&ui);
                             }
                             UiEvent::UpdateAvailable { latest, .. } => {
                                 ui.set_has_update(true);
@@ -355,7 +495,8 @@ impl App {
                         match installer.install_or_update(progress_cb).await {
                             Ok(_) => {
                                 let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
-                                let status = runner.detect_running().await;
+                                let mut status = runner.detect_running().await;
+                                status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
                                 let _ = event_tx.send(UiEvent::Status(status));
                             }
@@ -392,7 +533,8 @@ impl App {
                         match installer.install_or_update(progress_cb).await {
                             Ok(_) => {
                                 let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
-                                let status = runner.detect_running().await;
+                                let mut status = runner.detect_running().await;
+                                status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
                                 let _ = event_tx.send(UiEvent::Status(status));
                             }
@@ -428,7 +570,8 @@ impl App {
                     BackendCmd::Stop => {
                         match runner.stop().await {
                             Ok(_) => {
-                                let status = runner.detect_running().await;
+                                let mut status = runner.detect_running().await;
+                                status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
                                 let _ = event_tx.send(UiEvent::Status(status));
                             }
@@ -445,7 +588,8 @@ impl App {
                                     if let Err(e) = service_ctl.start().await {
                                         let _ = event_tx.send(UiEvent::Error(format!("Service installed but failed to start: {}", e)));
                                     }
-                                    let status = runner.detect_running().await;
+                                    let mut status = runner.detect_running().await;
+                                    status.service_installed = service_ctl.is_installed().await;
                                     state.set_status(status.clone()).await;
                                     let _ = event_tx.send(UiEvent::Status(status));
                                 }
@@ -466,7 +610,8 @@ impl App {
                     BackendCmd::ServiceRemove => {
                         match service_ctl.remove().await {
                             Ok(_) => {
-                                let status = runner.detect_running().await;
+                                let mut status = runner.detect_running().await;
+                                status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
                                 let _ = event_tx.send(UiEvent::Status(status));
                             }
@@ -484,7 +629,8 @@ impl App {
                     BackendCmd::ServiceStart => {
                         match service_ctl.start().await {
                             Ok(_) => {
-                                let status = runner.detect_running().await;
+                                let mut status = runner.detect_running().await;
+                                status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
                                 let _ = event_tx.send(UiEvent::Status(status));
                             }
@@ -502,7 +648,8 @@ impl App {
                     BackendCmd::ServiceStop => {
                         match service_ctl.stop().await {
                             Ok(_) => {
-                                let status = runner.detect_running().await;
+                                let mut status = runner.detect_running().await;
+                                status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
                                 let _ = event_tx.send(UiEvent::Status(status));
                             }
@@ -519,6 +666,7 @@ impl App {
                     }
                     BackendCmd::RefreshStatus => {
                         let mut status = runner.detect_running().await;
+                        status.service_installed = service_ctl.is_installed().await;
                         if status.running_mode == RunningMode::None {
                             if let Ok(srv_mode) = service_ctl.status().await {
                                 if srv_mode != RunningMode::None {

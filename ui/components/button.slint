@@ -1,75 +1,80 @@
 import { ThemePalette } from "../tokens.slint";
+import { Icon } from "icon.slint";
 
+// .btn — variants: default | primary | danger | ghost. Sizes: sm | base | lg.
+// Icon slot on the left. Disabled renders at 0.45 opacity and ignores input.
 export component AppButton inherits Rectangle {
     in property <string> text;
     in property <image> icon;
-    in property <string> variant: "primary"; // "primary" | "secondary" | "danger" | "success" | "warning"
+    in property <string> variant: "default"; // default | primary | danger | ghost
+    in property <string> size: "base";        // sm | base | lg
     in property <bool> enabled: true;
-    in property <length> icon-width: 16px;
-    
+    in property <length> icon-size: 14px;
+
     callback clicked;
 
-    has-hover := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
-        clicked => { root.clicked(); }
-    }
+    property <bool> is-primary: root.variant == "primary";
+    property <bool> is-danger: root.variant == "danger";
+    property <bool> is-ghost: root.variant == "ghost";
+    property <bool> hovered: ta.has-hover && root.enabled;
 
-    border-radius: ThemePalette.border-radius-md;
-    border-width: 1px;
-    
-    background: !root.enabled ? 
-        (ThemePalette.is-dark ? #1e2430 : #e5e7eb) : 
-        (root.variant == "primary" ? (has-hover.has-hover ? ThemePalette.accent-primary-hover : ThemePalette.accent-primary) :
-        (root.variant == "danger" ? (has-hover.has-hover ? ThemePalette.accent-danger-hover : ThemePalette.accent-danger) :
-        (root.variant == "success" ? (has-hover.has-hover ? ThemePalette.accent-success-hover : ThemePalette.accent-success) :
-        (root.variant == "warning" ? (has-hover.has-hover ? ThemePalette.accent-warning-hover : ThemePalette.accent-warning) :
-        // secondary
-        (has-hover.has-hover ? ThemePalette.surface-hover : ThemePalette.surface)))));
+    property <length> h: root.size == "sm" ? 26px : root.size == "lg" ? 40px : 32px;
+    property <length> pad: root.size == "sm" ? 10px : root.size == "lg" ? 18px : 14px;
+    property <length> fs: root.size == "sm" ? ThemePalette.fs-12 : root.size == "lg" ? ThemePalette.fs-14 : ThemePalette.fs-13;
 
-    border-color: !root.enabled ?
-        (ThemePalette.is-dark ? #283042 : #d1d5db) :
-        (root.variant == "primary" ? (has-hover.has-hover ? ThemePalette.accent-primary-hover : ThemePalette.accent-primary) :
-        (root.variant == "danger" ? (has-hover.has-hover ? ThemePalette.accent-danger-hover : ThemePalette.accent-danger) :
-        (root.variant == "success" ? (has-hover.has-hover ? ThemePalette.accent-success-hover : ThemePalette.accent-success) :
-        (root.variant == "warning" ? (has-hover.has-hover ? ThemePalette.accent-warning-hover : ThemePalette.accent-warning) :
-        ThemePalette.border))));
+    // Foreground (text + icon) colour.
+    property <color> fg:
+        root.is-primary ? ThemePalette.accent-ink :
+        root.is-danger  ? ThemePalette.danger :
+        root.is-ghost   ? (root.hovered ? ThemePalette.text : ThemePalette.text-2) :
+        ThemePalette.text;
 
-    height: 36px;
-    
-    animate background { duration: 120ms; easing: ease-out; }
-    animate border-color { duration: 120ms; easing: ease-out; }
+    height: root.h;
+    horizontal-stretch: 0;
+    width: lay.preferred-width;
+    border-radius: root.size == "sm" ? ThemePalette.r-6 : root.size == "lg" ? ThemePalette.r-10 : ThemePalette.r-8;
+    border-width: root.is-ghost ? 0px : 1px;
+    opacity: root.enabled ? 1.0 : 0.45;
 
-    HorizontalLayout {
+    background:
+        root.is-primary ? (root.hovered ? ThemePalette.accent-hover : ThemePalette.accent) :
+        root.is-danger  ? (root.hovered ? ThemePalette.danger-soft : transparent) :
+        root.is-ghost   ? (root.hovered ? ThemePalette.surface : transparent) :
+        (root.hovered ? ThemePalette.surface-hover : ThemePalette.surface);
+
+    border-color:
+        root.is-primary ? (root.hovered ? ThemePalette.accent-hover : ThemePalette.accent) :
+        root.is-danger  ? (root.hovered ? ThemePalette.danger : ThemePalette.danger-line) :
+        (root.hovered ? ThemePalette.border-strong : ThemePalette.border);
+
+    animate background, border-color { duration: 120ms; easing: ease-out; }
+
+    lay := HorizontalLayout {
         alignment: center;
         spacing: 8px;
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: root.pad;
+        padding-right: root.pad;
 
-        if (root.icon.width > 0 && root.icon.height > 0) : VerticalLayout {
-            alignment: center;
-            width: root.icon-width;
-            Image {
-                source: root.icon;
-                width: root.icon-width;
-                height: root.icon-width;
-                colorize: !root.enabled ?
-                    ThemePalette.text-muted :
-                    (root.variant == "primary" || root.variant == "danger" || root.variant == "success" ? #ffffff : ThemePalette.text-primary);
-                animate colorize { duration: 120ms; }
-            }
+        if root.icon.width > 0 : Icon {
+            source: root.icon;
+            size: root.icon-size;
+            tint: root.fg;
         }
 
-        Text {
+        if root.text != "" : Text {
             text: root.text;
-            font-family: ThemePalette.font-family;
-            font-size: ThemePalette.font-size-sm;
-            font-weight: 600;
-            color: !root.enabled ? 
-                ThemePalette.text-muted :
-                (root.variant == "primary" || root.variant == "danger" || root.variant == "success" ? #ffffff : ThemePalette.text-primary);
+            font-family: ThemePalette.font-sans;
+            font-size: root.fs;
+            font-weight: 500;
+            color: root.fg;
             vertical-alignment: center;
             animate color { duration: 120ms; }
         }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
     }
 }

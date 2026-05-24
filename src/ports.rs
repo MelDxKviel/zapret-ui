@@ -24,6 +24,8 @@ pub trait ServiceCtl: Send + Sync {
     async fn start(&self) -> anyhow::Result<()>;
     async fn stop(&self) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<RunningMode>;
+    /// True if the service is registered with the SCM, regardless of run state.
+    async fn is_installed(&self) -> bool;
 }
 
 pub trait StrategyCatalog: Send + Sync {

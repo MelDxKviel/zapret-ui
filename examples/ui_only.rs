@@ -51,6 +51,7 @@ impl Runner for MockRunner {
             running_mode: RunningMode::None,
             active_strategy: None,
             winws_pid: None,
+            service_installed: false,
         }
     }
 }
@@ -77,6 +78,9 @@ impl ServiceCtl for MockServiceCtl {
     }
     async fn status(&self) -> anyhow::Result<RunningMode> {
         Ok(RunningMode::None)
+    }
+    async fn is_installed(&self) -> bool {
+        false
     }
 }
 
@@ -121,11 +125,16 @@ fn main() -> anyhow::Result<()> {
     let slint_strategies: Vec<StrategyItem> = catalog
         .all()
         .iter()
-        .map(|s| StrategyItem {
-            id: s.id.as_str().into(),
-            display_name: s.display_name.as_str().into(),
-            category: format!("{:?}", s.category).into(),
-            description: s.description.as_str().into(),
+        .map(|s| {
+            let (pretty, alt) = zapret_ui::contracts::split_alt(&s.id);
+            StrategyItem {
+                id: s.id.as_str().into(),
+                display_name: s.display_name.as_str().into(),
+                category: format!("{:?}", s.category).into(),
+                description: s.description.as_str().into(),
+                pretty: pretty.into(),
+                alt: alt.into(),
+            }
         })
         .collect();
     ui.set_strategies(Rc::new(slint::VecModel::from(slint_strategies)).into());
@@ -151,8 +160,8 @@ fn main() -> anyhow::Result<()> {
     ui.on_strategy_selected(|strat_id| {
         println!("UI: Strategy selected: {}", strat_id);
     });
-    ui.on_set_strategy_as_service(|strat_id| {
-        println!("UI: Set strategy as service: {}", strat_id);
+    ui.on_service_install_clicked(|strat_id| {
+        println!("UI: Install service for strategy: {}", strat_id);
     });
     ui.on_service_remove_clicked(|| {
         println!("UI: Service remove clicked");
@@ -164,12 +173,19 @@ fn main() -> anyhow::Result<()> {
         println!("UI: Refresh status clicked");
     });
 
-    // Mock log text
-    ui.set_log_text(
-        "[INFO] zapret-ui started in UI-only mode\n\
-         [INFO] Mock installer ready, version v1.0.0-mock\n\
-         [INFO] 3 strategies loaded from catalog\n".into(),
-    );
+    // Mock log lines
+    let mk = |no: i32, ts: &str, lvl: &str, msg: &str| LogLineItem {
+        line_no: no,
+        timestamp: ts.into(),
+        level: lvl.into(),
+        message: msg.into(),
+    };
+    let log_lines = vec![
+        mk(1, "2026-05-23T16:14:34.808277Z", "INFO", "zapret-ui started in UI-only mode"),
+        mk(2, "2026-05-23T16:14:34.812000Z", "INFO", "Mock installer ready, version v1.0.0-mock"),
+        mk(3, "2026-05-23T16:14:34.815000Z", "INFO", "3 strategies loaded from catalog"),
+    ];
+    ui.set_log_lines(Rc::new(slint::VecModel::from(log_lines)).into());
 
     ui.run()?;
     Ok(())

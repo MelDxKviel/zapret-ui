@@ -171,4 +171,18 @@ impl ServiceCtl for WindowsServiceCtl {
             }
         }
     }
+
+    async fn is_installed(&self) -> bool {
+        let manager = match ServiceManager::local_computer(
+            None::<&str>,
+            ServiceManagerAccess::CONNECT,
+        ) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        // Opening with QUERY_STATUS succeeds iff the service is registered.
+        manager
+            .open_service(&self.service_name, ServiceAccess::QUERY_STATUS)
+            .is_ok()
+    }
 }

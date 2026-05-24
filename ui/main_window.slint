@@ -1,25 +1,43 @@
-import { ThemePalette, AppStatus, StrategyItem } from "tokens.slint";
+// Bundle Geist (sans) + Geist Mono at compile time.
+import "assets/fonts/Geist-Regular.ttf";
+import "assets/fonts/Geist-Medium.ttf";
+import "assets/fonts/Geist-SemiBold.ttf";
+import "assets/fonts/Geist-Bold.ttf";
+import "assets/fonts/GeistMono-Regular.ttf";
+import "assets/fonts/GeistMono-Medium.ttf";
+
+import { ThemePalette, AppStatus, StrategyItem, LogLineItem } from "tokens.slint";
+import { BrandMark } from "components/brand_mark.slint";
+import { StatusDot } from "components/status_dot.slint";
 import { HomePage } from "pages/home.slint";
 import { StrategiesPage } from "pages/strategies.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { LogsPage } from "pages/logs.slint";
 import { AboutPage } from "pages/about.slint";
 
-export { StrategyItem, AppStatus }
+export { StrategyItem, AppStatus, LogLineItem }
 
+// ── Sidebar nav row ──
 component NavItem inherits Rectangle {
     in property <string> label;
     in property <image> icon;
     in property <bool> active;
     callback clicked;
 
-    height: 40px;
-    border-radius: 10px;
-    background: root.active ? ThemePalette.accent-primary-glow : (ta.has-hover ? ThemePalette.surface-hover : transparent);
-    border-width: 1px;
-    border-color: root.active ? ThemePalette.accent-primary : transparent;
+    height: 32px;
+    border-radius: ThemePalette.r-8;
+    background: root.active ? ThemePalette.surface : (ta.has-hover ? ThemePalette.surface : transparent);
     animate background { duration: 120ms; }
-    animate border-color { duration: 120ms; }
+
+    // active 2px lime bar at x = -12px
+    if root.active : Rectangle {
+        x: -12px;
+        y: 9px;
+        width: 2px;
+        height: parent.height - 18px;
+        border-radius: ThemePalette.r-2;
+        background: ThemePalette.accent;
+    }
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -27,70 +45,105 @@ component NavItem inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 12px;
-
-        // Wrap the icon so it is vertically centered within the row.
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
         VerticalLayout {
             alignment: center;
-            width: 18px;
+            width: 16px;
             Image {
                 source: root.icon;
-                width: 18px;
-                height: 18px;
-                colorize: root.active ? ThemePalette.accent-primary : ThemePalette.text-secondary;
+                width: 16px;
+                height: 16px;
+                colorize: root.active ? ThemePalette.accent : ThemePalette.text-2;
                 animate colorize { duration: 120ms; }
             }
         }
-
         Text {
             text: root.label;
-            font-family: ThemePalette.font-family;
-            font-size: ThemePalette.font-size-sm;
-            font-weight: root.active ? 700 : 500;
-            color: root.active ? ThemePalette.accent-primary : ThemePalette.text-secondary;
+            font-family: ThemePalette.font-sans;
+            font-size: ThemePalette.fs-13;
+            font-weight: root.active ? 600 : 500;
+            color: root.active ? ThemePalette.text : ThemePalette.text-2;
             vertical-alignment: center;
             animate color { duration: 120ms; }
         }
     }
 }
 
+// ── Sidebar theme toggle (sun / moon / system) ──
+component ThemeToggleBtn inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active;
+    callback clicked;
+    horizontal-stretch: 1;
+    height: 26px;
+    border-radius: ThemePalette.r-6;
+    background: root.active ? ThemePalette.surface-2 : transparent;
+    animate background { duration: 120ms; }
+    Image {
+        source: root.icon;
+        width: 13px; height: 13px;
+        colorize: root.active ? ThemePalette.text : ThemePalette.text-3;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// ── Fade-in wrapper (200ms on page change) ──
+component Fade inherits Rectangle {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    property <bool> shown: false;
+    opacity: root.shown ? 1.0 : 0.0;
+    animate opacity { duration: 200ms; easing: ease-out; }
+    init => { root.shown = true; }
+    @children
+}
+
 export component MainWindow inherits Window {
-    title: "Zapret UI";
+    title: "zapret-ui";
     preferred-width: 1080px;
-    preferred-height: 720px;
+    preferred-height: 880px;
     min-width: 920px;
-    min-height: 600px;
+    min-height: 640px;
     background: ThemePalette.bg;
 
-    // Flat status properties (set from Rust)
+    // ── Status (set from Rust) ──
     in-out property <bool> status_installed: false;
     in-out property <string> status_installed_version: "";
     in-out property <string> status_running_mode: "None";
     in-out property <string> status_active_strategy: "";
     in-out property <int> status_winws_pid: 0;
+    in-out property <bool> status_service_installed: false;
 
-    // Progress / busy state
     in-out property <float> progress: 0.0;
     in-out property <bool> is_busy: false;
     in-out property <bool> has_update: false;
     in-out property <string> latest_version: "";
 
-    // Data lists
+    // ── Data ──
     in-out property <[StrategyItem]> strategies: [];
-    in-out property <string> selected_category: "All";
     in-out property <string> selected_strategy: "";
-    in-out property <string> log_text: "";
+    in-out property <string> strategies_query: "";
+    in-out property <[LogLineItem]> log_lines: [];
 
-    // Settings (UI-local for now)
+    // Resolved strategy items for display. `selected_item` is set when the user
+    // picks on the Strategies page; `active_item` is resolved by Rust from the
+    // running strategy.
+    in-out property <StrategyItem> selected_item;
+    in-out property <StrategyItem> active_item;
+
+    // ── Settings (UI-local; persisted by Rust where wired) ──
     in-out property <bool> autostart: false;
     in-out property <bool> autoupdate_check: true;
     in-out property <bool> minimize_to_tray: false;
+    in-out property <bool> autoengage: false;
+    in-out property <bool> compact: false;
     in-out property <string> install_dir: "";
     in-out property <string> theme: "dark";
 
-    // Aggregated AppStatus
+    // ── Aggregated status ──
     property <AppStatus> status: {
         installed: root.status_installed,
         installed_version: root.status_installed_version,
@@ -99,211 +152,291 @@ export component MainWindow inherits Window {
         running_mode: root.status_running_mode,
         active_strategy: root.status_active_strategy,
         winws_pid: root.status_winws_pid,
+        service_installed: root.status_service_installed,
     };
 
-    // Callbacks back to Rust
+    property <bool> running: root.status_running_mode != "None";
+    property <StrategyItem> chosen_item: root.running && root.active_item.id != "" ? root.active_item : root.selected_item;
+    property <bool> has_strategy: root.chosen_item.id != "";
+
+    // ── Callbacks to Rust ──
     callback start_clicked(string);
     callback stop_clicked();
     callback strategy_selected(string);
-    callback category_changed(string);
     callback install_clicked();
     callback update_clicked();
-    callback set_strategy_as_service(string);
+    callback service_install_clicked(string);
     callback service_remove_clicked();
     callback service_start_clicked();
     callback service_stop_clicked();
     callback open_folder_clicked();
     callback refresh_status_clicked();
+    callback strategies_search(string);
+    callback logs_query_changed(string, string);
+    callback logs_clear_clicked();
+    callback open_log_file_clicked();
+    callback open_url_clicked(string);
 
-    // Internal nav state
     in-out property <string> current_page: "home";
 
-    init => {
-        ThemePalette.is-dark = root.theme != "light";
-    }
-
-    changed theme => {
-        ThemePalette.is-dark = root.theme != "light";
-    }
+    init => { ThemePalette.is-dark = root.theme != "light"; }
+    changed theme => { ThemePalette.is-dark = root.theme != "light"; }
 
     HorizontalLayout {
         spacing: 0px;
 
-        // SIDEBAR
+        // ════════ SIDEBAR ════════
         Rectangle {
-            width: 220px;
-            background: ThemePalette.surface;
+            width: 232px;
+            background: ThemePalette.bg-2;
+            Rectangle { x: parent.width - 1px; width: 1px; background: ThemePalette.border; }
 
             VerticalLayout {
-                padding-top: 18px;
-                padding-bottom: 18px;
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 4px;
-                alignment: start;
 
-                // Brand
+                // brand
                 HorizontalLayout {
+                    vertical-stretch: 0;
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 20px;
+                    padding-bottom: 18px;
                     spacing: 12px;
-                    padding-bottom: 22px;
-
-                    Rectangle {
-                        width: 38px;
-                        height: 38px;
-                        border-radius: 10px;
-                        background: @linear-gradient(135deg, ThemePalette.accent-primary 0%, ThemePalette.accent-success 100%);
-
-                        Text {
-                            text: "Z";
-                            color: #ffffff;
-                            font-family: ThemePalette.font-family;
-                            font-size: 18px;
-                            font-weight: 900;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-
                     VerticalLayout {
-                        spacing: 1px;
+                        alignment: center;
+                        BrandMark { size: 22px; }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        alignment: center;
                         Text {
                             text: "zapret-ui";
-                            font-family: ThemePalette.font-family;
-                            font-size: ThemePalette.font-size-md;
-                            font-weight: 800;
-                            color: ThemePalette.text-primary;
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-14;
+                            font-weight: 700;
+                            color: ThemePalette.text;
                         }
                         Text {
-                            text: "DPI bypass control";
-                            font-family: ThemePalette.font-family;
-                            font-size: ThemePalette.font-size-xs;
-                            color: ThemePalette.text-muted;
+                            text: "DPI BYPASS";
+                            font-family: ThemePalette.font-mono;
+                            font-size: ThemePalette.fs-10;
+                            color: ThemePalette.text-3;
+                            letter-spacing: 1.2px;
                         }
+                    }
+                    Rectangle { }
+                }
+
+                // workspace section
+                VerticalLayout {
+                    vertical-stretch: 0;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 1px;
+                    Text {
+                        text: "WORKSPACE";
+                        font-family: ThemePalette.font-mono;
+                        font-size: ThemePalette.fs-10;
+                        color: ThemePalette.text-4;
+                        letter-spacing: 1.4px;
+                        // padding via a wrapper
+                    }
+                    Rectangle { height: 6px; }
+                    NavItem {
+                        label: "Dashboard";
+                        icon: @image-url("../assets/icons/home.svg");
+                        active: root.current_page == "home";
+                        clicked => { root.current_page = "home"; }
+                    }
+                    NavItem {
+                        label: "Strategies";
+                        icon: @image-url("../assets/icons/strategies.svg");
+                        active: root.current_page == "strategies";
+                        clicked => { root.current_page = "strategies"; }
+                    }
+                    NavItem {
+                        label: "Logs";
+                        icon: @image-url("../assets/icons/logs.svg");
+                        active: root.current_page == "logs";
+                        clicked => { root.current_page = "logs"; }
+                    }
+                    NavItem {
+                        label: "Settings";
+                        icon: @image-url("../assets/icons/settings.svg");
+                        active: root.current_page == "settings";
+                        clicked => { root.current_page = "settings"; }
+                    }
+                    NavItem {
+                        label: "About";
+                        icon: @image-url("../assets/icons/about.svg");
+                        active: root.current_page == "about";
+                        clicked => { root.current_page = "about"; }
                     }
                 }
 
-                NavItem {
-                    label: "Home";
-                    icon: @image-url("../assets/icons/home.svg");
-                    active: root.current_page == "home";
-                    clicked => { root.current_page = "home"; }
-                }
-                NavItem {
-                    label: "Strategies";
-                    icon: @image-url("../assets/icons/strategies.svg");
-                    active: root.current_page == "strategies";
-                    clicked => { root.current_page = "strategies"; }
-                }
-                NavItem {
-                    label: "Settings";
-                    icon: @image-url("../assets/icons/settings.svg");
-                    active: root.current_page == "settings";
-                    clicked => { root.current_page = "settings"; }
-                }
-                NavItem {
-                    label: "Logs";
-                    icon: @image-url("../assets/icons/logs.svg");
-                    active: root.current_page == "logs";
-                    clicked => { root.current_page = "logs"; }
-                }
-                NavItem {
-                    label: "About";
-                    icon: @image-url("../assets/icons/about.svg");
-                    active: root.current_page == "about";
-                    clicked => { root.current_page = "about"; }
-                }
+                Rectangle { vertical-stretch: 1; } // spacer pushes the footer to the bottom
 
-                // Spacer
-                Rectangle { background: transparent; }
+                // footer
+                VerticalLayout {
+                    vertical-stretch: 0;
+                    padding: 12px;
+                    spacing: 8px;
+                    Rectangle { height: 1px; background: ThemePalette.border; }
+                    Rectangle { height: 4px; }
 
-                // Footer: version + theme toggle
-                Rectangle {
-                    height: 40px;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: ThemePalette.border;
-                    background: refresh-ta.has-hover ? ThemePalette.surface-hover : transparent;
-                    animate background { duration: 120ms; }
-
-                    refresh-ta := TouchArea {
-                        clicked => { root.refresh_status_clicked(); }
+                    // status pill (click → refresh)
+                    Rectangle {
+                        height: 40px;
+                        border-radius: ThemePalette.r-8;
+                        border-width: 1px;
+                        border-color: ThemePalette.border;
+                        background: pill-ta.has-hover ? ThemePalette.surface-hover : ThemePalette.surface;
+                        animate background { duration: 120ms; }
+                        pill-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.refresh_status_clicked(); }
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                StatusDot {
+                                    variant: root.running ? "active" : (root.status_installed ? "idle" : "danger");
+                                }
+                            }
+                            Text {
+                                text: root.running
+                                        ? (root.status_running_mode == "WindowsService" ? "Service running" : "Bypass active")
+                                        : (root.status_installed ? "Idle" : "Not installed");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                font-weight: 500;
+                                color: ThemePalette.text-2;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { }
+                            if root.running && root.active_item.id != "" : Text {
+                                text: root.active_item.alt != "" ? root.active_item.alt : root.active_item.pretty;
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-10;
+                                color: ThemePalette.text-3;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
 
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 8px;
-
-                        Rectangle {
-                            width: 8px;
-                            height: 8px;
-                            y: parent.height / 2 - 4px;
-                            border-radius: 4px;
-                            background: root.status_running_mode == "None" ? ThemePalette.text-muted : ThemePalette.accent-success;
-                        }
-                        Text {
-                            text: "Refresh status";
-                            font-family: ThemePalette.font-family;
-                            font-size: ThemePalette.font-size-xs;
-                            font-weight: 600;
-                            color: ThemePalette.text-secondary;
-                            vertical-alignment: center;
+                    // theme toggle
+                    Rectangle {
+                        height: 32px;
+                        border-radius: ThemePalette.r-8;
+                        border-width: 1px;
+                        border-color: ThemePalette.border;
+                        background: ThemePalette.surface;
+                        HorizontalLayout {
+                            padding: 2px;
+                            spacing: 2px;
+                            ThemeToggleBtn {
+                                icon: @image-url("../assets/icons/sun.svg");
+                                active: root.theme == "light";
+                                clicked => { root.theme = "light"; }
+                            }
+                            ThemeToggleBtn {
+                                icon: @image-url("../assets/icons/moon.svg");
+                                active: root.theme == "dark";
+                                clicked => { root.theme = "dark"; }
+                            }
+                            ThemeToggleBtn {
+                                icon: @image-url("../assets/icons/system.svg");
+                                active: root.theme == "system";
+                                clicked => { root.theme = "system"; }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // CONTENT
+        // ════════ CONTENT ════════
         Rectangle {
             background: ThemePalette.bg;
             clip: true;
 
-            if root.current_page == "home" : HomePage {
-                status: root.status;
-                selected_strategy: root.selected_strategy;
-                progress: root.progress;
-                is_busy: root.is_busy;
-                start_clicked => { root.start_clicked(root.selected_strategy); }
-                stop_clicked => { root.stop_clicked(); }
-                install_clicked => { root.install_clicked(); }
-                update_clicked => { root.update_clicked(); }
-                open_folder_clicked => { root.open_folder_clicked(); }
-                pick_strategy_clicked => { root.current_page = "strategies"; }
-                run_as_service_clicked => { root.set_strategy_as_service(root.selected_strategy); }
-                service_stop_clicked => { root.service_stop_clicked(); }
-                service_remove_clicked => { root.service_remove_clicked(); }
-            }
-
-            if root.current_page == "strategies" : StrategiesPage {
-                strategies_model: root.strategies;
-                active_strategy_id: root.status_active_strategy;
-                selected_strategy: root.selected_strategy;
-                is_busy: root.is_busy;
-                // Selecting a strategy just picks it and returns to Home — it does NOT auto-start.
-                strategy_selected(id) => {
-                    root.selected_strategy = id;
-                    root.current_page = "home";
+            if root.current_page == "home" : Fade {
+                HomePage {
+                    width: 100%;
+                    height: 100%;
+                    status: root.status;
+                    chosen_item: root.chosen_item;
+                    has_strategy: root.has_strategy;
+                    is_busy: root.is_busy;
+                    strategy_count: root.strategies.length;
+                    start_clicked => { root.start_clicked(root.chosen_item.id); }
+                    stop_clicked => { root.stop_clicked(); }
+                    install_clicked => { root.install_clicked(); }
+                    update_clicked => { root.update_clicked(); }
+                    open_folder_clicked => { root.open_folder_clicked(); }
+                    pick_strategy_clicked => { root.current_page = "strategies"; }
+                    refresh_clicked => { root.refresh_status_clicked(); }
+                    service_install_clicked => { root.service_install_clicked(root.chosen_item.id); }
+                    service_start_clicked => { root.service_start_clicked(); }
+                    service_stop_clicked => { root.service_stop_clicked(); }
+                    service_remove_clicked => { root.service_remove_clicked(); }
                 }
             }
 
-            if root.current_page == "settings" : SettingsPage {
-                autostart <=> root.autostart;
-                autoupdate_check <=> root.autoupdate_check;
-                install_dir <=> root.install_dir;
-                minimize_to_tray <=> root.minimize_to_tray;
-                theme <=> root.theme;
-                open_folder_clicked => { root.open_folder_clicked(); }
+            if root.current_page == "strategies" : Fade {
+                StrategiesPage {
+                    width: 100%;
+                    height: 100%;
+                    strategies_model: root.strategies;
+                    active_strategy_id: root.status_active_strategy;
+                    selected_strategy: root.selected_item.id;
+                    is_busy: root.is_busy;
+                    query <=> root.strategies_query;
+                    search_changed(q) => { root.strategies_search(q); }
+                    picked(item) => {
+                        root.selected_item = item;
+                        root.selected_strategy = item.id;
+                        root.strategy_selected(item.id);
+                        root.current_page = "home";
+                    }
+                }
             }
 
-            if root.current_page == "logs" : LogsPage {
-                log_text: root.log_text;
-                open_folder_clicked => { root.open_folder_clicked(); }
-                clear_clicked => { root.log_text = ""; }
+            if root.current_page == "settings" : Fade {
+                SettingsPage {
+                    width: 100%;
+                    height: 100%;
+                    autostart <=> root.autostart;
+                    autoupdate_check <=> root.autoupdate_check;
+                    minimize_to_tray <=> root.minimize_to_tray;
+                    autoengage <=> root.autoengage;
+                    compact <=> root.compact;
+                    install_dir <=> root.install_dir;
+                    theme <=> root.theme;
+                    open_folder_clicked => { root.open_folder_clicked(); }
+                }
             }
 
-            if root.current_page == "about" : AboutPage {
-                status: root.status;
+            if root.current_page == "logs" : Fade {
+                LogsPage {
+                    width: 100%;
+                    height: 100%;
+                    log_lines: root.log_lines;
+                    open_file_clicked => { root.open_log_file_clicked(); }
+                    clear_clicked => { root.logs_clear_clicked(); }
+                    query_changed(g, l) => { root.logs_query_changed(g, l); }
+                }
+            }
+
+            if root.current_page == "about" : Fade {
+                AboutPage {
+                    width: 100%;
+                    height: 100%;
+                    status: root.status;
+                    open_url(u) => { root.open_url_clicked(u); }
+                }
             }
         }
     }

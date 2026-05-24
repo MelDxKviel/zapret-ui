@@ -1,0 +1,41 @@
+import { ThemePalette } from "../tokens.slint";
+
+// Three rounded bars in --accent. The middle (wide) bar is the packet that
+// bypasses the DPI filter. Geometry mirrors the reference 24×24 viewBox and
+// scales with `size`.
+export component BrandMark inherits Rectangle {
+    in property <length> size: 24px;
+    in property <color> tint: ThemePalette.accent;
+
+    width: root.size;
+    height: root.size;
+
+    property <length> u: root.size / 24px * 1px; // one viewBox unit
+
+    Rectangle {
+        x: 3 * root.u;
+        y: 5 * root.u;
+        width: 12 * root.u;
+        height: 3 * root.u;
+        border-radius: 1.5 * root.u;
+        background: root.tint;
+        opacity: 0.55;
+    }
+    Rectangle {
+        x: 3 * root.u;
+        y: 10.5 * root.u;
+        width: 18 * root.u;
+        height: 3 * root.u;
+        border-radius: 1.5 * root.u;
+        background: root.tint;
+    }
+    Rectangle {
+        x: 3 * root.u;
+        y: 16 * root.u;
+        width: 9 * root.u;
+        height: 3 * root.u;
+        border-radius: 1.5 * root.u;
+        background: root.tint;
+        opacity: 0.55;
+    }
+}

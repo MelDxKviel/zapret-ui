@@ -1,0 +1,19 @@
+import { ThemePalette } from "../tokens.slint";
+
+// A vertically-centred icon. Bare Image elements top-align inside a
+// HorizontalLayout cell; wrapping in a centering VerticalLayout fixes that.
+// Width tracks `size`, height stretches so the glyph centres on the row.
+export component Icon inherits VerticalLayout {
+    in property <image> source;
+    in property <length> size: 16px;
+    in property <color> tint: ThemePalette.text-2;
+    alignment: center;
+    horizontal-stretch: 0;
+    Image {
+        source: root.source;
+        width: root.size;
+        height: root.size;
+        colorize: root.tint;
+        animate colorize { duration: 120ms; }
+    }
+}

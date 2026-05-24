@@ -1,11 +1,316 @@
-import { ThemePalette, AppStatus } from "../tokens.slint";
+import { ThemePalette, AppStatus, StrategyItem } from "../tokens.slint";
 import { AppButton } from "../components/button.slint";
+import { StatusDot } from "../components/status_dot.slint";
+import { Icon } from "../components/icon.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// ── Windows-service card: renders ONE of three states (absent / stopped /
+//    running) — see DESIGN.md "Service card — state machine".
+component ServiceCard inherits Rectangle {
+    in property <AppStatus> status;
+    in property <bool> is_busy;
+    in property <bool> has_strategy;
+    in property <StrategyItem> chosen_item;
+
+    callback install_clicked();
+    callback start_clicked();
+    callback stop_clicked();
+    callback remove_clicked();
+
+    property <bool> svc-installed: root.status.service_installed;
+    property <bool> svc-running: root.svc-installed && root.status.running_mode == "WindowsService";
+    property <string> state: !root.svc-installed ? "absent" : (root.svc-running ? "running" : "stopped");
+
+    background: ThemePalette.surface;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    border-radius: ThemePalette.r-12;
+    clip: true;
+    vertical-stretch: 0;
+
+    VerticalLayout {
+        alignment: start;
+
+        // card-head
+        Rectangle {
+            height: 48px;
+            background: transparent;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                Text {
+                    text: "Windows Service";
+                    font-family: ThemePalette.font-mono;
+                    font-size: ThemePalette.fs-12;
+                    font-weight: 600;
+                    color: ThemePalette.text-3;
+                    letter-spacing: 0.6px;
+                    vertical-alignment: center;
+                }
+                Rectangle { }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        StatusDot {
+                            variant: root.state == "running" ? "active" : root.state == "stopped" ? "warn" : "idle";
+                        }
+                    }
+                    Text {
+                        text: root.state == "running" ? "Installed · running"
+                            : root.state == "stopped" ? "Installed · stopped"
+                            : "Not configured";
+                        font-family: ThemePalette.font-mono;
+                        font-size: ThemePalette.fs-12;
+                        color: ThemePalette.text-2;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            // bottom divider
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: ThemePalette.divider;
+            }
+        }
+
+        // card-body
+        VerticalLayout {
+            padding: 18px;
+            spacing: 14px;
+            alignment: start;
+
+            if root.state == "absent" : VerticalLayout {
+                spacing: 14px;
+                Text {
+                    text: "Install the bypass as a Windows service so it auto-starts on boot and keeps running without this app open.";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    color: ThemePalette.text-2;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    AppButton {
+                        text: "Install as service";
+                        variant: "primary";
+                        icon: @image-url("../../assets/icons/service.svg");
+                        enabled: !root.is_busy && root.has_strategy && root.status.installed;
+                        clicked => { root.install_clicked(); }
+                    }
+                }
+                if !root.has_strategy : Text {
+                    text: "Pick a strategy first.";
+                    font-family: ThemePalette.font-mono;
+                    font-size: ThemePalette.fs-11;
+                    color: ThemePalette.text-3;
+                }
+            }
+
+            if root.state == "stopped" : VerticalLayout {
+                spacing: 14px;
+                Text {
+                    text: "Service registered as \{root.chosen_item.id}. It will start on next boot — or start it now.";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    color: ThemePalette.text-2;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    AppButton {
+                        text: "Start service";
+                        variant: "primary";
+                        icon: @image-url("../../assets/icons/play.svg");
+                        enabled: !root.is_busy;
+                        clicked => { root.start_clicked(); }
+                    }
+                    AppButton {
+                        text: "Uninstall";
+                        variant: "danger";
+                        size: "sm";
+                        icon: @image-url("../../assets/icons/trash.svg");
+                        enabled: !root.is_busy;
+                        clicked => { root.remove_clicked(); }
+                    }
+                }
+            }
+
+            if root.state == "running" : VerticalLayout {
+                spacing: 14px;
+                Text {
+                    text: "Bypass active as service · running \{root.chosen_item.id}. Restarts automatically every boot.";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    color: ThemePalette.text-2;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    AppButton {
+                        text: "Stop service";
+                        variant: "default";
+                        icon: @image-url("../../assets/icons/stop.svg");
+                        enabled: !root.is_busy;
+                        clicked => { root.stop_clicked(); }
+                    }
+                    AppButton {
+                        text: "Uninstall";
+                        variant: "danger";
+                        size: "sm";
+                        icon: @image-url("../../assets/icons/trash.svg");
+                        enabled: !root.is_busy;
+                        clicked => { root.remove_clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── A single stat cell in the strip ──
+component Stat inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> value-color: ThemePalette.text;
+    in property <bool> last: false;
+    horizontal-stretch: 1;
+    background: transparent;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: root.label;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-10;
+            color: ThemePalette.text-4;
+            letter-spacing: 1px;
+        }
+        Text {
+            text: root.value;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-14;
+            font-weight: 500;
+            color: root.value-color;
+        }
+    }
+    if !root.last : Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: ThemePalette.divider;
+    }
+}
+
+// ── An install/update/folder action tile ──
+component ActionTile inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> sub;
+    in property <bool> highlight: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    horizontal-stretch: 1;
+    height: 60px;
+    border-radius: ThemePalette.r-10;
+    border-width: 1px;
+    border-color: root.highlight ? ThemePalette.accent-line : ThemePalette.border;
+    background: root.highlight
+        ? @linear-gradient(180deg, ThemePalette.accent-soft 0%, transparent 100%)
+        : (ta.has-hover ? ThemePalette.surface-hover : ThemePalette.surface);
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background, border-color { duration: 120ms; }
+
+    HorizontalLayout {
+        padding: 14px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: ThemePalette.r-8;
+                background: root.highlight ? ThemePalette.accent : ThemePalette.surface-2;
+                Image {
+                    source: root.icon;
+                    width: 16px;
+                    height: 16px;
+                    colorize: root.highlight ? ThemePalette.accent-ink : ThemePalette.text-2;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-13;
+                font-weight: 600;
+                color: ThemePalette.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.sub;
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-11;
+                color: ThemePalette.text-3;
+                overflow: elide;
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// dl-row for the strategy-detail card
+component DetailRow inherits Rectangle {
+    in property <string> key;
+    in property <string> value;
+    in property <bool> last: false;
+    height: 33px;
+    HorizontalLayout {
+        padding-top: 6px;
+        padding-bottom: 6px;
+        Text {
+            text: root.key;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-11;
+            color: ThemePalette.text-4;
+            letter-spacing: 0.8px;
+            vertical-alignment: center;
+        }
+        Rectangle { }
+        Text {
+            text: root.value;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-12;
+            color: ThemePalette.text;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+    }
+    if !root.last : Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: ThemePalette.divider;
+    }
+}
 
 export component HomePage inherits Rectangle {
     in property <AppStatus> status;
-    in property <string> selected_strategy;
-    in property <float> progress;
+    in property <StrategyItem> chosen_item;
+    in property <bool> has_strategy;
     in property <bool> is_busy;
+    in property <int> strategy_count;
 
     callback start_clicked();
     callback stop_clicked();
@@ -13,348 +318,441 @@ export component HomePage inherits Rectangle {
     callback update_clicked();
     callback open_folder_clicked();
     callback pick_strategy_clicked();
-    callback run_as_service_clicked();
+    callback refresh_clicked();
+    callback service_install_clicked();
+    callback service_start_clicked();
     callback service_stop_clicked();
     callback service_remove_clicked();
 
     background: transparent;
 
     property <bool> running: root.status.running_mode != "None";
-    // The strategy we will act on: the running one if active, otherwise the user's pick.
-    property <string> chosen: root.status.active_strategy != "" ? root.status.active_strategy : root.selected_strategy;
-    property <bool> has_strategy: root.chosen != "";
+    property <bool> installed: root.status.installed;
+    property <bool> has-update: root.status.update_available;
 
-    VerticalLayout {
-        spacing: 20px;
-        padding: 28px;
-        alignment: start;
+    property <string> state-label: !root.installed ? "NOT INSTALLED"
+        : (root.running && root.status.running_mode == "WindowsService") ? "SERVICE ACTIVE"
+        : root.running ? "ACTIVE"
+        : "STOPPED";
+    property <color> state-color: !root.installed ? ThemePalette.danger
+        : root.running ? ThemePalette.accent : ThemePalette.text;
+    property <string> dot-variant: !root.installed ? "danger" : root.running ? "active" : "idle";
 
-        // HEADER
+    property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy;
+
+    // Live uptime (counts from when the bypass became active this session).
+    property <int> uptime: 0;
+    property <int> up-h: floor(root.uptime / 3600);
+    property <int> up-m: floor((root.uptime - root.up-h * 3600) / 60);
+    property <int> up-s: root.uptime - root.up-h * 3600 - root.up-m * 60;
+    pure function pad2(n: int) -> string { return n < 10 ? "0\{n}" : "\{n}"; }
+
+    Timer {
+        interval: 1s;
+        running: root.running;
+        triggered => { root.uptime += 1; }
+    }
+    changed running => { root.uptime = 0; }
+
+    sv := ScrollView {
+        viewport-width: sv.visible-width;
         HorizontalLayout {
-            spacing: 16px;
-
+            // left-aligned content column capped at 980px (matches .main-inner)
             VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: "Bypass Dashboard";
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-lg;
-                    font-weight: 700;
-                    color: ThemePalette.text-primary;
-                }
-                Text {
-                    text: "Manage zapret process and service status";
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-xs;
-                    color: ThemePalette.text-muted;
-                }
-            }
-
-            Rectangle {
                 horizontal-stretch: 0;
-                background: root.running ? ThemePalette.accent-success-glow :
-                            (root.status.installed ? ThemePalette.surface : ThemePalette.accent-danger-glow);
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: root.running ? ThemePalette.accent-success :
-                              (root.status.installed ? ThemePalette.border : ThemePalette.accent-danger);
-                height: 28px;
-                width: pill-layout.preferred-width + 24px;
-                y: 4px;
+                width: min(sv.visible-width - 64px, 980px);
+                padding-left: 32px;
+                padding-top: 28px;
+                padding-right: 32px;
+                padding-bottom: 60px;
+                spacing: 0px;
+                alignment: start;
 
-                pill-layout := HorizontalLayout {
-                    spacing: 8px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        y: parent.height / 2 - 4px;
-                        border-radius: 4px;
-                        background: root.running ? ThemePalette.accent-success :
-                                    (root.status.installed ? ThemePalette.text-muted : ThemePalette.accent-danger);
-                    }
-                    Text {
-                        text: root.status.running_mode == "UserProcess" ? "Running" :
-                              (root.status.running_mode == "WindowsService" ? "Service active" :
-                              (root.status.installed ? "Stopped" : "Not installed"));
-                        font-family: ThemePalette.font-family;
-                        font-size: ThemePalette.font-size-xs;
-                        font-weight: 700;
-                        color: root.running ? ThemePalette.accent-success :
-                               (root.status.installed ? ThemePalette.text-secondary : ThemePalette.accent-danger);
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-
-        // BIG CONTROL CARD
-        Rectangle {
-            background: @linear-gradient(180deg, ThemePalette.glass-bg 0%, ThemePalette.surface 100%);
-            border-radius: 18px;
-            border-width: 1px;
-            border-color: ThemePalette.glass-border;
-            height: 280px;
-
-            VerticalLayout {
-                alignment: center;
-                spacing: 16px;
-                padding: 24px;
-
+                // ── page-head ──
                 HorizontalLayout {
-                    alignment: center;
-
-                    big-btn := Rectangle {
-                        width: 132px;
-                        height: 132px;
-                        border-radius: 66px;
-
-                        property <bool> clickable: root.status.installed && !root.is_busy && root.has_strategy;
-
-                        background: !root.status.installed ?
-                            (ThemePalette.is-dark ? #232a3a : #d1d5db) :
-                            (root.running ?
-                                @linear-gradient(135deg, #f87171 0%, #b91c1c 100%) :
-                                (root.has_strategy ?
-                                    @linear-gradient(135deg, #60a5fa 0%, #1d4ed8 100%) :
-                                    (ThemePalette.is-dark ? #232a3a : #d1d5db)));
-
-                        border-width: 2px;
-                        border-color: !big-btn.clickable ? ThemePalette.text-muted :
-                            (root.running ? ThemePalette.accent-danger : ThemePalette.accent-primary);
-
-                        // Glow ring (behind, non-interactive)
-                        Rectangle {
-                            x: -10px;
-                            y: -10px;
-                            width: parent.width + 20px;
-                            height: parent.height + 20px;
-                            border-radius: (parent.width + 20px) / 2;
-                            background: root.running ? ThemePalette.accent-danger-glow :
-                                        (big-btn.clickable ? ThemePalette.accent-primary-glow : transparent);
-                            opacity: btn-ta.has-hover ? 1.0 : 0.5;
-                            animate opacity { duration: 200ms; }
+                    padding-bottom: 20px;
+                    VerticalLayout {
+                        spacing: 2px;
+                        alignment: end;
+                        Text {
+                            text: "Dashboard";
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-22;
+                            font-weight: 600;
+                            color: ThemePalette.text;
                         }
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 6px;
-
-                            HorizontalLayout {
-                                alignment: center;
-                                Image {
-                                    source: root.running ?
-                                        @image-url("../../assets/icons/stop.svg") :
-                                        @image-url("../../assets/icons/play.svg");
-                                    width: 30px;
-                                    height: 30px;
-                                    colorize: #ffffff;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                alignment: center;
-                                Text {
-                                    text: root.running ? "STOP" : "START";
-                                    font-family: ThemePalette.font-family;
-                                    font-size: ThemePalette.font-size-sm;
-                                    font-weight: 800;
-                                    color: #ffffff;
-                                }
-                            }
-                        }
-
-                        // TouchArea on TOP so clicks always register.
-                        btn-ta := TouchArea {
-                            enabled: big-btn.clickable;
-                            mouse-cursor: big-btn.clickable ? MouseCursor.pointer : MouseCursor.default;
-                            clicked => {
-                                if (root.running) {
-                                    root.stop_clicked();
-                                } else {
-                                    root.start_clicked();
-                                }
-                            }
+                        Text {
+                            text: "Manage zapret bypass — run as user process or install as Windows service.";
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-13;
+                            color: ThemePalette.text-3;
                         }
                     }
-                }
-
-                Text {
-                    text: !root.status.installed ? "Install zapret first to activate bypass" :
-                          (!root.has_strategy ? "Pick a strategy, then press START or run it as a service" :
-                          (root.running ? "Bypass active — " + root.chosen :
-                          "Ready: " + root.chosen + " — press START or run as service"));
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-xs;
-                    color: ThemePalette.text-muted;
-                    horizontal-alignment: center;
-                }
-
-                if !root.has_strategy && root.status.installed : HorizontalLayout {
-                    alignment: center;
-                    AppButton {
-                        text: "Pick a strategy";
-                        variant: "primary";
-                        clicked => { root.pick_strategy_clicked(); }
-                    }
-                }
-            }
-        }
-
-        // TWO COLUMN ROW: Strategy + Service
-        HorizontalLayout {
-            spacing: 16px;
-
-            Rectangle {
-                background: ThemePalette.glass-bg;
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: ThemePalette.glass-border;
-                horizontal-stretch: 1;
-
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 10px;
-
-                    Text {
-                        text: "Selected strategy";
-                        font-family: ThemePalette.font-family;
-                        font-size: ThemePalette.font-size-xs;
-                        font-weight: 700;
-                        color: ThemePalette.text-secondary;
-                    }
-
-                    Text {
-                        text: root.has_strategy ? root.chosen : "— none —";
-                        font-family: ThemePalette.font-family;
-                        font-size: ThemePalette.font-size-base;
-                        font-weight: 700;
-                        color: root.has_strategy ? ThemePalette.text-primary : ThemePalette.text-muted;
-                        overflow: elide;
-                    }
-
-                    HorizontalLayout {
-                        alignment: start;
+                    Rectangle { }
+                    VerticalLayout {
+                        alignment: end;
                         AppButton {
-                            text: "Change strategy";
-                            variant: "secondary";
-                            clicked => { root.pick_strategy_clicked(); }
+                            text: "Refresh";
+                            variant: "ghost";
+                            size: "sm";
+                            icon: @image-url("../../assets/icons/refresh.svg");
+                            clicked => { root.refresh_clicked(); }
                         }
                     }
                 }
-            }
+                Rectangle { height: 1px; background: ThemePalette.divider; }
 
-            Rectangle {
-                background: ThemePalette.glass-bg;
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: ThemePalette.glass-border;
-                horizontal-stretch: 1;
-
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 10px;
-
-                    Text {
-                        text: "Windows Service";
-                        font-family: ThemePalette.font-family;
-                        font-size: ThemePalette.font-size-xs;
-                        font-weight: 700;
-                        color: ThemePalette.text-secondary;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 8px;
-                        AppButton {
-                            text: "Run as service";
-                            variant: "success";
-                            enabled: !root.is_busy && root.has_strategy;
-                            clicked => { root.run_as_service_clicked(); }
-                        }
-                        AppButton {
-                            text: "Stop";
-                            variant: "secondary";
-                            enabled: !root.is_busy;
-                            clicked => { root.service_stop_clicked(); }
-                        }
-                        AppButton {
-                            text: "Uninstall";
-                            variant: "danger";
-                            enabled: !root.is_busy;
-                            clicked => { root.service_remove_clicked(); }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Install / Update / Folder row
-        HorizontalLayout {
-            spacing: 12px;
-
-            AppButton {
-                text: root.status.installed ? "Reinstall zapret" : "Install zapret";
-                icon: @image-url("../../assets/icons/download.svg");
-                variant: root.status.installed ? "secondary" : "primary";
-                enabled: !root.is_busy;
-                clicked => { root.install_clicked(); }
-            }
-
-            AppButton {
-                text: root.status.update_available ? "Update available!" : "Check for update";
-                icon: @image-url("../../assets/icons/download.svg");
-                variant: root.status.update_available ? "warning" : "secondary";
-                enabled: !root.is_busy;
-                clicked => { root.update_clicked(); }
-            }
-
-            AppButton {
-                text: "Open folder";
-                icon: @image-url("../../assets/icons/folder.svg");
-                variant: "secondary";
-                enabled: root.status.installed;
-                clicked => { root.open_folder_clicked(); }
-            }
-        }
-
-        // Progress bar
-        if root.is_busy || root.progress > 0 : VerticalLayout {
-            spacing: 6px;
-
-            HorizontalLayout {
-                alignment: space-between;
-                Text {
-                    text: "Processing...";
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-xs;
-                    color: ThemePalette.text-secondary;
-                }
-                Text {
-                    text: round(root.progress * 100) + "%";
-                    font-family: ThemePalette.font-family;
-                    font-size: ThemePalette.font-size-xs;
-                    font-weight: 700;
-                    color: ThemePalette.accent-primary;
-                }
-            }
-
-            Rectangle {
-                height: 6px;
-                background: ThemePalette.is-dark ? #1e2430 : #e5e7eb;
-                border-radius: 3px;
-                clip: true;
-
+                // ── HERO ──
                 Rectangle {
-                    x: 0;
-                    width: parent.width * root.progress;
-                    height: parent.height;
-                    background: @linear-gradient(90deg, ThemePalette.accent-primary 0%, ThemePalette.accent-success 100%);
-                    border-radius: 3px;
-                    animate width { duration: 150ms; easing: ease-out; }
+                    height: hero-content.preferred-height;
+                    background: @linear-gradient(180deg, ThemePalette.surface 0%, ThemePalette.bg-2 100%);
+                    border-width: 1px;
+                    border-color: ThemePalette.border;
+                    border-radius: ThemePalette.r-16;
+                    clip: true;
+
+                    // accent glow (radial fallback → top linear tint)
+                    Rectangle {
+                        y: 0;
+                        height: 50%;
+                        background: @linear-gradient(180deg, ThemePalette.accent-soft 0%, transparent 100%);
+                    }
+
+                    hero-content := VerticalLayout {
+                        padding: 28px;
+                        spacing: 28px;
+
+                        // hero-top
+                        HorizontalLayout {
+                            VerticalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "BYPASS STATUS";
+                                    font-family: ThemePalette.font-mono;
+                                    font-size: ThemePalette.fs-10;
+                                    color: ThemePalette.text-4;
+                                    letter-spacing: 1.4px;
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        StatusDot { variant: root.dot-variant; dot-size: 10px; }
+                                    }
+                                    Text {
+                                        text: root.state-label;
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-28;
+                                        font-weight: 600;
+                                        color: root.state-color;
+                                    }
+                                }
+                            }
+                            Rectangle { }
+                            VerticalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: end;
+                                    Text {
+                                        text: "MODE";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-10;
+                                        color: ThemePalette.text-4;
+                                        letter-spacing: 1px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: !root.running ? "—" : root.status.running_mode == "WindowsService" ? "service" : "user-process";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.text;
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: end;
+                                    Text {
+                                        text: "PID";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-10;
+                                        color: ThemePalette.text-4;
+                                        letter-spacing: 1px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.status.winws_pid > 0 ? "\{root.status.winws_pid}" : "—";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.text;
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: end;
+                                    Text {
+                                        text: "UPTIME";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-10;
+                                        color: ThemePalette.text-4;
+                                        letter-spacing: 1px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.running ? root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s) : "—";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.text;
+                                    }
+                                }
+                            }
+                        }
+
+                        // power-bar
+                        Rectangle {
+                            height: max(76px, pb.preferred-height);
+                            border-radius: ThemePalette.r-12;
+                            border-width: 1px;
+                            border-color: ThemePalette.border-strong;
+                            background: ThemePalette.bg-2;
+                            clip: true;
+
+                            pb := HorizontalLayout {
+                                // info column
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    padding-left: 20px;
+                                    padding-right: 20px;
+                                    padding-top: 14px;
+                                    padding-bottom: 14px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    Text {
+                                        text: root.running ? "CURRENTLY RUNNING" : "READY TO ENGAGE";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-10;
+                                        color: ThemePalette.text-3;
+                                        letter-spacing: 1.4px;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        alignment: start;
+                                        Text {
+                                            text: root.has_strategy ? root.chosen_item.pretty : "No strategy selected";
+                                            font-family: ThemePalette.font-sans;
+                                            font-size: ThemePalette.fs-16;
+                                            font-weight: 600;
+                                            color: root.has_strategy ? ThemePalette.text : ThemePalette.text-3;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                        if root.has_strategy && root.chosen_item.alt != "" : Rectangle {
+                                            horizontal-stretch: 0;
+                                            width: alt-txt.preferred-width + 12px;
+                                            height: 20px;
+                                            border-radius: ThemePalette.r-4;
+                                            background: ThemePalette.surface;
+                                            border-width: 1px;
+                                            border-color: ThemePalette.border;
+                                            alt-txt := Text {
+                                                text: root.chosen_item.alt;
+                                                font-family: ThemePalette.font-mono;
+                                                font-size: ThemePalette.fs-12;
+                                                color: ThemePalette.text-2;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        text: !root.installed ? "Install zapret first to enable the bypass"
+                                            : !root.has_strategy ? "Pick one from the Strategies tab, then return here to engage."
+                                            : root.running ? "Click Stop to terminate the bypass process"
+                                            : "Click Engage to start in user mode, or install as a service below";
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.text-3;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                // action button cell
+                                Rectangle {
+                                    horizontal-stretch: 0;
+                                    width: 200px;
+                                    background: !root.has_strategy ? ThemePalette.surface-2
+                                        : root.running ? (pbta.has-hover ? ThemePalette.danger-hover : ThemePalette.danger)
+                                        : !root.can-engage ? ThemePalette.surface-2
+                                        : (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent);
+                                    animate background { duration: 120ms; }
+                                    Rectangle {
+                                        x: 0; width: 1px;
+                                        background: ThemePalette.border-strong;
+                                    }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 12px;
+                                        Icon {
+                                            source: !root.has_strategy ? @image-url("../../assets/icons/arrow-right.svg")
+                                                : root.running ? @image-url("../../assets/icons/stop.svg")
+                                                : @image-url("../../assets/icons/play.svg");
+                                            size: 18px;
+                                            tint: !root.has_strategy ? ThemePalette.text
+                                                : root.running ? #ffffff
+                                                : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
+                                        }
+                                        Text {
+                                            text: !root.has_strategy ? "PICK STRATEGY" : root.running ? "STOP" : "ENGAGE";
+                                            font-family: ThemePalette.font-sans;
+                                            font-size: ThemePalette.fs-16;
+                                            font-weight: 600;
+                                            letter-spacing: 0.3px;
+                                            color: !root.has_strategy ? ThemePalette.text
+                                                : root.running ? #ffffff
+                                                : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    pbta := TouchArea {
+                                        enabled: !root.has_strategy || root.running || root.can-engage;
+                                        mouse-cursor: self.enabled ? MouseCursor.pointer : MouseCursor.default;
+                                        clicked => {
+                                            if (!root.has_strategy) { root.pick_strategy_clicked(); }
+                                            else if (root.running) { root.stop_clicked(); }
+                                            else { root.start_clicked(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // stats-strip
+                        Rectangle {
+                            height: 64px;
+                            border-radius: ThemePalette.r-12;
+                            border-width: 1px;
+                            border-color: ThemePalette.border;
+                            background: ThemePalette.surface;
+                            clip: true;
+                            HorizontalLayout {
+                                Stat { label: "APP"; value: "v0.1.0"; }
+                                Stat {
+                                    label: "ZAPRET CORE";
+                                    value: root.installed ? root.status.installed_version : "not installed";
+                                    value-color: root.installed ? ThemePalette.text : ThemePalette.text-3;
+                                }
+                                Stat {
+                                    label: "LATEST";
+                                    value: (root.status.latest_version != "" ? root.status.latest_version : "—") + (root.has-update ? " ↑" : "");
+                                    value-color: root.has-update ? ThemePalette.accent : ThemePalette.text;
+                                }
+                                Stat { label: "STRATEGIES"; value: "\{root.strategy_count}"; last: true; }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 24px; }
+
+                // ── SERVICE + STRATEGY ROW ──
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    ServiceCard {
+                        horizontal-stretch: 14;
+                        status: root.status;
+                        is_busy: root.is_busy;
+                        has_strategy: root.has_strategy;
+                        chosen_item: root.chosen_item;
+                        install_clicked => { root.service_install_clicked(); }
+                        start_clicked => { root.service_start_clicked(); }
+                        stop_clicked => { root.service_stop_clicked(); }
+                        remove_clicked => { root.service_remove_clicked(); }
+                    }
+
+                    // strategy detail
+                    Rectangle {
+                        horizontal-stretch: 10;
+                        background: ThemePalette.surface;
+                        border-width: 1px;
+                        border-color: ThemePalette.border;
+                        border-radius: ThemePalette.r-12;
+                        clip: true;
+                        vertical-stretch: 0;
+                        VerticalLayout {
+                            alignment: start;
+                            Rectangle {
+                                height: 48px;
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    Text {
+                                        text: "Strategy detail";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-12;
+                                        font-weight: 600;
+                                        color: ThemePalette.text-3;
+                                        letter-spacing: 0.6px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
+                            }
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 0px;
+                                DetailRow { key: "id"; value: root.has_strategy ? root.chosen_item.id : "—"; }
+                                DetailRow { key: "profile"; value: root.has_strategy ? root.chosen_item.pretty : "—"; }
+                                DetailRow { key: "variant"; value: root.chosen_item.alt != "" ? root.chosen_item.alt : "default"; }
+                                DetailRow { key: "core"; value: root.status.installed_version != "" ? root.status.installed_version : "—"; last: true; }
+                                Rectangle { height: 12px; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    AppButton {
+                                        text: "Change strategy";
+                                        size: "sm";
+                                        icon: @image-url("../../assets/icons/strategies.svg");
+                                        clicked => { root.pick_strategy_clicked(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 16px; }
+
+                // ── ACTION GRID ──
+                HorizontalLayout {
+                    spacing: 10px;
+                    ActionTile {
+                        icon: @image-url("../../assets/icons/download.svg");
+                        title: root.installed ? "Reinstall zapret" : "Install zapret";
+                        sub: root.installed ? "redownload core" : "fetch v" + (root.status.latest_version != "" ? root.status.latest_version : "latest");
+                        highlight: !root.installed;
+                        enabled: !root.is_busy;
+                        clicked => { root.install_clicked(); }
+                    }
+                    ActionTile {
+                        icon: @image-url("../../assets/icons/refresh.svg");
+                        title: root.has-update ? "Update available" : "Check for updates";
+                        sub: root.has-update ? root.status.installed_version + " → " + root.status.latest_version : "github.com / flowseal";
+                        highlight: root.has-update;
+                        enabled: !root.is_busy;
+                        clicked => { root.update_clicked(); }
+                    }
+                    ActionTile {
+                        icon: @image-url("../../assets/icons/folder.svg");
+                        title: "Open installation folder";
+                        sub: "…AppData\\Roaming\\zapret-ui";
+                        enabled: root.installed;
+                        clicked => { root.open_folder_clicked(); }
+                    }
                 }
             }
+            Rectangle { } // right spacer keeps the column left-aligned
         }
     }
 }

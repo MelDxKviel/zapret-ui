@@ -253,6 +253,7 @@ impl Runner for ProcessRunner {
             running_mode: mode,
             active_strategy: detected_strategy,
             winws_pid,
+            service_installed: false,
         }
     }
 }

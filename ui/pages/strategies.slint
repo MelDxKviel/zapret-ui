@@ -1,132 +1,249 @@
 import { ThemePalette, StrategyItem } from "../tokens.slint";
 import { AppButton } from "../components/button.slint";
+import { AppInput } from "../components/input.slint";
 import { ListView } from "std-widgets.slint";
-
-component CategoryBadge inherits Rectangle {
-    in property <string> label;
-    in property <bool> highlight: false;
-
-    background: root.highlight ? ThemePalette.accent-success-glow : ThemePalette.border;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: root.highlight ? ThemePalette.accent-success : transparent;
-    height: 20px;
-    horizontal-stretch: 0;
-    width: badge-layout.preferred-width + 16px;
-
-    badge-layout := HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        Text {
-            text: root.label;
-            font-family: ThemePalette.font-family;
-            font-size: ThemePalette.font-size-xs;
-            font-weight: 700;
-            color: root.highlight ? ThemePalette.accent-success : ThemePalette.text-secondary;
-            vertical-alignment: center;
-        }
-    }
-}
 
 export component StrategiesPage inherits Rectangle {
     in property <[StrategyItem]> strategies_model;
     in property <string> active_strategy_id;
     in property <string> selected_strategy;
     in property <bool> is_busy;
+    in-out property <string> query;
 
-    callback strategy_selected(string);
+    callback picked(StrategyItem);
+    callback search_changed(string);
 
     background: transparent;
 
-    VerticalLayout {
-        spacing: 14px;
-        padding: 24px;
+    pure function pad2(n: int) -> string { return n < 10 ? "0\{n}" : "\{n}"; }
 
+    HorizontalLayout {
         VerticalLayout {
-            spacing: 4px;
-            Text {
-                text: "Strategies";
-                font-family: ThemePalette.font-family;
-                font-size: ThemePalette.font-size-lg;
-                font-weight: 700;
-                color: ThemePalette.text-primary;
-            }
-            Text {
-                text: "Pick a preset, then start it from Home. If one doesn't work for your ISP, try the next ALT.";
-                font-family: ThemePalette.font-family;
-                font-size: ThemePalette.font-size-xs;
-                color: ThemePalette.text-muted;
-            }
-        }
+            horizontal-stretch: 0;
+            width: min(parent.width - 64px, 980px);
+            padding-left: 32px;
+            padding-top: 28px;
+            padding-right: 32px;
+            padding-bottom: 28px;
+            spacing: 0px;
 
-        ListView {
+            // page-head
+            VerticalLayout {
+                spacing: 2px;
+                padding-bottom: 20px;
+                Text {
+                    text: "Strategies";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-22;
+                    font-weight: 600;
+                    color: ThemePalette.text;
+                }
+                Text {
+                    text: "Pick a desync preset. If the default doesn't unblock your ISP, try ALT1 → ALT2 → ALT3…";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    color: ThemePalette.text-3;
+                }
+            }
+            Rectangle { height: 1px; background: ThemePalette.divider; }
+            Rectangle { height: 18px; }
+
+            // search + sort row
+            HorizontalLayout {
+                spacing: 12px;
+                AppInput {
+                    horizontal-stretch: 1;
+                    field-height: 36px;
+                    icon: @image-url("../../assets/icons/search.svg");
+                    placeholder: "Search by id, ALT number, or description…";
+                    text <=> root.query;
+                    edited(t) => { root.search_changed(t); }
+                    if root.query != "" : AppButton {
+                        text: "clear";
+                        variant: "ghost";
+                        size: "sm";
+                        clicked => { root.query = ""; root.search_changed(""); }
+                    }
+                }
+                AppButton {
+                    text: "Sort: name";
+                    icon: @image-url("../../assets/icons/filter.svg");
+                }
+            }
+
+            Rectangle { height: 14px; }
+
+            // list
+            Rectangle {
                 vertical-stretch: 1;
-                for item in root.strategies_model : Rectangle {
-                    property <bool> is_active: root.active_strategy_id == item.id;
-                    property <bool> is_selected: root.selected_strategy == item.id;
+                border-width: 1px;
+                border-color: ThemePalette.border;
+                border-radius: ThemePalette.r-12;
+                background: ThemePalette.surface;
+                clip: true;
 
-                    // Outer slot includes bottom gap so cards don't touch
-                    height: 128px;
-                    background: transparent;
+                if root.strategies_model.length == 0 : Text {
+                    text: "No strategies match \"" + root.query + "\".";
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    color: ThemePalette.text-3;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
 
-                    card := Rectangle {
-                        y: 0;
-                        height: 116px;
-                        background: (is_active || is_selected) ? ThemePalette.accent-primary-glow : ThemePalette.glass-bg;
-                        border-radius: 12px;
-                        border-width: 1px;
-                        border-color: is_active ? ThemePalette.accent-success :
-                                      (is_selected ? ThemePalette.accent-primary : ThemePalette.glass-border);
+                ListView {
+                    for item[idx] in root.strategies_model : row := Rectangle {
+                        property <bool> is-active: root.active_strategy_id == item.id;
+                        property <bool> is-selected: root.selected_strategy == item.id;
+                        height: 70px;
+                        background: row-ta.has-hover ? ThemePalette.surface-hover : transparent;
+                        animate background { duration: 120ms; }
+
+                        Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
+
+                        row-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.picked(item); }
+                        }
 
                         HorizontalLayout {
-                            padding: 16px;
+                            padding-left: 16px;
+                            padding-right: 16px;
                             spacing: 16px;
 
+                            // index
+                            VerticalLayout {
+                                alignment: center;
+                                width: 28px;
+                                Text {
+                                    text: root.pad2(idx + 1);
+                                    font-family: ThemePalette.font-mono;
+                                    font-size: ThemePalette.fs-11;
+                                    color: ThemePalette.text-4;
+                                    horizontal-alignment: right;
+                                }
+                            }
+
+                            // main
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                spacing: 6px;
-
-                                Text {
-                                    text: item.display_name;
-                                    font-family: ThemePalette.font-family;
-                                    font-size: ThemePalette.font-size-base;
-                                    font-weight: 700;
-                                    color: ThemePalette.text-primary;
-                                    overflow: elide;
-                                }
-
+                                alignment: center;
+                                spacing: 4px;
                                 HorizontalLayout {
                                     spacing: 6px;
                                     alignment: start;
-                                    CategoryBadge { label: item.category; }
-                                    if is_active : CategoryBadge { label: "Running"; highlight: true; }
-                                    if is_selected && !is_active : CategoryBadge { label: "Selected"; highlight: true; }
+                                    Text {
+                                        text: item.display_name;
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-13;
+                                        font-weight: 600;
+                                        color: ThemePalette.text;
+                                        vertical-alignment: center;
+                                    }
+                                    if item.alt != "" : Rectangle {
+                                        horizontal-stretch: 0;
+                                        width: chip-txt.preferred-width + 10px;
+                                        height: 17px;
+                                        border-radius: ThemePalette.r-4;
+                                        background: ThemePalette.surface-2;
+                                        chip-txt := Text {
+                                            text: item.alt;
+                                            font-family: ThemePalette.font-mono;
+                                            font-size: ThemePalette.fs-10;
+                                            color: ThemePalette.text-3;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
                                 }
-
                                 Text {
                                     text: item.description;
-                                    font-family: ThemePalette.font-family;
-                                    font-size: ThemePalette.font-size-xs;
-                                    color: ThemePalette.text-secondary;
+                                    font-family: ThemePalette.font-sans;
+                                    font-size: ThemePalette.fs-12;
+                                    color: ThemePalette.text-3;
                                     wrap: word-wrap;
                                     overflow: elide;
                                 }
                             }
 
+                            // badge
                             VerticalLayout {
-                                width: 150px;
-                                spacing: 8px;
                                 alignment: center;
+                                horizontal-stretch: 0;
+                                if row.is-active : Rectangle {
+                                    width: run-lay.preferred-width + 16px;
+                                    height: 22px;
+                                    border-radius: ThemePalette.r-full;
+                                    background: ThemePalette.accent-soft;
+                                    border-width: 1px;
+                                    border-color: ThemePalette.accent-line;
+                                    run-lay := HorizontalLayout {
+                                        spacing: 5px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        alignment: center;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: ThemePalette.accent; }
+                                        }
+                                        Text {
+                                            text: "running";
+                                            font-family: ThemePalette.font-mono;
+                                            font-size: ThemePalette.fs-11;
+                                            color: ThemePalette.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                if row.is-selected && !row.is-active : Rectangle {
+                                    width: sel-txt.preferred-width + 16px;
+                                    height: 22px;
+                                    border-radius: ThemePalette.r-full;
+                                    background: ThemePalette.surface-2;
+                                    border-width: 1px;
+                                    border-color: ThemePalette.border-strong;
+                                    sel-txt := Text {
+                                        text: "selected";
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-11;
+                                        color: ThemePalette.text;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
 
-                                AppButton {
-                                    text: is_selected ? "Selected ✓" : "Select";
-                                    variant: is_selected ? "success" : "primary";
-                                    clicked => { root.strategy_selected(item.id); }
+                            // action
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 0;
+                                width: 110px;
+                                HorizontalLayout {
+                                    alignment: end;
+                                    if row.is-active : AppButton {
+                                        text: "Active";
+                                        size: "sm";
+                                        icon: @image-url("../../assets/icons/check.svg");
+                                        enabled: false;
+                                    }
+                                    if row.is-selected && !row.is-active : AppButton {
+                                        text: "Selected ✓";
+                                        variant: "primary";
+                                        size: "sm";
+                                        clicked => { root.picked(item); }
+                                    }
+                                    if !row.is-active && !row.is-selected : AppButton {
+                                        text: "Select";
+                                        size: "sm";
+                                        clicked => { root.picked(item); }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            }
         }
+        Rectangle { }
     }
 }

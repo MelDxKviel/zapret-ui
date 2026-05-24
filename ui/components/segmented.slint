@@ -1,0 +1,73 @@
+import { ThemePalette } from "../tokens.slint";
+import { Icon } from "icon.slint";
+
+export struct SegmentOption {
+    value: string,
+    label: string,
+    icon: image,
+}
+
+// .segmented — pill group over a --bg-2 track. The active segment is a raised
+// --surface chip. Used for the theme toggle and the log-level filter.
+export component Segmented inherits Rectangle {
+    in property <[SegmentOption]> options;
+    in-out property <string> selected;
+    in property <length> seg-height: 26px;
+    in property <length> seg-pad: 12px;
+    in property <length> seg-fs: ThemePalette.fs-12;
+    in property <length> icon-size: 13px;
+
+    callback changed(string);
+
+    horizontal-stretch: 0;
+    height: root.seg-height + 4px;
+    width: track.preferred-width + 4px;
+    border-radius: ThemePalette.r-8;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    background: ThemePalette.bg-2;
+
+    track := HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        for opt in root.options : seg := Rectangle {
+            property <bool> active: root.selected == opt.value;
+            horizontal-stretch: 0;
+            width: seg-lay.preferred-width;
+            height: root.seg-height;
+            border-radius: ThemePalette.r-6;
+            background: seg.active ? ThemePalette.surface : transparent;
+            animate background { duration: 120ms; easing: ease-out; }
+
+            seg-lay := HorizontalLayout {
+                alignment: center;
+                spacing: 6px;
+                padding-left: root.seg-pad;
+                padding-right: root.seg-pad;
+
+                if opt.icon.width > 0 : Icon {
+                    source: opt.icon;
+                    size: root.icon-size;
+                    tint: seg.active ? ThemePalette.text : ThemePalette.text-3;
+                }
+                if opt.label != "" : Text {
+                    text: opt.label;
+                    font-family: ThemePalette.font-sans;
+                    font-size: root.seg-fs;
+                    font-weight: 500;
+                    color: seg.active ? ThemePalette.text : ThemePalette.text-3;
+                    vertical-alignment: center;
+                }
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.selected = opt.value;
+                    root.changed(opt.value);
+                }
+            }
+        }
+    }
+}

@@ -1,50 +1,33 @@
 import { ThemePalette } from "../tokens.slint";
 
+// .switch — 36×20 track, 16×16 thumb, lime fill when on, 160ms ease-in-out.
 export component AppSwitch inherits Rectangle {
     in-out property <bool> checked;
-    in property <string> text;
-    
+    in property <bool> enabled: true;
+
     callback toggled(bool);
 
-    height: 24px;
-    background: transparent;
+    width: 36px;
+    height: 20px;
+    border-radius: ThemePalette.r-full;
+    background: root.checked ? ThemePalette.accent : ThemePalette.border-strong;
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 160ms; easing: ease-in-out; }
 
-    HorizontalLayout {
-        alignment: start;
-        spacing: 12px;
-
-        track := Rectangle {
-            width: 42px;
-            height: 22px;
-            border-radius: 11px;
-            background: root.checked ? ThemePalette.accent-primary : (ThemePalette.is-dark ? #202635 : #e5e7eb);
-            border-width: 1px;
-            border-color: root.checked ? ThemePalette.accent-primary : ThemePalette.border;
-            
-            animate background { duration: 120ms; }
-            
-            thumb := Rectangle {
-                x: root.checked ? 21px : 2px;
-                y: 2px;
-                width: 16px;
-                height: 16px;
-                border-radius: 8px;
-                background: #ffffff;
-                
-                animate x { duration: 120ms; easing: ease-in-out; }
-            }
-        }
-
-        if (root.text != "") : Text {
-            text: root.text;
-            font-family: ThemePalette.font-family;
-            font-size: ThemePalette.font-size-sm;
-            color: ThemePalette.text-primary;
-            vertical-alignment: center;
-        }
+    Rectangle {
+        x: root.checked ? 18px : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.checked ? ThemePalette.accent-ink : ThemePalette.surface;
+        animate x { duration: 160ms; easing: ease-in-out; }
+        animate background { duration: 160ms; easing: ease-in-out; }
     }
 
     TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => {
             root.checked = !root.checked;
             root.toggled(root.checked);
