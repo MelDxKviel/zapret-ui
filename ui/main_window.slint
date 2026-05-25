@@ -159,6 +159,10 @@ export component MainWindow inherits Window {
     in-out property <int> test_current: 0;
     in-out property <int> test_total: 0;
     in-out property <string> test_current_strategy: "";
+    // Variant label (ALT / SIMPLE FAKE / …) of the strategy under test, or its
+    // base name when it has no variant — computed by Rust (split_alt). Shown in
+    // the sidebar status pill while a test run is in flight.
+    in-out property <string> test_current_alt: "";
     in-out property <string> test_best_id: "";
 
     // Resolved strategy items for display. `selected_item` is set when the user
@@ -384,6 +388,7 @@ export component MainWindow inherits Window {
                         border-width: 1px;
                         border-color: ThemePalette.border;
                         background: pill-ta.has-hover ? ThemePalette.surface-hover : ThemePalette.surface;
+                        clip: true;
                         animate background { duration: 120ms; }
                         pill-ta := TouchArea {
                             mouse-cursor: pointer;
@@ -395,30 +400,41 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
-                            spacing: 10px;
+                            spacing: 8px;
                             VerticalLayout {
                                 alignment: center;
                                 StatusDot {
-                                    variant: root.running ? "active" : (root.status_installed ? "idle" : "danger");
+                                    variant: root.test_running ? "testing"
+                                        : root.running ? "active"
+                                        : (root.status_installed ? "idle" : "danger");
                                 }
                             }
                             Text {
-                                text: root.running
+                                horizontal-stretch: 0;
+                                text: root.test_running ? I18n.t(I18n.lang, "sidebar.status_testing")
+                                    : root.running
                                         ? (root.status_running_mode == "WindowsService" ? I18n.t(I18n.lang, "sidebar.status_service_running") : I18n.t(I18n.lang, "sidebar.status_bypass_active"))
                                         : (root.status_installed ? I18n.t(I18n.lang, "sidebar.status_idle") : I18n.t(I18n.lang, "sidebar.status_not_installed"));
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
                                 font-weight: 500;
-                                color: ThemePalette.text-2;
+                                color: root.test_running ? ThemePalette.info : ThemePalette.text-2;
                                 vertical-alignment: center;
                             }
-                            Rectangle { }
-                            if root.running && root.active_item.id != "" : Text {
-                                text: root.active_item.alt != "" ? root.active_item.alt : root.active_item.pretty;
+                            // Variant chip — right-aligned, takes the slack and elides so long
+                            // names (e.g. "FAKE TLS AUTO") stay inside the pill instead of
+                            // spilling past its border.
+                            Text {
+                                horizontal-stretch: 1;
+                                text: root.test_running ? root.test_current_alt
+                                    : (root.running && root.active_item.id != "") ? (root.active_item.alt != "" ? root.active_item.alt : root.active_item.pretty)
+                                    : "";
                                 font-family: ThemePalette.font-mono;
                                 font-size: ThemePalette.fs-10;
-                                color: ThemePalette.text-3;
+                                color: root.test_running ? ThemePalette.info : ThemePalette.text-3;
+                                horizontal-alignment: right;
                                 vertical-alignment: center;
+                                overflow: elide;
                             }
                         }
                     }

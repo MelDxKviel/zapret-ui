@@ -25,6 +25,7 @@
 
   "sidebar.status_service_running": "Служба работает",
   "sidebar.status_bypass_active": "Обход активен",
+  "sidebar.status_testing": "Тестируется",
   "sidebar.status_idle": "Ожидание",
   "sidebar.status_not_installed": "Не установлено",
 

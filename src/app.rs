@@ -1002,12 +1002,17 @@ impl App {
                                 ui.set_test_current(0);
                                 ui.set_test_total(total as i32);
                                 ui.set_test_current_strategy("".into());
+                                ui.set_test_current_alt("".into());
                                 rebuild_test_results(&ui);
                             }
                             UiEvent::TestProgress { index, total, strategy } => {
                                 ui.set_test_running(true);
                                 ui.set_test_current(index as i32);
                                 ui.set_test_total(total as i32);
+                                // Variant label for the sidebar pill (ALT/SIMPLE FAKE),
+                                // falling back to the base name when there's no variant.
+                                let (pretty, alt) = split_alt(&strategy);
+                                ui.set_test_current_alt(if alt.is_empty() { pretty } else { alt }.into());
                                 ui.set_test_current_strategy(strategy.into());
                             }
                             UiEvent::TestResult(result) => {
@@ -1021,6 +1026,7 @@ impl App {
                                 ui.set_test_best_id(best.as_str().into());
                                 ui.set_test_running(false);
                                 ui.set_test_current_strategy("".into());
+                                ui.set_test_current_alt("".into());
                                 rebuild_test_results(&ui);
 
                                 // Auto-select the winner as the user's strategy.

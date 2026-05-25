@@ -1,55 +1,61 @@
 import { ThemePalette } from "../tokens.slint";
 
 // 8×8 status dot. Variants: "idle" (muted), "active" (lime + soft glow halo +
-// pulsing ring), "warn" (amber + soft glow), "danger" (red).
+// pulsing ring), "testing" (blue, same pulse as active), "warn" (amber + soft
+// glow), "danger" (red).
 // The halo / pulse ring overflow the 8×8 box on purpose (like CSS box-shadow),
 // so callers should leave a little breathing room around it.
 export component StatusDot inherits Rectangle {
-    in property <string> variant: "idle"; // idle | active | warn | danger
+    in property <string> variant: "idle"; // idle | active | testing | warn | danger
     in property <length> dot-size: 8px;
 
     property <bool> is-active: root.variant == "active";
+    property <bool> is-testing: root.variant == "testing";
     property <bool> is-warn: root.variant == "warn";
+    // Both active and testing get the pulsing ring; they differ only in colour.
+    property <bool> is-pulsing: root.is-active || root.is-testing;
+    property <color> pulse-color: root.is-testing ? ThemePalette.info : ThemePalette.accent;
 
     property <color> dot-color:
-        root.variant == "active" ? ThemePalette.accent :
-        root.variant == "warn"   ? ThemePalette.warning :
-        root.variant == "danger" ? ThemePalette.danger :
+        root.variant == "active"  ? ThemePalette.accent :
+        root.variant == "testing" ? ThemePalette.info :
+        root.variant == "warn"    ? ThemePalette.warning :
+        root.variant == "danger"  ? ThemePalette.danger :
         ThemePalette.text-4;
 
     width: root.dot-size;
     height: root.dot-size;
 
-    // Drives the pulse: loops 0→1 forever while active.
-    property <float> t: root.is-active ? 1.0 : 0.0;
+    // Drives the pulse: loops 0→1 forever while active/testing.
+    property <float> t: root.is-pulsing ? 1.0 : 0.0;
     animate t {
         duration: 1800ms;
-        iteration-count: root.is-active ? -1 : 1;
+        iteration-count: root.is-pulsing ? -1 : 1;
         easing: ease-out;
     }
 
-    // Pulsing ring (active only): scales out from the dot while fading.
-    if root.is-active : Rectangle {
+    // Pulsing ring (active/testing only): scales out from the dot while fading.
+    if root.is-pulsing : Rectangle {
         property <length> sz: root.dot-size + root.t * (root.dot-size * 1.4);
         width: self.sz;
         height: self.sz;
         x: (root.width - self.sz) / 2;
         y: (root.height - self.sz) / 2;
         border-radius: self.sz / 2;
-        background: ThemePalette.accent;
+        background: root.pulse-color;
         opacity: 0.6 * (1.0 - root.t);
     }
 
-    // Static soft-glow halo (active + warn).
-    if root.is-active || root.is-warn : Rectangle {
-        property <length> pad: root.is-active ? 4px : 3px;
+    // Static soft-glow halo (active/testing + warn).
+    if root.is-pulsing || root.is-warn : Rectangle {
+        property <length> pad: root.is-pulsing ? 4px : 3px;
         property <length> sz: root.dot-size + self.pad * 2;
         width: self.sz;
         height: self.sz;
         x: (root.width - self.sz) / 2;
         y: (root.height - self.sz) / 2;
         border-radius: self.sz / 2;
-        background: root.is-active ? ThemePalette.accent-soft : ThemePalette.warning-soft;
+        background: root.is-active ? ThemePalette.accent-soft : root.is-testing ? ThemePalette.info-soft : ThemePalette.warning-soft;
     }
 
     // The dot itself.
