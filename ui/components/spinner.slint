@@ -1,0 +1,37 @@
+import { ThemePalette } from "../tokens.slint";
+
+// A vertically-centred, continuously-rotating "loading" spinner (the refresh
+// glyph spun forever while `running`).
+//
+// Two non-obvious things, both learned the hard way:
+//   • Centering: a bare Image/Rectangle top-aligns inside a HorizontalLayout
+//     cell, so — exactly like `Icon` — we wrap it in a centering VerticalLayout.
+//   • Motion: the angle is driven by `animation-tick()` (a binding that calls it
+//     re-evaluates every frame), which loops with zero ceremony. An `animate`
+//     block would *not* fire here — it only reacts to a value change, and a plain
+//     `running ? 360deg : 0deg` binding parks at its target and never moves.
+//     Callers only mount the Spinner while it should spin, so the per-frame
+//     binding costs nothing when idle.
+export component Spinner inherits VerticalLayout {
+    in property <image> source: @image-url("../../assets/icons/refresh.svg");
+    in property <length> size: 16px;
+    in property <color> tint: ThemePalette.text;
+    in property <bool> running: true;
+    in property <duration> period: 850ms;
+
+    alignment: center;
+    horizontal-stretch: 0;
+
+    property <angle> spin: root.running
+        ? (mod(animation-tick(), root.period) / root.period) * 360deg
+        : 0deg;
+
+    Image {
+        source: root.source;
+        width: root.size;
+        height: root.size;
+        colorize: root.tint;
+        // transform-origin defaults to the element centre, so it spins in place.
+        transform-rotation: root.spin;
+    }
+}

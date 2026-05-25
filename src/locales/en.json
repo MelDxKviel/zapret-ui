@@ -42,6 +42,8 @@
   "service.running_desc_a": "Bypass active as service · running ",
   "service.running_desc_b": ". Restarts automatically every boot.",
   "service.stop_btn": "Stop service",
+  "service.starting": "Starting…",
+  "service.stopping": "Stopping…",
 
   "home.title": "Dashboard",
   "home.subtitle": "Manage zapret bypass — run as user process or install as Windows service.",
@@ -65,6 +67,8 @@
   "home.btn_pick": "PICK STRATEGY",
   "home.btn_stop": "STOP",
   "home.btn_engage": "ENGAGE",
+  "home.btn_starting": "STARTING…",
+  "home.btn_stopping": "STOPPING…",
   "home.stat_app": "APP",
   "home.stat_core": "ZAPRET CORE",
   "home.stat_latest": "LATEST",

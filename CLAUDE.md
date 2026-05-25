@@ -66,7 +66,7 @@ Every user-visible string is written as `I18n.t(I18n.lang, "some.key")` — `I18
 
 ## Notes / traps
 
-- `src/zapret/strategies.rs` and `tools/extract_strategies.rs` are **legacy/dead**: the runtime uses `LocalStrategyCatalog` (`.bat` scanning), not the auto-generated `STRATEGIES` const. Don't wire new code to them.
+- Strategies are discovered **at runtime** by `LocalStrategyCatalog` (`.bat` scanning) — there is no hardcoded strategy list. (The old `src/zapret/strategies.rs` auto-generated `STRATEGIES` const and its `tools/extract_strategies.rs` generator have been removed.)
 - `src/self_update.rs` is a stub.
 - Paths: config `%APPDATA%\zapret-ui\config.toml`, install dir `%APPDATA%\zapret-ui\zapret\` (overridable via `install_dir_override`), logs `%APPDATA%\zapret-ui\logs\app.log`. `AppConfig::load` self-heals a corrupt config by backing it up to `.toml.bak`.
 - Logging (`src/log.rs`) tees `tracing` output to both the rolling log file and the broadcast channel that feeds the in-app Logs page.

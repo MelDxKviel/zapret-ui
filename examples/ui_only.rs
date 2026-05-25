@@ -197,13 +197,64 @@ fn main() -> anyhow::Result<()> {
     ui.set_status_installed_version("v1.0.0-mock".into());
     ui.set_status_running_mode("None".into());
 
-    // Wire up some callbacks with simple logging
-    ui.on_start_clicked(|strat_id| {
-        println!("UI: Start clicked with strategy: {}", strat_id);
-    });
-    ui.on_stop_clicked(|| {
-        println!("UI: Stop clicked");
-    });
+    // Wire up some callbacks with simple logging. Start/Stop simulate the real
+    // backend round-trip with a short delay so the power-button spinner +
+    // transitional label are previewable (the window clears `is_busy` once the
+    // mock "status" lands).
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_start_clicked(move |strat_id| {
+            println!("UI: Start clicked with strategy: {}", strat_id);
+            let ui_weak = ui_weak.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(1400), move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_status_running_mode("UserProcess".into());
+                    ui.set_status_winws_pid(4242);
+                    ui.set_is_busy(false);
+                }
+            });
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_stop_clicked(move || {
+            println!("UI: Stop clicked");
+            let ui_weak = ui_weak.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(1400), move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_status_running_mode("None".into());
+                    ui.set_status_winws_pid(0);
+                    ui.set_is_busy(false);
+                }
+            });
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_service_start_clicked(move || {
+            println!("UI: Service start clicked");
+            let ui_weak = ui_weak.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(1400), move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_status_running_mode("WindowsService".into());
+                    ui.set_is_busy(false);
+                }
+            });
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_service_stop_clicked(move || {
+            println!("UI: Service stop clicked");
+            let ui_weak = ui_weak.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(1400), move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_status_running_mode("None".into());
+                    ui.set_is_busy(false);
+                }
+            });
+        });
+    }
     ui.on_install_clicked(|| {
         println!("UI: Install clicked");
     });

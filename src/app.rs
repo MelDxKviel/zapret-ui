@@ -604,8 +604,10 @@ impl App {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_ipset_busy(true);
                     ui.set_ipset_msg("".into());
+                    if cmd_tx_c.try_send(BackendCmd::UpdateIpsetList).is_err() {
+                        ui.set_ipset_busy(false);
+                    }
                 }
-                let _ = cmd_tx_c.try_send(BackendCmd::UpdateIpsetList);
             });
         }
         {
@@ -615,8 +617,10 @@ impl App {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_hosts_busy(true);
                     ui.set_hosts_msg("".into());
+                    if cmd_tx_c.try_send(BackendCmd::UpdateHostsFile).is_err() {
+                        ui.set_hosts_busy(false);
+                    }
                 }
-                let _ = cmd_tx_c.try_send(BackendCmd::UpdateHostsFile);
             });
         }
         // Persist the notifications toggle (Settings → Application).

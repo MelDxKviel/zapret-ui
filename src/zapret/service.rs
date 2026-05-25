@@ -106,8 +106,19 @@ impl ServiceCtl for WindowsServiceCtl {
         )?;
         let service = manager.open_service(
             &self.service_name,
-            ServiceAccess::ALL_ACCESS,
+            ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
         )?;
+
+        // Stop the service first; Windows will not actually remove it until all
+        // handles are closed and it has stopped running. Without this the service
+        // entry stays in the SCM and the next `install` call fails with
+        // ERROR_SERVICE_MARKED_FOR_DELETE.
+        if let Ok(status) = service.query_status() {
+            if status.current_state != ServiceState::Stopped {
+                let _ = service.stop();
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            }
+        }
 
         service.delete()?;
         Ok(())

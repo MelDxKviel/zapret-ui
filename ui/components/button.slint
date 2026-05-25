@@ -1,14 +1,18 @@
 import { ThemePalette } from "../tokens.slint";
 import { Icon } from "icon.slint";
+import { Spinner } from "spinner.slint";
 
 // .btn — variants: default | primary | danger | ghost. Sizes: sm | base | lg.
 // Icon slot on the left. Disabled renders at 0.45 opacity and ignores input.
+// When `busy` is set the icon slot shows a rotating spinner and the button
+// stops accepting input (use it for actions whose result lands a moment later).
 export component AppButton inherits Rectangle {
     in property <string> text;
     in property <image> icon;
     in property <string> variant: "default"; // default | primary | danger | ghost
     in property <string> size: "base";        // sm | base | lg
     in property <bool> enabled: true;
+    in property <bool> busy: false;
     in property <length> icon-size: 14px;
 
     callback clicked;
@@ -16,7 +20,8 @@ export component AppButton inherits Rectangle {
     property <bool> is-primary: root.variant == "primary";
     property <bool> is-danger: root.variant == "danger";
     property <bool> is-ghost: root.variant == "ghost";
-    property <bool> hovered: ta.has-hover && root.enabled;
+    property <bool> active: root.enabled && !root.busy;
+    property <bool> hovered: ta.has-hover && root.active;
 
     property <length> h: root.size == "sm" ? 26px : root.size == "lg" ? 40px : 32px;
     property <length> pad: root.size == "sm" ? 10px : root.size == "lg" ? 18px : 14px;
@@ -34,7 +39,9 @@ export component AppButton inherits Rectangle {
     width: lay.preferred-width;
     border-radius: root.size == "sm" ? ThemePalette.r-6 : root.size == "lg" ? ThemePalette.r-10 : ThemePalette.r-8;
     border-width: root.is-ghost ? 0px : 1px;
-    opacity: root.enabled ? 1.0 : 0.45;
+    // Disabled fades right out; busy stays mostly lit so it reads as "working".
+    opacity: !root.enabled ? 0.45 : root.busy ? 0.8 : 1.0;
+    animate opacity { duration: 120ms; }
 
     background:
         root.is-primary ? (root.hovered ? ThemePalette.accent-hover : ThemePalette.accent) :
@@ -55,7 +62,12 @@ export component AppButton inherits Rectangle {
         padding-left: root.pad;
         padding-right: root.pad;
 
-        if root.icon.width > 0 : Icon {
+        if root.busy : Spinner {
+            size: root.icon-size;
+            tint: root.fg;
+        }
+
+        if !root.busy && root.icon.width > 0 : Icon {
             source: root.icon;
             size: root.icon-size;
             tint: root.fg;
@@ -73,8 +85,8 @@ export component AppButton inherits Rectangle {
     }
 
     ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        enabled: root.active;
+        mouse-cursor: root.active ? MouseCursor.pointer : MouseCursor.default;
         clicked => { root.clicked(); }
     }
 }

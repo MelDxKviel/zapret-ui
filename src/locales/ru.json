@@ -42,6 +42,8 @@
   "service.running_desc_a": "Обход активен как служба · выполняется ",
   "service.running_desc_b": ". Автоматически перезапускается при каждой загрузке.",
   "service.stop_btn": "Остановить службу",
+  "service.starting": "Запуск…",
+  "service.stopping": "Остановка…",
 
   "home.title": "Панель",
   "home.subtitle": "Управление обходом zapret — запуск как пользовательский процесс или установка как служба Windows.",
@@ -65,6 +67,8 @@
   "home.btn_pick": "ВЫБРАТЬ",
   "home.btn_stop": "СТОП",
   "home.btn_engage": "ЗАПУСК",
+  "home.btn_starting": "ЗАПУСК…",
+  "home.btn_stopping": "ОСТАНОВКА…",
   "home.stat_app": "ПРИЛОЖЕНИЕ",
   "home.stat_core": "ЯДРО ZAPRET",
   "home.stat_latest": "ПОСЛЕДНЕЕ",

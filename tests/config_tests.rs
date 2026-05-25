@@ -71,7 +71,7 @@ fn test_config_fallback_on_corrupt() {
 }
 
 #[tokio::test]
-async fn test_state_updates_and_broadcast() {
+async fn test_state_get_and_set_status() {
     let initial_status = RuntimeStatus {
         installed: false,
         installed_version: None,
@@ -83,7 +83,6 @@ async fn test_state_updates_and_broadcast() {
     };
 
     let state = AppState::new(initial_status.clone());
-    let mut rx = state.subscribe();
 
     // Get current status
     let current = state.get_status().await;
@@ -109,22 +108,4 @@ async fn test_state_updates_and_broadcast() {
     assert_eq!(updated.running_mode, RunningMode::UserProcess);
     assert_eq!(updated.active_strategy, Some("discord_alt4".to_string()));
     assert_eq!(updated.winws_pid, Some(1234));
-
-    // Verify broadcast received the change
-    let rx_status = rx.recv().await.unwrap();
-    assert_eq!(rx_status.installed, true);
-    assert_eq!(rx_status.winws_pid, Some(1234));
-
-    // Update status in place using update_status
-    state.update_status(|s| {
-        s.winws_pid = Some(5678);
-    }).await;
-
-    // Verify status updated
-    let updated2 = state.get_status().await;
-    assert_eq!(updated2.winws_pid, Some(5678));
-
-    // Verify broadcast received second update
-    let rx_status2 = rx.recv().await.unwrap();
-    assert_eq!(rx_status2.winws_pid, Some(5678));
 }

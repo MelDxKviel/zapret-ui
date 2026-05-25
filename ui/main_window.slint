@@ -130,6 +130,11 @@ export component MainWindow inherits Window {
 
     in-out property <float> progress: 0.0;
     in-out property <bool> is_busy: false;
+    // Which bypass transition is in flight: "start" | "stop" | "". Set the instant
+    // the user clicks (for immediate spinner feedback) and cleared by Rust when the
+    // resulting status/error lands and flips `is_busy` back off.
+    in-out property <string> pending_op: "";
+    changed is_busy => { if (!root.is_busy) { root.pending_op = ""; } }
     in-out property <bool> has_update: false;
     in-out property <string> latest_version: "";
 
@@ -459,21 +464,24 @@ export component MainWindow inherits Window {
                     chosen_item: root.chosen_item;
                     has_strategy: root.has_strategy;
                     is_busy: root.is_busy;
+                    pending_op: root.pending_op;
                     is_admin: root.is_admin;
                     strategy_count: root.strategies.length;
                     uptime: root.uptime;
                     game_filter <=> root.game_filter;
                     game_filter_changed(v) => { root.set_game_filter(v); }
-                    start_clicked => { root.start_clicked(root.chosen_item.id); }
-                    stop_clicked => { root.stop_clicked(); }
+                    // Mark the transition + lock the UI the instant it's clicked; the
+                    // backend round-trip (and the spinner) ends when Status arrives.
+                    start_clicked => { root.pending_op = "start"; root.is_busy = true; root.start_clicked(root.chosen_item.id); }
+                    stop_clicked => { root.pending_op = "stop"; root.is_busy = true; root.stop_clicked(); }
                     install_clicked => { root.install_clicked(); }
                     update_clicked => { root.update_clicked(); }
                     open_folder_clicked => { root.open_folder_clicked(); }
                     pick_strategy_clicked => { root.current_page = "strategies"; }
                     refresh_clicked => { root.refresh_status_clicked(); }
                     service_install_clicked => { root.service_install_clicked(root.chosen_item.id); }
-                    service_start_clicked => { root.service_start_clicked(); }
-                    service_stop_clicked => { root.service_stop_clicked(); }
+                    service_start_clicked => { root.pending_op = "start"; root.is_busy = true; root.service_start_clicked(); }
+                    service_stop_clicked => { root.pending_op = "stop"; root.is_busy = true; root.service_stop_clicked(); }
                     service_remove_clicked => { root.service_remove_clicked(); }
                 }
             }

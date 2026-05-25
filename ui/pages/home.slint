@@ -3,6 +3,7 @@ import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { StatusDot } from "../components/status_dot.slint";
 import { Icon } from "../components/icon.slint";
+import { Spinner } from "../components/spinner.slint";
 import { Segmented } from "../components/segmented.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -11,6 +12,9 @@ import { ScrollView } from "std-widgets.slint";
 component ServiceCard inherits Rectangle {
     in property <AppStatus> status;
     in property <bool> is_busy;
+    // "start" | "stop" | "" — which bypass transition is in flight (for the
+    // spinner on the matching button).
+    in property <string> pending_op;
     in property <bool> has_strategy;
     in property <bool> is_admin;
     in property <StrategyItem> chosen_item;
@@ -125,10 +129,11 @@ component ServiceCard inherits Rectangle {
                     spacing: 8px;
                     alignment: start;
                     AppButton {
-                        text: I18n.t(I18n.lang, "service.start_btn");
+                        text: root.pending_op == "start" ? I18n.t(I18n.lang, "service.starting") : I18n.t(I18n.lang, "service.start_btn");
                         variant: "primary";
                         icon: @image-url("../../assets/icons/play.svg");
                         enabled: root.is_admin && !root.is_busy;
+                        busy: root.pending_op == "start";
                         clicked => { root.start_clicked(); }
                     }
                     AppButton {
@@ -155,10 +160,11 @@ component ServiceCard inherits Rectangle {
                     spacing: 8px;
                     alignment: start;
                     AppButton {
-                        text: I18n.t(I18n.lang, "service.stop_btn");
+                        text: root.pending_op == "stop" ? I18n.t(I18n.lang, "service.stopping") : I18n.t(I18n.lang, "service.stop_btn");
                         variant: "default";
                         icon: @image-url("../../assets/icons/stop.svg");
                         enabled: root.is_admin && !root.is_busy;
+                        busy: root.pending_op == "stop";
                         clicked => { root.stop_clicked(); }
                     }
                     AppButton {
@@ -317,6 +323,9 @@ export component HomePage inherits Rectangle {
     in property <StrategyItem> chosen_item;
     in property <bool> has_strategy;
     in property <bool> is_busy;
+    // "start" | "stop" | "" — the bypass transition currently in flight, used to
+    // drive the spinner + transitional label on the power button.
+    in property <string> pending_op;
     in property <bool> is_admin;
     in property <int> strategy_count;
     // Live bypass uptime in seconds — owned by MainWindow so it persists across
@@ -353,6 +362,8 @@ export component HomePage inherits Rectangle {
     property <string> dot-variant: !root.installed ? "danger" : root.running ? "active" : "idle";
 
     property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy && root.is_admin;
+    // A start/stop is mid-flight: power button shows a spinner + label and locks.
+    property <bool> transitioning: root.pending_op == "start" || root.pending_op == "stop";
 
     // Uptime is supplied by MainWindow (see `uptime` property above).
     property <int> up-h: floor(root.uptime / 3600);
@@ -377,7 +388,9 @@ export component HomePage inherits Rectangle {
                 // ── page-head ──
                 HorizontalLayout {
                     padding-bottom: 20px;
+                    spacing: 16px;
                     VerticalLayout {
+                        horizontal-stretch: 1;
                         spacing: 2px;
                         alignment: end;
                         Text {
@@ -392,10 +405,11 @@ export component HomePage inherits Rectangle {
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-13;
                             color: ThemePalette.text-3;
+                            wrap: word-wrap;
                         }
                     }
-                    Rectangle { }
                     VerticalLayout {
+                        horizontal-stretch: 0;
                         alignment: end;
                         AppButton {
                             text: I18n.t(I18n.lang, "common.refresh");
@@ -585,14 +599,22 @@ export component HomePage inherits Rectangle {
                                     }
                                 }
                                 // action button cell
-                                Rectangle {
+                                pwr := Rectangle {
                                     horizontal-stretch: 0;
                                     width: 200px;
-                                    background: !root.has_strategy ? ThemePalette.surface-2
+                                    // Foreground (icon + label) colour, shared by both.
+                                    property <color> fg: root.transitioning ? (root.pending_op == "stop" ? #ffffff : ThemePalette.accent-ink)
+                                        : !root.has_strategy ? ThemePalette.text
+                                        : root.running ? #ffffff
+                                        : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
+                                    background: root.transitioning ? (root.pending_op == "stop" ? ThemePalette.danger : ThemePalette.accent)
+                                        : !root.has_strategy ? ThemePalette.surface-2
                                         : root.running ? (pbta.has-hover ? ThemePalette.danger-hover : ThemePalette.danger)
                                         : !root.can-engage ? ThemePalette.surface-2
                                         : (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent);
-                                    animate background { duration: 120ms; }
+                                    // Mid-transition the button mutes slightly so it reads as "working".
+                                    opacity: root.transitioning ? 0.78 : 1.0;
+                                    animate background, opacity { duration: 120ms; }
                                     Rectangle {
                                         x: 0; width: 1px;
                                         background: ThemePalette.border-strong;
@@ -600,29 +622,32 @@ export component HomePage inherits Rectangle {
                                     HorizontalLayout {
                                         alignment: center;
                                         spacing: 12px;
-                                        Icon {
+                                        if root.transitioning : Spinner {
+                                            size: 18px;
+                                            tint: pwr.fg;
+                                        }
+                                        if !root.transitioning : Icon {
                                             source: !root.has_strategy ? @image-url("../../assets/icons/arrow-right.svg")
                                                 : root.running ? @image-url("../../assets/icons/stop.svg")
                                                 : @image-url("../../assets/icons/play.svg");
                                             size: 18px;
-                                            tint: !root.has_strategy ? ThemePalette.text
-                                                : root.running ? #ffffff
-                                                : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
+                                            tint: pwr.fg;
                                         }
                                         Text {
-                                            text: !root.has_strategy ? I18n.t(I18n.lang, "home.btn_pick") : root.running ? I18n.t(I18n.lang, "home.btn_stop") : I18n.t(I18n.lang, "home.btn_engage");
+                                            text: root.transitioning ? (root.pending_op == "stop" ? I18n.t(I18n.lang, "home.btn_stopping") : I18n.t(I18n.lang, "home.btn_starting"))
+                                                : !root.has_strategy ? I18n.t(I18n.lang, "home.btn_pick")
+                                                : root.running ? I18n.t(I18n.lang, "home.btn_stop")
+                                                : I18n.t(I18n.lang, "home.btn_engage");
                                             font-family: ThemePalette.font-sans;
                                             font-size: ThemePalette.fs-16;
                                             font-weight: 600;
                                             letter-spacing: 0.3px;
-                                            color: !root.has_strategy ? ThemePalette.text
-                                                : root.running ? #ffffff
-                                                : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
+                                            color: pwr.fg;
                                             vertical-alignment: center;
                                         }
                                     }
                                     pbta := TouchArea {
-                                        enabled: !root.has_strategy || root.running || root.can-engage;
+                                        enabled: !root.transitioning && (!root.has_strategy || root.running || root.can-engage);
                                         mouse-cursor: self.enabled ? MouseCursor.pointer : MouseCursor.default;
                                         clicked => {
                                             if (!root.has_strategy) { root.pick_strategy_clicked(); }
@@ -670,6 +695,7 @@ export component HomePage inherits Rectangle {
                         horizontal-stretch: 14;
                         status: root.status;
                         is_busy: root.is_busy;
+                        pending_op: root.pending_op;
                         has_strategy: root.has_strategy;
                         is_admin: root.is_admin;
                         chosen_item: root.chosen_item;

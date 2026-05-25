@@ -8,9 +8,6 @@ pub mod zapret {
     #[path = "../../src/zapret/batparse.rs"]
     pub mod batparse;
 
-    #[path = "../../src/zapret/strategies.rs"]
-    pub mod strategies;
-
     #[path = "../../src/zapret/catalog.rs"]
     pub mod catalog;
 }
