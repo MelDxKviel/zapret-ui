@@ -33,9 +33,20 @@ jobs:
           # Full history so build.rs `git describe` resolves a meaningful version.
           fetch-depth: 0
 
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: pwsh
+        run: |
+          $channel = ([regex]'channel\s*=\s*"([^"]+)"').Match((Get-Content rust-toolchain.toml -Raw)).Groups[1].Value
+          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Pinned toolchain: $channel"
+
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        # Install the exact toolchain named in rust-toolchain.toml (single source
+        # of truth) so clippy lands on the same toolchain cargo actually uses.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy
 
       - name: Rust Cache
@@ -83,8 +94,18 @@ jobs:
           "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Releasing $tag (version=$version, prerelease=$prerelease)"
 
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: pwsh
+        run: |
+          $channel = ([regex]'channel\s*=\s*"([^"]+)"').Match((Get-Content rust-toolchain.toml -Raw)).Groups[1].Value
+          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Pinned toolchain: $channel"
+
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
