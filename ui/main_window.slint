@@ -395,7 +395,9 @@ export component MainWindow inherits Window {
                         pill-ta := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                root.current_page = "home";
+                                // While a test run is in flight the pill is a shortcut
+                                // to the tester page; otherwise it goes to the dashboard.
+                                root.current_page = root.test_running ? "tester" : "home";
                                 root.refresh_status_clicked();
                             }
                         }

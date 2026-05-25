@@ -204,6 +204,9 @@ pub enum UiEvent {
     InstallProgress(InstallStage),
     LogLine(String),
     UpdateAvailable { current: String, latest: String, url: String },
+    /// The latest upstream version, reported on every update check regardless of
+    /// whether it's newer than what's installed — drives the "latest" stat.
+    LatestVersion(String),
     Error(String),
     /// A strategy test run has begun; `total` strategies will be tested.
     TestStarted { total: u32 },

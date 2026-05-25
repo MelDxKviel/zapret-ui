@@ -991,6 +991,9 @@ impl App {
                                 ui.set_has_update(true);
                                 ui.set_latest_version(latest.into());
                             }
+                            UiEvent::LatestVersion(latest) => {
+                                ui.set_latest_version(latest.into());
+                            }
                             UiEvent::Error(err) => {
                                 tracing::error!("UI Error: {}", err);
                                 ui.set_is_busy(false);
@@ -1169,6 +1172,9 @@ impl App {
                     BackendCmd::CheckUpdate => {
                         match installer.latest_version().await {
                             Ok(latest) => {
+                                // Always surface the resolved latest version so the
+                                // "latest" stat shows it even when we're up to date.
+                                let _ = event_tx.send(UiEvent::LatestVersion(latest.clone()));
                                 let current = installer.installed_version().await.unwrap_or_default();
                                 // Use semver-aware comparison so equivalent / non-semver
                                 // strings and downgrades don't show a spurious update.
