@@ -145,7 +145,7 @@
   "settings.autostart_label": "Start automatically with Windows",
   "settings.autostart_hint": "Launch zapret-ui silently on login. Doesn't engage the bypass — only opens the app.",
   "settings.tray_label": "Minimize to system tray on close",
-  "settings.tray_hint": "Hide to tray instead of quitting. Right-click the tray icon to fully exit.",
+  "settings.tray_hint": "Hide to tray instead of quitting. Left-click the tray icon to reopen, right-click for more actions.",
   "settings.autoengage_label": "Engage bypass on app start",
   "settings.autoengage_hint": "When zapret-ui starts, automatically start the last-used strategy in user mode.",
   "settings.notifications_label": "Windows notifications",
@@ -216,5 +216,13 @@
   "notify.started_title": "Bypass started",
   "notify.started_body": "DPI bypass is now active",
   "notify.stopped_title": "Bypass stopped",
-  "notify.stopped_body": "DPI bypass is now off"
+  "notify.stopped_body": "DPI bypass is now off",
+  "notify.tray_title": "zapret-ui is still running",
+  "notify.tray_body": "The app keeps working in the system tray. Click the tray icon to reopen it, or use Quit to exit.",
+
+  "tray.open": "Open zapret-ui",
+  "tray.start": "Start bypass",
+  "tray.stop": "Stop bypass",
+  "tray.settings": "Settings",
+  "tray.quit": "Quit"
 }

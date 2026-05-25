@@ -21,7 +21,8 @@ fn test_config_default() {
     assert!(config.autoupdate_check);
     assert_eq!(config.install_dir_override, None);
     assert_eq!(config.theme, Theme::System);
-    assert!(!config.minimize_to_tray);
+    assert!(config.minimize_to_tray);
+    assert!(!config.tray_notice_shown);
 }
 
 #[test]

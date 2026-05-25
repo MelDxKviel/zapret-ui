@@ -145,7 +145,7 @@
   "settings.autostart_label": "Автозапуск вместе с Windows",
   "settings.autostart_hint": "Запускать zapret-ui тихо при входе в систему. Обход не включается — только открывается приложение.",
   "settings.tray_label": "Сворачивать в трей при закрытии",
-  "settings.tray_hint": "Сворачивать в трей вместо выхода. Правый клик по значку в трее — полный выход.",
+  "settings.tray_hint": "Сворачивать в трей вместо выхода. Левый клик по значку — открыть, правый — меню действий.",
   "settings.autoengage_label": "Включать обход при запуске приложения",
   "settings.autoengage_hint": "При старте zapret-ui автоматически запускать последнюю использованную стратегию в пользовательском режиме.",
   "settings.notifications_label": "Уведомления Windows",
@@ -216,5 +216,13 @@
   "notify.started_title": "Обход запущен",
   "notify.started_body": "DPI-обход активен",
   "notify.stopped_title": "Обход остановлен",
-  "notify.stopped_body": "DPI-обход выключен"
+  "notify.stopped_body": "DPI-обход выключен",
+  "notify.tray_title": "zapret-ui продолжает работать",
+  "notify.tray_body": "Приложение свёрнуто в трей и продолжает работать. Кликните по значку в трее, чтобы открыть его, или выберите «Выход».",
+
+  "tray.open": "Открыть zapret-ui",
+  "tray.start": "Запустить обход",
+  "tray.stop": "Остановить обход",
+  "tray.settings": "Настройки",
+  "tray.quit": "Выход"
 }

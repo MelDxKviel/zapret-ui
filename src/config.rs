@@ -52,7 +52,14 @@ pub struct AppConfig {
     pub autoupdate_check: bool,
     pub install_dir_override: Option<PathBuf>,
     pub theme: Theme,
+    /// Hide to the system tray instead of quitting on window close. Defaults to
+    /// on; `#[serde(default = ...)]` keeps older configs loadable.
+    #[serde(default = "default_true")]
     pub minimize_to_tray: bool,
+    /// Whether the one-time "still running in the tray" toast has been shown.
+    /// Set the first time the window is hidden to tray, so the hint never repeats.
+    #[serde(default)]
+    pub tray_notice_shown: bool,
     /// UI language. `#[serde(default)]` keeps configs written before this field
     /// was added loadable (they fall back to the default, Russian).
     #[serde(default)]
@@ -84,7 +91,8 @@ impl Default for AppConfig {
             autoupdate_check: true,
             install_dir_override: None,
             theme: Theme::default(),
-            minimize_to_tray: false,
+            minimize_to_tray: true,
+            tray_notice_shown: false,
             language: Language::default(),
             favorites: Vec::new(),
             notifications_enabled: true,

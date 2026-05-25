@@ -861,18 +861,28 @@ impl App {
         });
 
         // Handle Tray minimizing on close
-        let tray = SystemTray::new()?;
+        let tray_lang = self
+            .config
+            .try_read()
+            .map(|c| crate::i18n::code(c.language))
+            .unwrap_or(crate::i18n::RU);
+        let tray = SystemTray::new(tray_lang)?;
         let window = ui.window();
         let ui_weak = ui.as_weak();
+        let cmd_tx_close = self.cmd_tx.clone();
         window.on_close_requested(move || {
             // Honour the "minimize to tray on close" setting: when on, hide to the
             // tray; when off, actually exit the app (the tray menu's Quit still
-            // works either way).
+            // works either way). Hiding the last window would normally quit the
+            // event loop, so the app runs it via `run_event_loop_until_quit`.
             let to_tray = ui_weak.upgrade().map(|ui| ui.get_minimize_to_tray()).unwrap_or(false);
             if to_tray {
                 if let Some(ui) = ui_weak.upgrade() {
                     let _ = ui.hide();
                 }
+                // Show the one-time "still running in the tray" toast (the backend
+                // decides whether it's the first time and persists the flag).
+                let _ = cmd_tx_close.try_send(BackendCmd::MinimizedToTray);
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
                 std::process::exit(0);
@@ -881,31 +891,66 @@ impl App {
 
         // Event listener task for Tray actions (use OS thread since SystemTray is not Send)
         let ui_weak = ui.as_weak();
-        let show_id = tray.show_item_id.clone();
+        let open_id = tray.open_item_id.clone();
+        let start_id = tray.start_item_id.clone();
+        let stop_id = tray.stop_item_id.clone();
+        let settings_id = tray.settings_item_id.clone();
         let quit_id = tray.quit_item_id.clone();
+        let cmd_tx_tray = self.cmd_tx.clone();
         std::thread::spawn(move || {
+            // Re-show and raise the window on the UI thread.
+            let show_window = |w: slint::Weak<MainWindow>| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = w.upgrade() {
+                        let _ = ui.show();
+                    }
+                });
+            };
             loop {
                 if let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
                     let event_id = event.id.0.clone();
-                    if event_id == show_id {
-                        let ui_weak = ui_weak.clone();
+                    if event_id == open_id {
+                        show_window(ui_weak.clone());
+                    } else if event_id == settings_id {
+                        let w = ui_weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(ui) = ui_weak.upgrade() {
+                            if let Some(ui) = w.upgrade() {
                                 let _ = ui.show();
+                                ui.set_current_page("settings".into());
                             }
                         });
+                    } else if event_id == start_id {
+                        // Engage the user's selected strategy (fall back to the
+                        // currently active one). Read the pick on the UI thread.
+                        let w = ui_weak.clone();
+                        let cmd_tx = cmd_tx_tray.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = w.upgrade() {
+                                let mut id = ui.get_selected_item().id.to_string();
+                                if id.is_empty() {
+                                    id = ui.get_active_item().id.to_string();
+                                }
+                                if !id.is_empty() {
+                                    let _ = cmd_tx.try_send(BackendCmd::Start(id));
+                                }
+                            }
+                        });
+                    } else if event_id == stop_id {
+                        let _ = cmd_tx_tray.try_send(BackendCmd::Stop);
                     } else if event_id == quit_id {
                         std::process::exit(0);
                     }
                 }
 
-                if let Ok(_event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-                    let ui_weak = ui_weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_weak.upgrade() {
-                            let _ = ui.show();
-                        }
-                    });
+                // Left-click (button release) opens the app; right-click is
+                // reserved for the context menu, so other events are ignored.
+                if let Ok(tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Left,
+                    button_state: tray_icon::MouseButtonState::Up,
+                    ..
+                }) = tray_icon::TrayIconEvent::receiver().try_recv()
+                {
+                    show_window(ui_weak.clone());
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1127,7 +1172,11 @@ impl App {
             },
         );
 
-        ui.run()?;
+        // Show + `run_event_loop_until_quit` (instead of `ui.run()`) so hiding the
+        // window to the tray doesn't quit the app when it's the last open window.
+        // The tray "Quit" item / close-without-tray path call `process::exit`.
+        ui.show()?;
+        slint::run_event_loop_until_quit()?;
         Ok(())
     }
 
@@ -1422,6 +1471,22 @@ impl App {
                         cfg.minimize_to_tray = on;
                         if let Err(e) = cfg.save() {
                             tracing::warn!("Failed to persist minimize-to-tray setting: {}", e);
+                        }
+                    }
+                    BackendCmd::MinimizedToTray => {
+                        // Show the "still running in the tray" toast only the very
+                        // first time, then persist the flag so it never repeats.
+                        let mut cfg = config.write().await;
+                        if !cfg.tray_notice_shown {
+                            cfg.tray_notice_shown = true;
+                            let lang = crate::i18n::code(cfg.language);
+                            if let Err(e) = cfg.save() {
+                                tracing::warn!("Failed to persist tray-notice flag: {}", e);
+                            }
+                            drop(cfg);
+                            let title = crate::i18n::tr(lang, "notify.tray_title");
+                            let body = crate::i18n::tr(lang, "notify.tray_body");
+                            tokio::task::spawn_blocking(move || crate::notify::show(&title, &body));
                         }
                     }
                     BackendCmd::SetAutoengage(on) => {

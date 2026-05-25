@@ -176,6 +176,9 @@ pub enum BackendCmd {
     SetAutoupdateCheck(bool),
     /// Persist "minimize to tray on window close".
     SetMinimizeToTray(bool),
+    /// The window was just hidden to the tray. Shows the one-time "still running
+    /// in the tray" toast (only the first time) and persists that it was shown.
+    MinimizedToTray,
     /// Persist "auto-start the last strategy when the app launches".
     SetAutoengage(bool),
     /// Persist the UI theme ("dark" | "light" | "system").
