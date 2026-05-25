@@ -1,1 +1,0 @@
-// Stub self_update

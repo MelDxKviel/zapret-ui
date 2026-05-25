@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep GitHub Actions versions current (and reviewable) so a pinned action
+  # tag can't silently drift — addresses the supply-chain posture concern.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  # Keep Cargo dependencies updated.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"

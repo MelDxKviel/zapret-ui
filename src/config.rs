@@ -1,30 +1,38 @@
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Theme {
     Light,
     Dark,
+    #[default]
     System,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Self::System
+impl Theme {
+    /// Slug exchanged with the Slint UI ("dark" | "light" | "system").
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::System => "system",
+        }
+    }
+    pub fn from_slug(s: &str) -> Self {
+        match s {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            _ => Self::System,
+        }
     }
 }
 
 /// UI language. Defaults to Russian, switchable on the Settings page.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
+    #[default]
     Ru,
     En,
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Self::Ru
-    }
 }
 
 impl Language {
@@ -58,6 +66,10 @@ pub struct AppConfig {
     /// `#[serde(default = ...)]` keeps older configs loadable (and defaulting to on).
     #[serde(default = "default_true")]
     pub notifications_enabled: bool,
+    /// Automatically start the last-used strategy as a user process when the app
+    /// launches. `#[serde(default)]` keeps older configs loadable.
+    #[serde(default)]
+    pub autoengage: bool,
 }
 
 fn default_true() -> bool {
@@ -76,6 +88,7 @@ impl Default for AppConfig {
             language: Language::default(),
             favorites: Vec::new(),
             notifications_enabled: true,
+            autoengage: false,
         }
     }
 }

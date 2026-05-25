@@ -12,7 +12,7 @@ impl std::io::Write for UiWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let res = self.file_writer.write(buf);
         if let Ok(s) = std::str::from_utf8(buf) {
-            let clean = s.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+            let clean = s.trim_end_matches(['\r', '\n']).to_string();
             if !clean.is_empty() {
                 let _ = self.tx.send(clean);
             }

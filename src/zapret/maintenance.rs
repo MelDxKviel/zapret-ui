@@ -56,7 +56,7 @@ impl ZapretMaintenance {
             .collect();
         if non_empty.is_empty() {
             IpsetMode::Any
-        } else if non_empty.iter().any(|l| *l == IPSET_PLACEHOLDER) {
+        } else if non_empty.contains(&IPSET_PLACEHOLDER) {
             IpsetMode::None
         } else {
             IpsetMode::Loaded
@@ -205,5 +205,47 @@ impl Maintenance for ZapretMaintenance {
             hosts_path: hosts_path.display().to_string(),
             hosts_dir: hosts_dir.display().to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, ZapretMaintenance) {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = ZapretMaintenance::new(tmp.path().to_path_buf(), reqwest::Client::new());
+        (tmp, m)
+    }
+
+    #[tokio::test]
+    async fn ipset_mode_round_trips_through_filesystem() {
+        let (_tmp, m) = fixture();
+        // Nothing written yet → file absent → Unknown.
+        assert_eq!(m.status().await.ipset_mode, IpsetMode::Unknown);
+
+        // Switching to "any" writes an empty list.
+        m.set_ipset_mode(IpsetMode::Any).await.unwrap();
+        assert_eq!(m.status().await.ipset_mode, IpsetMode::Any);
+
+        // "none" writes the single placeholder entry.
+        m.set_ipset_mode(IpsetMode::None).await.unwrap();
+        assert_eq!(m.status().await.ipset_mode, IpsetMode::None);
+
+        // Without a saved list, restoring "loaded" must fail clearly.
+        assert!(m.set_ipset_mode(IpsetMode::Loaded).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn game_filter_flag_round_trips() {
+        let (_tmp, m) = fixture();
+        assert_eq!(m.status().await.game_filter, GameFilterMode::Disabled);
+
+        m.set_game_filter(GameFilterMode::Tcp).await.unwrap();
+        assert_eq!(m.status().await.game_filter, GameFilterMode::Tcp);
+
+        // Disabling removes the flag file (back to the default).
+        m.set_game_filter(GameFilterMode::Disabled).await.unwrap();
+        assert_eq!(m.status().await.game_filter, GameFilterMode::Disabled);
     }
 }

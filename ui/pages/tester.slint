@@ -19,8 +19,11 @@ component ResultRow inherits Rectangle {
     Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
 
     ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.use_clicked(); }
+        // Only a result that reached at least one endpoint is selectable —
+        // mirrors the disabled "Use" button so a row click can't pick a
+        // strategy the test showed as fully blocked.
+        mouse-cursor: root.item.ok > 0 ? pointer : default;
+        clicked => { if (root.item.ok > 0) { root.use_clicked(); } }
     }
 
     HorizontalLayout {

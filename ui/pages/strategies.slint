@@ -90,7 +90,11 @@ export component StrategiesPage inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                ListView {
+                list := ListView {
+                    // Clamp the viewport to the visible width so a row's preferred
+                    // width (long descriptions) can't make the list scroll sideways
+                    // and clip the trailing action button.
+                    viewport-width: list.visible-width;
                     for item[idx] in root.strategies_model : row := Rectangle {
                         property <bool> is-active: root.active_strategy_id == item.id;
                         property <bool> is-selected: root.selected_strategy == item.id;
@@ -132,7 +136,10 @@ export component StrategiesPage inherits Rectangle {
                                     spacing: 6px;
                                     alignment: start;
                                     Text {
-                                        text: item.display_name;
+                                        // Base profile name only — the variant (ALT/SIMPLE FAKE)
+                                        // already shows in the chip beside it, so showing the
+                                        // parenthesized form here would just duplicate it.
+                                        text: item.pretty;
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-13;
                                         font-weight: 600;

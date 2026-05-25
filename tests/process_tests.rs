@@ -77,17 +77,15 @@ fn main() {
     assert_eq!(running_status.running_mode, RunningMode::UserProcess);
     assert_eq!(running_status.winws_pid, Some(pid));
 
-    // Capture logs from broadcast channel
+    // Capture logs from the broadcast channel. Each `recv` is bounded by a
+    // timeout so a missing event can never hang the test indefinitely.
     let mut logs = Vec::new();
-    let start_time = std::time::Instant::now();
-    while start_time.elapsed() < std::time::Duration::from_secs(3) {
-        if let Ok(event) = event_rx.recv().await {
-            if let UiEvent::LogLine(line) = event {
-                logs.push(line);
-                if logs.len() >= 2 {
-                    break;
-                }
-            }
+    while logs.len() < 2 {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), event_rx.recv()).await {
+            Ok(Ok(UiEvent::LogLine(line))) => logs.push(line),
+            Ok(Ok(_)) => {}
+            // Channel closed or timed out — stop waiting.
+            Ok(Err(_)) | Err(_) => break,
         }
     }
 
@@ -157,22 +155,19 @@ fn main() {
         let res = service_ctl.stop().await;
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "NeedsElevation");
-    } else {
-        // If the test runs with elevation, we can test the full lifecycle
+    } else if std::env::var("ZAPRET_UI_RUN_SERVICE_TESTS").is_ok() {
+        // Full SCM lifecycle. Gated behind an env var and NOT run automatically:
+        // the stub above is a plain console program, not a real service-control
+        // dispatcher, so `start` would normally time out / be flaky. Run this
+        // manually (elevated, with a real service stub) when exercising the SCM.
         let _ = service_ctl.remove().await; // Clean up old test run if any
         service_ctl.install(&strategy).await.expect("Failed to install service");
-
-        // Start service
         service_ctl.start().await.expect("Failed to start service");
-        
-        // Check status
         let mode = service_ctl.status().await.expect("Failed to query status");
         assert_eq!(mode, RunningMode::WindowsService);
-
-        // Stop service
         service_ctl.stop().await.expect("Failed to stop service");
-
-        // Remove service
         service_ctl.remove().await.expect("Failed to remove service");
+    } else {
+        eprintln!("elevated: skipping SCM lifecycle (set ZAPRET_UI_RUN_SERVICE_TESTS to run)");
     }
 }

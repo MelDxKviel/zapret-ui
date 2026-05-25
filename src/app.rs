@@ -187,10 +187,25 @@ fn rebuild_test_results(ui: &MainWindow) {
 }
 
 /// Open a path with the OS default handler (folder in Explorer, URL in browser).
+/// Uses `ShellExecuteW` directly rather than `cmd /C start`, so shell
+/// metacharacters in the target can't be interpreted (command-injection fix).
 fn open_external(target: &str) {
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", target])
-        .spawn();
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    let file_w: Vec<u16> = OsStr::new(target).encode_wide().chain(Some(0)).collect();
+    unsafe {
+        // null lpOperation => default verb ("open"), which handles URLs, files
+        // and folders without going through a command interpreter.
+        ShellExecuteW(
+            ptr::null_mut(),
+            ptr::null(),
+            file_w.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            1, // SW_SHOWNORMAL
+        );
+    }
 }
 
 #[link(name = "shell32")]
@@ -205,7 +220,57 @@ extern "system" {
     ) -> *mut std::ffi::c_void;
 }
 
-pub fn relaunch_elevated(task: &str, strategy: Option<&str>) -> anyhow::Result<()> {
+/// Quote a single argument for a Windows command line so that the receiving
+/// process's `CommandLineToArgvW`/`std::env::args` reproduces it verbatim — even
+/// when it contains spaces or parentheses (real preset ids look like
+/// `general (ALT2)`). Implements the documented MSVC argv quoting rules.
+fn quote_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
+    }
+    let mut out = String::from('"');
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+            }
+            '"' => {
+                // Escape all pending backslashes (they precede a quote) + the quote.
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                backslashes = 0;
+                out.push('"');
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                out.push(ch);
+            }
+        }
+    }
+    // Trailing backslashes precede the closing quote — double them.
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
+}
+
+/// Handle to a launched elevated one-shot task: the nonce-named result file the
+/// helper writes its outcome into, plus the nonce used to authenticate it.
+pub struct ElevationHandle {
+    pub result_file: std::path::PathBuf,
+    pub nonce: String,
+}
+
+/// Launch this exe elevated to run a one-shot service task. Arguments (including
+/// the strategy id and an explicit install dir) are passed with correct quoting
+/// so spaces/parentheses survive, and an explicit install dir is handed over so
+/// the helper acts on the *same* directory regardless of which admin account UAC
+/// elevates to. Returns a handle whose result file the caller can await.
+pub fn relaunch_elevated(
+    task: &str,
+    strategy: Option<&str>,
+    install_dir: &std::path::Path,
+) -> anyhow::Result<ElevationHandle> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
@@ -213,10 +278,25 @@ pub fn relaunch_elevated(task: &str, strategy: Option<&str>) -> anyhow::Result<(
     let current_exe = std::env::current_exe()?;
     let exe_path_w: Vec<u16> = current_exe.as_os_str().encode_wide().chain(Some(0)).collect();
 
-    let mut params = format!("--elevated-task={}", task);
+    // Unique nonce so the parent can authenticate the result file the helper
+    // writes (and so concurrent tasks don't collide).
+    let nonce = {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{}-{}", std::process::id(), nanos)
+    };
+    let result_file = std::env::temp_dir().join(format!("zapret-ui-elev-{nonce}.result"));
+
+    let mut args = vec![format!("--elevated-task={task}")];
     if let Some(strat) = strategy {
-        params.push_str(&format!(" --strategy={}", strat));
+        args.push(format!("--strategy={strat}"));
     }
+    args.push(format!("--install-dir={}", install_dir.display()));
+    args.push(format!("--result-file={}", result_file.display()));
+    args.push(format!("--nonce={nonce}"));
+    let params = args.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ");
     let params_w: Vec<u16> = OsStr::new(&params).encode_wide().chain(Some(0)).collect();
 
     let verb_w: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
@@ -235,7 +315,36 @@ pub fn relaunch_elevated(task: &str, strategy: Option<&str>) -> anyhow::Result<(
         }
     }
 
-    Ok(())
+    Ok(ElevationHandle { result_file, nonce })
+}
+
+/// Await the result file written by an elevated one-shot task. Returns `Ok(())`
+/// on success, or the helper's error message. Times out (the user may have
+/// dismissed UAC, or the helper hung) after ~90s.
+pub async fn wait_for_elevated_result(handle: ElevationHandle) -> Result<(), String> {
+    use tokio::time::{sleep, Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let outcome = loop {
+        if let Ok(content) = std::fs::read_to_string(&handle.result_file) {
+            let mut lines = content.lines();
+            let got_nonce = lines.next().unwrap_or("");
+            if got_nonce == handle.nonce {
+                let status = lines.next().unwrap_or("");
+                if status == "OK" {
+                    break Ok(());
+                } else {
+                    let msg: String = lines.collect::<Vec<_>>().join("\n");
+                    break Err(if msg.is_empty() { status.to_string() } else { msg });
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            break Err("Elevated operation did not report a result (timed out or was cancelled).".to_string());
+        }
+        sleep(Duration::from_millis(250)).await;
+    };
+    let _ = std::fs::remove_file(&handle.result_file);
+    outcome
 }
 
 /// Relaunch *this whole app* elevated (the normal UI, not a one-shot task) via
@@ -295,6 +404,38 @@ async fn notify_bypass(config: &Arc<RwLock<AppConfig>>, started: bool, strategy:
     tokio::task::spawn_blocking(move || crate::notify::show(&title, &body));
 }
 
+/// Resolve the user-facing install dir from config (the same dir the UI uses).
+async fn current_install_dir(config: &Arc<RwLock<AppConfig>>) -> std::path::PathBuf {
+    let cfg = config.read().await;
+    cfg.install_dir_override.clone().unwrap_or_else(|| {
+        let base = directories::BaseDirs::new().unwrap();
+        base.config_dir().join("zapret-ui").join("zapret")
+    })
+}
+
+/// Relaunch elevated for a one-shot service task and wait for its result,
+/// surfacing the helper's actual error to the UI instead of silently relying on
+/// the next status poll. Passes the current install dir explicitly so the
+/// elevated helper acts on the same directory the UI is using.
+async fn elevate_service_task(
+    task: &str,
+    strategy: Option<&str>,
+    config: &Arc<RwLock<AppConfig>>,
+    event_tx: &broadcast::Sender<UiEvent>,
+) {
+    let install_dir = current_install_dir(config).await;
+    match relaunch_elevated(task, strategy, &install_dir) {
+        Ok(handle) => {
+            if let Err(msg) = wait_for_elevated_result(handle).await {
+                let _ = event_tx.send(UiEvent::Error(msg));
+            }
+        }
+        Err(e) => {
+            let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", e)));
+        }
+    }
+}
+
 pub struct App {
     installer: Arc<dyn Installer>,
     runner: Arc<dyn Runner>,
@@ -322,7 +463,7 @@ impl App {
         state: AppState,
         event_tx: broadcast::Sender<UiEvent>,
     ) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel(256);
 
         Self {
             installer,
@@ -401,6 +542,27 @@ impl App {
             .unwrap_or(true);
         ui.set_notifications(notifications_seed);
 
+        // App version (from Cargo) — replaces the hardcoded UI string.
+        ui.set_app_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
+        // Real OS light/dark preference, so the "system" theme is accurate.
+        ui.set_system_is_dark(crate::winenv::system_is_dark());
+
+        // Seed the rest of the persisted settings so toggles reflect the saved
+        // config on launch (and the install-dir row shows the real path, #24).
+        if let Ok(c) = self.config.try_read() {
+            ui.set_autostart(c.autostart);
+            ui.set_autoupdate_check(c.autoupdate_check);
+            ui.set_minimize_to_tray(c.minimize_to_tray);
+            ui.set_autoengage(c.autoengage);
+            ui.set_theme(c.theme.slug().into());
+            let install_dir = c.install_dir_override.clone().unwrap_or_else(|| {
+                directories::BaseDirs::new()
+                    .map(|b| b.config_dir().join("zapret-ui").join("zapret"))
+                    .unwrap_or_default()
+            });
+            ui.set_install_dir(install_dir.display().to_string().into());
+        }
+
         // Populate strategies list (favorites first).
         rebuild_strategies(&ui, &self.catalog);
 
@@ -473,56 +635,66 @@ impl App {
             open_external(&path);
         });
         ui.on_open_url_clicked(move |url| {
-            open_external(&url.to_string());
+            open_external(&url);
         });
 
         // Connect UI callbacks to BackendCmd channel
+        // User-initiated actions are dispatched with a guaranteed `send().await`
+        // (on a spawned task) rather than `try_send`, so a click during a busy
+        // period waits for room in the queue instead of being silently dropped —
+        // which would otherwise leave the power button's spinner stuck (#20).
+        fn dispatch(tx: &mpsc::Sender<BackendCmd>, cmd: BackendCmd) {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let _ = tx.send(cmd).await;
+            });
+        }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_start_clicked(move |strat_id| {
-                let _ = cmd_tx_c.try_send(BackendCmd::Start(strat_id.to_string()));
+                dispatch(&cmd_tx_c, BackendCmd::Start(strat_id.to_string()));
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_stop_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::Stop);
+                dispatch(&cmd_tx_c, BackendCmd::Stop);
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_install_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::Install);
+                dispatch(&cmd_tx_c, BackendCmd::Install);
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_update_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::Update);
+                dispatch(&cmd_tx_c, BackendCmd::Update);
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_service_install_clicked(move |strat_id| {
-                let _ = cmd_tx_c.try_send(BackendCmd::ServiceInstall(strat_id.to_string()));
+                dispatch(&cmd_tx_c, BackendCmd::ServiceInstall(strat_id.to_string()));
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_service_remove_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::ServiceRemove);
+                dispatch(&cmd_tx_c, BackendCmd::ServiceRemove);
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_service_start_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::ServiceStart);
+                dispatch(&cmd_tx_c, BackendCmd::ServiceStart);
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_service_stop_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::ServiceStop);
+                dispatch(&cmd_tx_c, BackendCmd::ServiceStop);
             });
         }
         {
@@ -558,19 +730,20 @@ impl App {
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_test_start_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::TestStrategies);
+                dispatch(&cmd_tx_c, BackendCmd::TestStrategies);
             });
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_test_cancel_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::CancelTest);
+                dispatch(&cmd_tx_c, BackendCmd::CancelTest);
             });
         }
         // "Use this strategy" from a test result row: resolve it from the catalog
         // and apply it as the user's selection, then jump to the dashboard.
         {
             let catalog = self.catalog.clone();
+            let config = self.config.clone();
             let ui_weak = ui.as_weak();
             ui.on_test_use_strategy(move |id| {
                 if let Some(ui) = ui_weak.upgrade() {
@@ -579,6 +752,16 @@ impl App {
                         ui.set_selected_item(to_item(&s));
                         ui.set_selected_strategy(id.as_str().into());
                         ui.set_current_page("home".into());
+                        // Persist the manual pick so it survives a restart even if
+                        // the user never presses Engage (matches strategy_selected).
+                        let config = config.clone();
+                        tokio::spawn(async move {
+                            let mut cfg = config.write().await;
+                            cfg.last_strategy = Some(id);
+                            if let Err(e) = cfg.save() {
+                                tracing::warn!("Failed to persist tester-selected strategy: {}", e);
+                            }
+                        });
                     }
                 }
             });
@@ -630,6 +813,37 @@ impl App {
                 let _ = cmd_tx_c.try_send(BackendCmd::SetNotifications(on));
             });
         }
+        // Persist the remaining application settings.
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_autostart(move |on| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetAutostart(on));
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_autoupdate_check(move |on| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetAutoupdateCheck(on));
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_minimize_to_tray(move |on| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetMinimizeToTray(on));
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_autoengage(move |on| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetAutoengage(on));
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_theme(move |theme| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetTheme(theme.to_string()));
+            });
+        }
         // "Run as administrator" banner button: relaunch the whole app elevated,
         // then exit this unelevated instance so the new one can take over.
         ui.on_restart_as_admin(move || {
@@ -651,10 +865,18 @@ impl App {
         let window = ui.window();
         let ui_weak = ui.as_weak();
         window.on_close_requested(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                let _ = ui.hide();
+            // Honour the "minimize to tray on close" setting: when on, hide to the
+            // tray; when off, actually exit the app (the tray menu's Quit still
+            // works either way).
+            let to_tray = ui_weak.upgrade().map(|ui| ui.get_minimize_to_tray()).unwrap_or(false);
+            if to_tray {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let _ = ui.hide();
+                }
+                slint::CloseRequestResponse::KeepWindowShown
+            } else {
+                std::process::exit(0);
             }
-            slint::CloseRequestResponse::KeepWindowShown
         });
 
         // Event listener task for Tray actions (use OS thread since SystemTray is not Send)
@@ -749,10 +971,7 @@ impl App {
                                 ui.set_progress(pct);
                             }
                             UiEvent::InstallProgress(stage) => {
-                                ui.set_is_busy(match stage {
-                                    InstallStage::Done => false,
-                                    _ => true,
-                                });
+                                ui.set_is_busy(!matches!(stage, InstallStage::Done));
                                 if let InstallStage::Done = stage {
                                     ui.set_progress(1.0);
                                 }
@@ -860,9 +1079,22 @@ impl App {
             });
         }
 
-        // Trigger initial refresh + update check
+        // Trigger initial refresh; only check for updates if the user wants it.
         let _ = self.cmd_tx.try_send(BackendCmd::RefreshStatus);
-        let _ = self.cmd_tx.try_send(BackendCmd::CheckUpdate);
+        let (autoupdate, autoengage, last_strategy) = self
+            .config
+            .try_read()
+            .map(|c| (c.autoupdate_check, c.autoengage, c.last_strategy.clone()))
+            .unwrap_or((true, false, None));
+        if autoupdate {
+            let _ = self.cmd_tx.try_send(BackendCmd::CheckUpdate);
+        }
+        // Auto-start the last-used strategy on launch when enabled.
+        if autoengage {
+            if let Some(id) = last_strategy {
+                let _ = self.cmd_tx.try_send(BackendCmd::Start(id));
+            }
+        }
 
         ui.run()?;
         Ok(())
@@ -910,7 +1142,9 @@ impl App {
                         match installer.latest_version().await {
                             Ok(latest) => {
                                 let current = installer.installed_version().await.unwrap_or_default();
-                                if latest != current {
+                                // Use semver-aware comparison so equivalent / non-semver
+                                // strings and downgrades don't show a spurious update.
+                                if crate::zapret::updater::is_update_available(&current, &latest) {
                                     let _ = event_tx.send(UiEvent::UpdateAvailable {
                                         current,
                                         latest,
@@ -1000,9 +1234,11 @@ impl App {
                                 }
                                 Err(e) => {
                                     if e.to_string().contains("NeedsElevation") {
-                                        if let Err(err) = relaunch_elevated("service-install", Some(&strategy_id)) {
-                                            let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", err)));
-                                        }
+                                        elevate_service_task("service-install", Some(&strategy_id), &config, &event_tx).await;
+                                        let mut status = runner.detect_running().await;
+                                        status.service_installed = service_ctl.is_installed().await;
+                                        state.set_status(status.clone()).await;
+                                        let _ = event_tx.send(UiEvent::Status(status));
                                     } else {
                                         let _ = event_tx.send(UiEvent::Error(e.to_string()));
                                     }
@@ -1023,9 +1259,11 @@ impl App {
                             }
                             Err(e) => {
                                 if e.to_string().contains("NeedsElevation") {
-                                    if let Err(err) = relaunch_elevated("service-remove", None) {
-                                        let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", err)));
-                                    }
+                                    elevate_service_task("service-remove", None, &config, &event_tx).await;
+                                    let mut status = runner.detect_running().await;
+                                    status.service_installed = service_ctl.is_installed().await;
+                                    state.set_status(status.clone()).await;
+                                    let _ = event_tx.send(UiEvent::Status(status));
                                 } else {
                                     let _ = event_tx.send(UiEvent::Error(e.to_string()));
                                 }
@@ -1043,9 +1281,11 @@ impl App {
                             }
                             Err(e) => {
                                 if e.to_string().contains("NeedsElevation") {
-                                    if let Err(err) = relaunch_elevated("service-start", None) {
-                                        let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", err)));
-                                    }
+                                    elevate_service_task("service-start", None, &config, &event_tx).await;
+                                    let mut status = runner.detect_running().await;
+                                    status.service_installed = service_ctl.is_installed().await;
+                                    state.set_status(status.clone()).await;
+                                    let _ = event_tx.send(UiEvent::Status(status));
                                 } else {
                                     let _ = event_tx.send(UiEvent::Error(e.to_string()));
                                 }
@@ -1063,9 +1303,11 @@ impl App {
                             }
                             Err(e) => {
                                 if e.to_string().contains("NeedsElevation") {
-                                    if let Err(err) = relaunch_elevated("service-stop", None) {
-                                        let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", err)));
-                                    }
+                                    elevate_service_task("service-stop", None, &config, &event_tx).await;
+                                    let mut status = runner.detect_running().await;
+                                    status.service_installed = service_ctl.is_installed().await;
+                                    state.set_status(status.clone()).await;
+                                    let _ = event_tx.send(UiEvent::Status(status));
                                 } else {
                                     let _ = event_tx.send(UiEvent::Error(e.to_string()));
                                 }
@@ -1123,6 +1365,43 @@ impl App {
                         cfg.notifications_enabled = on;
                         if let Err(e) = cfg.save() {
                             tracing::warn!("Failed to persist notifications setting: {}", e);
+                        }
+                    }
+                    BackendCmd::SetAutostart(on) => {
+                        // Apply the HKCU Run key, then persist the preference.
+                        crate::winenv::set_autostart(on);
+                        let mut cfg = config.write().await;
+                        cfg.autostart = on;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist autostart setting: {}", e);
+                        }
+                    }
+                    BackendCmd::SetAutoupdateCheck(on) => {
+                        let mut cfg = config.write().await;
+                        cfg.autoupdate_check = on;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist autoupdate setting: {}", e);
+                        }
+                    }
+                    BackendCmd::SetMinimizeToTray(on) => {
+                        let mut cfg = config.write().await;
+                        cfg.minimize_to_tray = on;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist minimize-to-tray setting: {}", e);
+                        }
+                    }
+                    BackendCmd::SetAutoengage(on) => {
+                        let mut cfg = config.write().await;
+                        cfg.autoengage = on;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist autoengage setting: {}", e);
+                        }
+                    }
+                    BackendCmd::SetTheme(slug) => {
+                        let mut cfg = config.write().await;
+                        cfg.theme = crate::config::Theme::from_slug(&slug);
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist theme setting: {}", e);
                         }
                     }
                     BackendCmd::SetGameFilter(mode) => {
@@ -1208,45 +1487,56 @@ impl App {
                         let total = strategies.len() as u32;
                         let _ = event_tx.send(UiEvent::TestStarted { total });
 
-                        // Stream per-strategy results + progress back to the UI.
-                        let ev_result = event_tx.clone();
-                        let on_each = Box::new(move |r| {
-                            let _ = ev_result.send(UiEvent::TestResult(r));
-                        });
-                        let ev_progress = event_tx.clone();
-                        let on_progress = Box::new(move |index, total, id: &str| {
-                            let _ = ev_progress.send(UiEvent::TestProgress {
-                                index,
-                                total,
-                                strategy: id.to_string(),
+                        // Run the test on its own task so the backend loop keeps
+                        // servicing commands — crucially CancelTest, which just
+                        // flips the tester's cancel flag (otherwise the loop would
+                        // be blocked on `test_all` and never see the cancel).
+                        let tester_c = tester.clone();
+                        let runner_c = runner.clone();
+                        let service_ctl_c = service_ctl.clone();
+                        let state_c = state.clone();
+                        let config_c = config.clone();
+                        let event_tx_c = event_tx.clone();
+                        tokio::spawn(async move {
+                            let ev_result = event_tx_c.clone();
+                            let on_each = Box::new(move |r| {
+                                let _ = ev_result.send(UiEvent::TestResult(r));
                             });
-                        });
+                            let ev_progress = event_tx_c.clone();
+                            let on_progress = Box::new(move |index, total, id: &str| {
+                                let _ = ev_progress.send(UiEvent::TestProgress {
+                                    index,
+                                    total,
+                                    strategy: id.to_string(),
+                                });
+                            });
 
-                        match tester.test_all(strategies, on_each, on_progress).await {
-                            Ok(results) => {
-                                let best = results
-                                    .first()
-                                    .filter(|r| r.ok > 0)
-                                    .map(|r| r.id.clone())
-                                    .unwrap_or_default();
-                                if !best.is_empty() {
-                                    let mut cfg = config.write().await;
-                                    cfg.last_strategy = Some(best.clone());
-                                    let _ = cfg.save();
+                            match tester_c.test_all(strategies, on_each, on_progress).await {
+                                Ok(results) => {
+                                    let best = results
+                                        .first()
+                                        .filter(|r| r.ok > 0)
+                                        .map(|r| r.id.clone())
+                                        .unwrap_or_default();
+                                    if !best.is_empty() {
+                                        let mut cfg = config_c.write().await;
+                                        cfg.last_strategy = Some(best.clone());
+                                        let _ = cfg.save();
+                                    }
+                                    let _ = event_tx_c.send(UiEvent::TestComplete { best, results });
                                 }
-                                let _ = event_tx.send(UiEvent::TestComplete { best, results });
+                                Err(e) => {
+                                    let _ = event_tx_c.send(UiEvent::Error(format!("Strategy test failed: {}", e)));
+                                    let _ = event_tx_c.send(UiEvent::TestComplete { best: String::new(), results: Vec::new() });
+                                }
                             }
-                            Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(format!("Strategy test failed: {}", e)));
-                                let _ = event_tx.send(UiEvent::TestComplete { best: String::new(), results: Vec::new() });
-                            }
-                        }
 
-                        // Settle the status display after the test churns winws.
-                        let mut status = runner.detect_running().await;
-                        status.service_installed = service_ctl.is_installed().await;
-                        state.set_status(status.clone()).await;
-                        let _ = event_tx.send(UiEvent::Status(status));
+                            // Settle the status display after the test churns winws.
+                            let mut status = runner_c.detect_running().await;
+                            status.service_installed = service_ctl_c.is_installed().await;
+                            state_c.set_status(status.clone()).await;
+                            let _ = event_tx_c.send(UiEvent::Status(status));
+                        });
                     }
                 }
             }

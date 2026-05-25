@@ -9,12 +9,6 @@ pub struct SystemTray {
     pub quit_item_id: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrayMenuAction {
-    Show,
-    Quit,
-}
-
 impl SystemTray {
     pub fn new() -> anyhow::Result<Self> {
         let tray_menu = Menu::new();
@@ -51,15 +45,5 @@ impl SystemTray {
             show_item_id,
             quit_item_id,
         })
-    }
-
-    pub fn handle_menu_event(&self, event_id: &str) -> Option<TrayMenuAction> {
-        if event_id == self.show_item_id {
-            Some(TrayMenuAction::Show)
-        } else if event_id == self.quit_item_id {
-            Some(TrayMenuAction::Quit)
-        } else {
-            None
-        }
     }
 }

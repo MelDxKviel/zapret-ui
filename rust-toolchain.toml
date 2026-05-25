@@ -1,2 +1,4 @@
 [toolchain]
-channel = "stable"
+# Pinned for reproducible builds. Bump deliberately (e.g. via Dependabot/PR)
+# rather than tracking floating "stable".
+channel = "1.93.0"

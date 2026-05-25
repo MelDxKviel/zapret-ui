@@ -102,8 +102,10 @@ impl ConnectivityTester {
         };
 
         let mut set = tokio::task::JoinSet::new();
-        for url in targets.iter().cloned() {
+        for url in targets {
             let client = client.clone();
+            // Own the url so the spawned ('static) task doesn't borrow `targets`.
+            let url = url.clone();
             set.spawn(async move {
                 let started = Instant::now();
                 // Any HTTP response means the TLS handshake completed through the

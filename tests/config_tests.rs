@@ -17,11 +17,11 @@ use state::AppState;
 fn test_config_default() {
     let config = AppConfig::default();
     assert_eq!(config.last_strategy, None);
-    assert_eq!(config.autostart, false);
-    assert_eq!(config.autoupdate_check, true);
+    assert!(!config.autostart);
+    assert!(config.autoupdate_check);
     assert_eq!(config.install_dir_override, None);
     assert_eq!(config.theme, Theme::System);
-    assert_eq!(config.minimize_to_tray, false);
+    assert!(!config.minimize_to_tray);
 }
 
 #[test]
@@ -29,13 +29,15 @@ fn test_config_round_trip() {
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
-    let mut config = AppConfig::default();
-    config.last_strategy = Some("discord_alt4".to_string());
-    config.autostart = true;
-    config.autoupdate_check = false;
-    config.install_dir_override = Some(dir.path().to_path_buf());
-    config.theme = Theme::Dark;
-    config.minimize_to_tray = true;
+    let config = AppConfig {
+        last_strategy: Some("discord_alt4".to_string()),
+        autostart: true,
+        autoupdate_check: false,
+        install_dir_override: Some(dir.path().to_path_buf()),
+        theme: Theme::Dark,
+        minimize_to_tray: true,
+        ..AppConfig::default()
+    };
 
     // Save config
     config.save_to_path(&config_path).unwrap();
@@ -86,7 +88,7 @@ async fn test_state_get_and_set_status() {
 
     // Get current status
     let current = state.get_status().await;
-    assert_eq!(current.installed, false);
+    assert!(!current.installed);
 
     // Update status using set_status
     let new_status = RuntimeStatus {
@@ -103,7 +105,7 @@ async fn test_state_get_and_set_status() {
 
     // Verify status was updated in state
     let updated = state.get_status().await;
-    assert_eq!(updated.installed, true);
+    assert!(updated.installed);
     assert_eq!(updated.installed_version, Some("v1.0.0".to_string()));
     assert_eq!(updated.running_mode, RunningMode::UserProcess);
     assert_eq!(updated.active_strategy, Some("discord_alt4".to_string()));

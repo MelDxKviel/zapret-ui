@@ -103,6 +103,10 @@ export component SettingsPage inherits Rectangle {
     callback theme_changed(string);
     callback language_changed(string);
     callback notifications_changed(bool);
+    callback autostart_changed(bool);
+    callback autoupdate_changed(bool);
+    callback tray_changed(bool);
+    callback autoengage_changed(bool);
     callback game_filter_changed(string);
     callback ipset_mode_changed(string);
     callback update_ipset_clicked();
@@ -150,12 +154,18 @@ export component SettingsPage inherits Rectangle {
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.autostart_label");
                         hint: I18n.t(I18n.lang, "settings.autostart_hint");
-                        AppSwitch { checked <=> root.autostart; }
+                        AppSwitch {
+                            checked <=> root.autostart;
+                            toggled(v) => { root.autostart_changed(v); }
+                        }
                     }
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.tray_label");
                         hint: I18n.t(I18n.lang, "settings.tray_hint");
-                        AppSwitch { checked <=> root.minimize_to_tray; }
+                        AppSwitch {
+                            checked <=> root.minimize_to_tray;
+                            toggled(v) => { root.tray_changed(v); }
+                        }
                     }
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.notifications_label");
@@ -169,7 +179,10 @@ export component SettingsPage inherits Rectangle {
                         label: I18n.t(I18n.lang, "settings.autoengage_label");
                         hint: I18n.t(I18n.lang, "settings.autoengage_hint");
                         last: true;
-                        AppSwitch { checked <=> root.autoengage; }
+                        AppSwitch {
+                            checked <=> root.autoengage;
+                            toggled(v) => { root.autoengage_changed(v); }
+                        }
                     }
                 }
                 Rectangle { height: 16px; }
@@ -180,7 +193,10 @@ export component SettingsPage inherits Rectangle {
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.autoupdate_label");
                         hint: I18n.t(I18n.lang, "settings.autoupdate_hint");
-                        AppSwitch { checked <=> root.autoupdate_check; }
+                        AppSwitch {
+                            checked <=> root.autoupdate_check;
+                            toggled(v) => { root.autoupdate_changed(v); }
+                        }
                     }
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.installdir_label");
@@ -340,6 +356,7 @@ export component SettingsPage inherits Rectangle {
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.theme_label");
                         hint: I18n.t(I18n.lang, "settings.theme_hint");
+                        last: true;
                         Segmented {
                             selected: root.theme;
                             options: [
@@ -349,12 +366,6 @@ export component SettingsPage inherits Rectangle {
                             ];
                             changed(v) => { root.theme = v; root.theme_changed(v); }
                         }
-                    }
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.compact_label");
-                        hint: I18n.t(I18n.lang, "settings.compact_hint");
-                        last: true;
-                        AppSwitch { checked <=> root.compact; }
                     }
                 }
             }

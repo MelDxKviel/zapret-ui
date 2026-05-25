@@ -88,6 +88,7 @@ component AccentPill inherits Rectangle {
 
 export component AboutPage inherits Rectangle {
     in property <AppStatus> status;
+    in property <string> app_version;
     callback open_url(string);
 
     background: transparent;
@@ -174,7 +175,7 @@ export component AboutPage inherits Rectangle {
                                             border-width: 1px;
                                             border-color: ThemePalette.border;
                                             ver-code := Text {
-                                                text: "v0.1.0";
+                                                text: root.app_version;
                                                 font-family: ThemePalette.font-mono;
                                                 font-size: ThemePalette.fs-12;
                                                 color: ThemePalette.text-3;
@@ -266,7 +267,7 @@ export component AboutPage inherits Rectangle {
                                 }
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.app_version");
-                                    AccentPill { text: "v0.1.0"; }
+                                    AccentPill { text: root.app_version; }
                                 }
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.zapret_core");

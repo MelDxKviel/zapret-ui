@@ -167,6 +167,16 @@ pub enum BackendCmd {
     SetFavorites(Vec<String>),
     /// Persist whether bypass start/stop toasts are shown.
     SetNotifications(bool),
+    /// Persist + apply "launch at Windows logon" (writes the HKCU Run key).
+    SetAutostart(bool),
+    /// Persist "check for zapret updates on startup".
+    SetAutoupdateCheck(bool),
+    /// Persist "minimize to tray on window close".
+    SetMinimizeToTray(bool),
+    /// Persist "auto-start the last strategy when the app launches".
+    SetAutoengage(bool),
+    /// Persist the UI theme ("dark" | "light" | "system").
+    SetTheme(String),
 }
 
 /// Outcome of testing a single strategy against the target endpoints.

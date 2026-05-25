@@ -3,10 +3,35 @@ use std::time::SystemTime;
 use anyhow::{Result, Context};
 use async_trait::async_trait;
 use reqwest::header::USER_AGENT;
+use sha2::{Digest, Sha256};
 use crate::contracts::InstallStage;
 use crate::ports::{Installer, ProgressCb};
 use crate::zapret::github::GithubClient;
 use crate::zapret::paths;
+
+/// Hard ceiling on the compressed archive we will download (600 MB). The real
+/// zapret distribution is a few MB; this only fires on a corrupt/hostile server.
+const MAX_DOWNLOAD_BYTES: u64 = 600 * 1024 * 1024;
+/// Hard ceiling on the total uncompressed size of the archive (zip-bomb guard).
+const MAX_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Hard ceiling on the number of entries in the archive.
+const MAX_ARCHIVE_ENTRIES: usize = 20_000;
+
+/// Optional pinned SHA-256 of the upstream archive. When `Some`, the download is
+/// rejected unless its digest matches — turning the otherwise trust-on-transport
+/// download into an integrity-checked one. Left `None` by default because the
+/// upstream project ships a moving `main` branch with no published checksum; set
+/// this (and pin the ref in `github.rs`) to lock installs to a vetted build.
+const EXPECTED_ARCHIVE_SHA256: Option<&str> = None;
+
+/// Lower-case hex encoding of a byte slice (avoids pulling in a hex crate).
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
 
 pub struct ZapretInstaller {
     pub install_dir: PathBuf,
@@ -41,6 +66,15 @@ impl ZapretInstaller {
             release.assets.iter().find(|a| a.name.to_lowercase().ends_with(".zip"))
         }).ok_or_else(|| anyhow::anyhow!("No ZIP asset found in the latest release"))?;
 
+        // Refuse anything that isn't fetched over TLS — we run the result as
+        // SYSTEM in service mode, so a plaintext (MITM-able) transport is not OK.
+        if !asset.browser_download_url.starts_with("https://") {
+            return Err(anyhow::anyhow!(
+                "Refusing to download zapret over a non-HTTPS URL: {}",
+                asset.browser_download_url
+            ));
+        }
+
         // 2. Downloading stage
         on_progress(InstallStage::Downloading, 0, Some(asset.size));
         tracing::info!("Downloading zip from: {}", asset.browser_download_url);
@@ -67,22 +101,43 @@ impl ZapretInstaller {
             .context("Failed to create temporary download file")?;
         
         let mut downloaded: u64 = 0;
+        let mut hasher = Sha256::new();
         let mut response = response; // make mutable to use chunk()
 
         while let Some(chunk) = response.chunk().await
-            .context("Error occurred while reading download stream")? 
+            .context("Error occurred while reading download stream")?
         {
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_DOWNLOAD_BYTES {
+                return Err(anyhow::anyhow!(
+                    "Download aborted: archive exceeds the {} MB safety limit",
+                    MAX_DOWNLOAD_BYTES / (1024 * 1024)
+                ));
+            }
+            hasher.update(&chunk);
             use tokio::io::AsyncWriteExt;
             file.write_all(&chunk).await
                 .context("Failed to write download chunk to disk")?;
-            downloaded += chunk.len() as u64;
             on_progress(InstallStage::Downloading, downloaded, Some(total_size));
         }
-        
+
         use tokio::io::AsyncWriteExt;
         file.flush().await
             .context("Failed to flush temporary file after download")?;
         drop(file);
+
+        // Integrity: record the archive digest (auditable) and, when a hash is
+        // pinned, refuse to install anything that doesn't match it.
+        let digest = to_hex(&hasher.finalize());
+        tracing::info!("Downloaded archive SHA-256 = {digest}");
+        if let Some(expected) = EXPECTED_ARCHIVE_SHA256 {
+            if !expected.eq_ignore_ascii_case(&digest) {
+                return Err(anyhow::anyhow!(
+                    "Integrity check failed: archive SHA-256 {digest} does not match the pinned {expected}"
+                ));
+            }
+            tracing::info!("Archive SHA-256 matches the pinned value");
+        }
 
         // 3. Extracting stage
         on_progress(InstallStage::Extracting, 0, None);
@@ -98,12 +153,26 @@ impl ZapretInstaller {
             .context("Failed to parse downloaded ZIP archive format")?;
 
         let total_files = archive.len();
+        if total_files > MAX_ARCHIVE_ENTRIES {
+            return Err(anyhow::anyhow!(
+                "Archive rejected: {total_files} entries exceeds the {MAX_ARCHIVE_ENTRIES} limit"
+            ));
+        }
         on_progress(InstallStage::Extracting, 0, Some(total_files as u64));
 
+        let mut total_uncompressed: u64 = 0;
         for i in 0..total_files {
             let mut file = archive.by_index(i)
                 .context("Failed to read file from ZIP archive by index")?;
-            
+
+            total_uncompressed += file.size();
+            if total_uncompressed > MAX_UNCOMPRESSED_BYTES {
+                return Err(anyhow::anyhow!(
+                    "Archive rejected: uncompressed size exceeds the {} GB limit (possible zip bomb)",
+                    MAX_UNCOMPRESSED_BYTES / (1024 * 1024 * 1024)
+                ));
+            }
+
             let outpath = match file.enclosed_name() {
                 Some(path) => temp_extract_dir.join(path),
                 None => continue,
@@ -161,6 +230,13 @@ impl ZapretInstaller {
         // 4. Verifying stage
         on_progress(InstallStage::Verifying, 0, None);
 
+        // Verify the freshly-extracted tree *before* we touch the live install,
+        // so a bad/incomplete archive can never leave the user without a working
+        // installation (the previous version stays in place on failure).
+        if !paths::is_valid_install_dir(temp_extract_dir) {
+            return Err(anyhow::anyhow!("Verification failed: extracted files are missing or incomplete"));
+        }
+
         // Move to destination atomically
         if self.install_dir.exists() {
             let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
@@ -169,7 +245,7 @@ impl ZapretInstaller {
             let old_dir = self.install_dir.parent()
                 .unwrap_or(&self.install_dir)
                 .join(format!("zapret.old.{}", timestamp));
-            
+
             std::fs::rename(&self.install_dir, &old_dir)
                 .context("Failed to rename existing installation to backup directory")?;
 
@@ -179,7 +255,16 @@ impl ZapretInstaller {
                 return Err(e).context("Failed to move extracted folder to target installation path");
             }
 
-            // Cleanup old directory (might fail if files are locked, but it shouldn't fail the install)
+            // Re-verify after the swap; if the moved tree somehow isn't valid,
+            // restore the backup rather than leaving a broken install behind.
+            if !paths::is_valid_install_dir(&self.install_dir) {
+                let _ = std::fs::remove_dir_all(&self.install_dir);
+                let _ = std::fs::rename(&old_dir, &self.install_dir);
+                return Err(anyhow::anyhow!("Verification failed after swap; restored the previous installation"));
+            }
+
+            // Only now that the new install is verified do we drop the backup
+            // (might fail if files are locked, but that shouldn't fail the install).
             if let Err(err) = std::fs::remove_dir_all(&old_dir) {
                 tracing::warn!("Failed to delete old backup folder {:?}: {}", old_dir, err);
             }
@@ -190,15 +275,15 @@ impl ZapretInstaller {
             }
             std::fs::rename(temp_extract_dir, &self.install_dir)
                 .context("Failed to move extracted folder to target installation path")?;
-        }
 
-        // Verify that the install directory contains a valid installation
-        if !paths::is_valid_install_dir(&self.install_dir) {
-            return Err(anyhow::anyhow!("Verification failed: installed files are missing or incomplete"));
+            if !paths::is_valid_install_dir(&self.install_dir) {
+                return Err(anyhow::anyhow!("Verification failed: installed files are missing or incomplete"));
+            }
         }
 
         // Create the user list files winws.exe expects (service.bat:load_user_lists).
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir);
+        crate::zapret::batparse::ensure_user_lists(&self.install_dir)
+            .context("Failed to create winws user list files")?;
 
         // 5. Done stage
         on_progress(InstallStage::Done, 1, Some(1));
@@ -228,29 +313,79 @@ impl Installer for ZapretInstaller {
 
     async fn install_or_update(&self, on_progress: ProgressCb) -> Result<()> {
         let parent_dir = self.install_dir.parent()
-            .unwrap_or(&self.install_dir);
-        
-        let temp_zip_path = parent_dir.join("zapret_download.zip");
-        let temp_extract_dir = parent_dir.join("zapret_extract.tmp");
+            .unwrap_or(&self.install_dir)
+            .to_path_buf();
+        std::fs::create_dir_all(&parent_dir)
+            .context("Failed to create parent directory for installation")?;
 
-        // Clean up any stale files from prior attempts
-        if temp_zip_path.exists() {
-            let _ = std::fs::remove_file(&temp_zip_path);
-        }
-        if temp_extract_dir.exists() {
-            let _ = std::fs::remove_dir_all(&temp_extract_dir);
-        }
+        // Serialize install/update against itself: a single lock file in the
+        // parent dir, removed when this guard drops. Prevents two concurrent
+        // runs from clobbering each other's temp data or the install swap.
+        let _lock = InstallLock::acquire(&parent_dir.join("zapret-ui.install.lock"))?;
 
-        let res = self.perform_install_or_update(&on_progress, &temp_zip_path, &temp_extract_dir).await;
+        // Unique per-run working directory (auto-removed on drop) instead of
+        // fixed temp names another process could race on.
+        let work = tempfile::Builder::new()
+            .prefix("zapret-work-")
+            .tempdir_in(&parent_dir)
+            .context("Failed to create temporary working directory")?;
+        let temp_zip_path = work.path().join("download.zip");
+        let temp_extract_dir = work.path().join("extract");
 
-        // Cleanup temporary folders/files
-        if temp_zip_path.exists() {
-            let _ = std::fs::remove_file(&temp_zip_path);
-        }
-        if temp_extract_dir.exists() {
-            let _ = std::fs::remove_dir_all(&temp_extract_dir);
-        }
+        self.perform_install_or_update(&on_progress, &temp_zip_path, &temp_extract_dir).await
+        // `work` (and any leftovers) and `_lock` are cleaned up on drop.
+    }
+}
 
-        res
+/// A best-effort cross-process lock implemented as an exclusively-created file.
+/// Removed on drop so a crash leaves at most a stale empty file (which the next
+/// run will recreate-or-fail on — acceptable for a desktop installer).
+struct InstallLock {
+    path: PathBuf,
+}
+
+impl InstallLock {
+    fn acquire(path: &Path) -> Result<Self> {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(_) => Ok(Self { path: path.to_path_buf() }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(anyhow::anyhow!(
+                    "Another install/update is already in progress (lock file present)"
+                ))
+            }
+            Err(e) => Err(e).context("Failed to create install lock file"),
+        }
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_hex_encodes_lowercase() {
+        assert_eq!(to_hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
+    }
+
+    #[test]
+    fn install_lock_is_exclusive_and_released_on_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("x.lock");
+        let lock = InstallLock::acquire(&path).expect("first acquire succeeds");
+        // A second acquire while held must fail.
+        assert!(InstallLock::acquire(&path).is_err());
+        drop(lock);
+        // Once released, it can be acquired again.
+        assert!(InstallLock::acquire(&path).is_ok());
     }
 }

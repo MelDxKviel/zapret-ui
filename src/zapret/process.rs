@@ -44,6 +44,38 @@ impl ProcessRunner {
         }
     }
 
+    /// The set of canonical winws.exe paths we consider "ours": the configured
+    /// install dir and the protected machine-wide service dir.
+    fn owned_winws_paths(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let p = self.get_winws_path();
+        out.push(p.canonicalize().unwrap_or(p));
+        let svc_dir = crate::zapret::paths::service_install_dir();
+        for cand in [svc_dir.join("bin").join("winws.exe"), svc_dir.join("winws.exe")] {
+            if cand.exists() {
+                out.push(cand.canonicalize().unwrap_or(cand));
+            }
+        }
+        out
+    }
+
+    /// Whether `process` is a winws.exe that belongs to our installation.
+    fn is_owned_winws(process: &sysinfo::Process, owned: &[PathBuf]) -> bool {
+        let name = process.name().to_string_lossy();
+        if !(name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws")) {
+            return false;
+        }
+        match process.exe() {
+            Some(exe) => {
+                let exe_c = exe.canonicalize().unwrap_or(exe.to_path_buf());
+                owned.contains(&exe_c)
+            }
+            // Path unreadable (often a privileged service process): fall back to
+            // accepting it by name so a SYSTEM-run winws still shows as running.
+            None => true,
+        }
+    }
+
     fn detect_service_running(&self) -> bool {
         use windows_service::{
             service::ServiceAccess,
@@ -77,7 +109,7 @@ impl Runner for ProcessRunner {
         }
 
         // Make sure the user list files winws expects exist (service.bat does this too).
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir);
+        crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
 
         // winws.exe is launched with bin/ as the working directory (matches the .bat: `cd /d %BIN%`).
         let bin_dir = winws_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| self.install_dir.clone());
@@ -150,7 +182,14 @@ impl Runner for ProcessRunner {
             if let Some(pid) = pid {
                 #[cfg(windows)]
                 unsafe {
-                    GenerateConsoleCtrlEvent(1, pid); // 1 = CTRL_BREAK_EVENT
+                    if GenerateConsoleCtrlEvent(1, pid) == 0 {
+                        // Not fatal — we fall back to kill below — but log why the
+                        // graceful CTRL_BREAK shutdown didn't take.
+                        tracing::warn!(
+                            "GenerateConsoleCtrlEvent for pid {pid} failed: {}",
+                            std::io::Error::last_os_error()
+                        );
+                    }
                 }
             }
 
@@ -185,7 +224,12 @@ impl Runner for ProcessRunner {
                         let pid_val = pid.as_u32();
                         #[cfg(windows)]
                         unsafe {
-                            GenerateConsoleCtrlEvent(1, pid_val);
+                            if GenerateConsoleCtrlEvent(1, pid_val) == 0 {
+                                tracing::warn!(
+                                    "GenerateConsoleCtrlEvent for pid {pid_val} failed: {}",
+                                    std::io::Error::last_os_error()
+                                );
+                            }
                         }
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         let _ = process.kill();
@@ -230,14 +274,15 @@ impl Runner for ProcessRunner {
             mode = RunningMode::WindowsService;
         }
 
-        // 3. Fallback: any winws.exe running (started by .bat/service/previous session).
-        //    Match by name only — the user realistically has a single winws.
+        // 3. Fallback: a winws.exe that belongs to *our* install (started by the
+        //    .bat / a previous session). Match by path so an unrelated winws.exe
+        //    elsewhere doesn't get reported as our running bypass.
         if mode == RunningMode::None {
+            let owned = self.owned_winws_paths();
             let mut sys = System::new();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             for (pid, process) in sys.processes() {
-                let name = process.name().to_string_lossy();
-                if name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws") {
+                if Self::is_owned_winws(process, &owned) {
                     winws_pid = Some(pid.as_u32());
                     mode = RunningMode::UserProcess;
                     break;
@@ -252,13 +297,13 @@ impl Runner for ProcessRunner {
         let uptime_secs = if mode == RunningMode::None {
             None
         } else {
+            let owned = self.owned_winws_paths();
             let mut sys = System::new();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             let mut found = None;
             for (pid, process) in sys.processes() {
-                let name = process.name().to_string_lossy();
-                if name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws") {
-                    // Prefer the exact pid we identified; fall back to any winws.
+                if Self::is_owned_winws(process, &owned) {
+                    // Prefer the exact pid we identified; fall back to any owned winws.
                     if Some(pid.as_u32()) == winws_pid {
                         found = Some(process.run_time());
                         break;

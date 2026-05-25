@@ -18,10 +18,14 @@ pub fn read_game_filter(install_dir: &Path) -> GameFilterMode {
 }
 
 /// Create the user list files that `service.bat:load_user_lists` would create,
-/// otherwise winws.exe aborts with "cannot access hostlist file".
-pub fn ensure_user_lists(install_dir: &Path) {
+/// otherwise winws.exe aborts with "cannot access hostlist file". Returns an
+/// error if the lists directory or files can't be written, so the caller can
+/// surface a clear message instead of letting winws fail later cryptically.
+pub fn ensure_user_lists(install_dir: &Path) -> anyhow::Result<()> {
+    use anyhow::Context;
     let lists = install_dir.join("lists");
-    let _ = std::fs::create_dir_all(&lists);
+    std::fs::create_dir_all(&lists)
+        .with_context(|| format!("creating lists directory {:?}", lists))?;
     let defaults = [
         ("ipset-exclude-user.txt", "203.0.113.113/32\n"),
         ("list-general-user.txt", "domain.example.abc\n"),
@@ -30,9 +34,11 @@ pub fn ensure_user_lists(install_dir: &Path) {
     for (name, content) in defaults {
         let p = lists.join(name);
         if !p.exists() {
-            let _ = std::fs::write(&p, content);
+            std::fs::write(&p, content)
+                .with_context(|| format!("writing user list {:?}", p))?;
         }
     }
+    Ok(())
 }
 
 /// Join the (possibly `^`-continued) winws.exe command line out of a .bat file

@@ -14,14 +14,15 @@ pub mod zapret {
 
 use ports::StrategyCatalog;
 use zapret::catalog::LocalStrategyCatalog;
-use std::path::PathBuf;
+use tempfile::TempDir;
 
 /// Build a throwaway install dir containing a couple of preset `.bat` files
-/// shaped like the real zapret distribution, plus a service.bat that must be ignored.
-fn make_fixture() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("zapret-ui-cat-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// shaped like the real zapret distribution, plus a service.bat that must be
+/// ignored. Returns the `TempDir` guard (kept alive by the caller) so parallel
+/// tests get isolated, auto-cleaned directories instead of a shared pid path.
+fn make_fixture() -> TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
 
     let winws = |name: &str| format!(
         "@echo off\r\nset \"BIN=%~dp0bin\\\"\r\nset \"LISTS=%~dp0lists\\\"\r\n\
@@ -33,27 +34,26 @@ fn make_fixture() -> PathBuf {
     std::fs::write(dir.join("general (ALT).bat"), winws("alt")).unwrap();
     // service.bat must be skipped by the catalog.
     std::fs::write(dir.join("service.bat"), "@echo off\r\nrem control script\r\n").unwrap();
-    dir
+    tmp
 }
 
 #[test]
 fn scans_bat_presets_and_skips_service() {
-    let dir = make_fixture();
-    let catalog = LocalStrategyCatalog::new(dir.clone());
+    let tmp = make_fixture();
+    let catalog = LocalStrategyCatalog::new(tmp.path().to_path_buf());
     let all = catalog.all();
 
     assert_eq!(all.len(), 2, "should find exactly the two preset .bat files, got {}", all.len());
     assert!(all.iter().all(|s| !s.id.eq_ignore_ascii_case("service")), "service.bat must be skipped");
     // "general" is ranked first.
     assert_eq!(all[0].id, "general");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn parses_resolved_args() {
-    let dir = make_fixture();
-    let catalog = LocalStrategyCatalog::new(dir.clone());
+    let tmp = make_fixture();
+    let dir = tmp.path();
+    let catalog = LocalStrategyCatalog::new(dir.to_path_buf());
     let s = catalog.by_id("general").expect("general should exist");
 
     assert_eq!(s.winws_args[0], "--wf-tcp=80,443");
@@ -62,17 +62,11 @@ fn parses_resolved_args() {
     assert!(s.winws_args.iter().all(|a| !a.contains('%')), "no unresolved %vars%");
 
     assert!(catalog.by_id("does-not-exist").is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn empty_dir_yields_no_strategies() {
-    let dir = std::env::temp_dir().join(format!("zapret-ui-empty-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-
-    let catalog = LocalStrategyCatalog::new(dir.clone());
+    let tmp = tempfile::tempdir().unwrap();
+    let catalog = LocalStrategyCatalog::new(tmp.path().to_path_buf());
     assert!(catalog.all().is_empty(), "empty install dir should have no strategies");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

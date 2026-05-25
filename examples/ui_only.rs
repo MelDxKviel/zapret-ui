@@ -151,7 +151,17 @@ fn main() -> anyhow::Result<()> {
         move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let favs = favorites.borrow();
-                let mut list = MockCatalog.all();
+                let q = ui.get_strategies_query().to_string().trim().to_lowercase();
+                let mut list: Vec<Strategy> = MockCatalog
+                    .all()
+                    .into_iter()
+                    .filter(|s| {
+                        q.is_empty()
+                            || format!("{} {} {}", s.id, s.display_name, s.description)
+                                .to_lowercase()
+                                .contains(&q)
+                    })
+                    .collect();
                 list.sort_by_key(|s| if favs.iter().any(|f| f == &s.id) { 0 } else { 1 });
                 let items: Vec<StrategyItem> = list
                     .iter()
@@ -191,6 +201,36 @@ fn main() -> anyhow::Result<()> {
             rebuild_strategies();
         });
     }
+
+    // Search: re-filter the mock list (mirrors the real backend contract).
+    {
+        let rebuild_strategies = rebuild_strategies.clone();
+        ui.on_strategies_search(move |q| {
+            println!("UI: Search strategies: {}", q);
+            rebuild_strategies();
+        });
+    }
+
+    // Logs callbacks (mock): echo the contract so the preview behaves.
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_logs_query_changed(move |grep, level| {
+            println!("UI: Logs filter changed: grep={} level={}", grep, level);
+            let _ = ui_weak.upgrade();
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_logs_clear_clicked(move || {
+            println!("UI: Logs clear clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_log_lines(Rc::new(slint::VecModel::from(Vec::<LogLineItem>::new())).into());
+                ui.set_log_text("".into());
+            }
+        });
+    }
+    ui.on_open_log_file_clicked(|| println!("UI: Open log file clicked"));
+    ui.on_open_url_clicked(|url| println!("UI: Open URL: {}", url));
 
     // Set initial status
     ui.set_status_installed(true);
@@ -391,7 +431,18 @@ fn main() -> anyhow::Result<()> {
         mk(2, "2026-05-23T16:14:34.812000Z", "INFO", "Mock installer ready, version v1.0.0-mock"),
         mk(3, "2026-05-23T16:14:34.815000Z", "INFO", "3 strategies loaded from catalog"),
     ];
+    // The LogsPage renders the selectable terminal from `log_text`, so seed it too
+    // (not just `log_lines`) — otherwise the preview terminal stays empty.
+    let log_text: String = log_lines
+        .iter()
+        .map(|l| format!("{} {} {}", l.timestamp, l.level, l.message))
+        .collect::<Vec<_>>()
+        .join("\n");
     ui.set_log_lines(Rc::new(slint::VecModel::from(log_lines)).into());
+    ui.set_log_text(log_text.into());
+
+    // App version for the stats strip / about page.
+    ui.set_app_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
 
     ui.run()?;
     Ok(())

@@ -116,6 +116,8 @@ export component MainWindow inherits Window {
 
     // Window/taskbar icon (set from Rust).
     in property <image> app_icon;
+    // This app's version string (from Cargo, set by Rust).
+    in-out property <string> app_version: "";
 
     // ── Status (set from Rust) ──
     in-out property <bool> status_installed: false;
@@ -173,6 +175,9 @@ export component MainWindow inherits Window {
     in-out property <bool> compact: false;
     in-out property <string> install_dir: "";
     in-out property <string> theme: "dark";
+    // Actual system light/dark preference (detected by Rust). Used when theme is
+    // "system" so that mode reflects the OS instead of always being dark.
+    in-out property <bool> system_is_dark: true;
 
     // ── DPI bypass tuning (zapret service.bat filters; set from Rust) ──
     in-out property <string> game_filter: "off";   // off | all | tcp | udp
@@ -246,12 +251,22 @@ export component MainWindow inherits Window {
     callback update_hosts_clicked();
     callback copy_to_clipboard(string);
     callback set_notifications(bool);
+    callback set_autostart(bool);
+    callback set_autoupdate_check(bool);
+    callback set_minimize_to_tray(bool);
+    callback set_autoengage(bool);
+    callback set_theme(string);
     callback restart_as_admin();
 
     in-out property <string> current_page: "home";
 
-    init => { ThemePalette.is-dark = root.theme != "light"; }
-    changed theme => { ThemePalette.is-dark = root.theme != "light"; }
+    // "system" resolves to the real OS preference; "dark"/"light" are explicit.
+    function resolve_dark() -> bool {
+        return root.theme == "light" ? false : (root.theme == "dark" ? true : root.system_is_dark);
+    }
+    init => { ThemePalette.is-dark = root.resolve_dark(); }
+    changed theme => { ThemePalette.is-dark = root.resolve_dark(); }
+    changed system_is_dark => { ThemePalette.is-dark = root.resolve_dark(); }
 
     HorizontalLayout {
         width: 100%;
@@ -422,17 +437,17 @@ export component MainWindow inherits Window {
                             ThemeToggleBtn {
                                 icon: @image-url("../assets/icons/moon.svg");
                                 active: root.theme == "dark";
-                                clicked => { root.theme = "dark"; }
+                                clicked => { root.theme = "dark"; root.set_theme("dark"); }
                             }
                             ThemeToggleBtn {
                                 icon: @image-url("../assets/icons/sun.svg");
                                 active: root.theme == "light";
-                                clicked => { root.theme = "light"; }
+                                clicked => { root.theme = "light"; root.set_theme("light"); }
                             }
                             ThemeToggleBtn {
                                 icon: @image-url("../assets/icons/system.svg");
                                 active: root.theme == "system";
-                                clicked => { root.theme = "system"; }
+                                clicked => { root.theme = "system"; root.set_theme("system"); }
                             }
                         }
                     }
@@ -467,6 +482,7 @@ export component MainWindow inherits Window {
                     pending_op: root.pending_op;
                     is_admin: root.is_admin;
                     strategy_count: root.strategies.length;
+                    app_version: root.app_version;
                     uptime: root.uptime;
                     game_filter <=> root.game_filter;
                     game_filter_changed(v) => { root.set_game_filter(v); }
@@ -556,6 +572,11 @@ export component MainWindow inherits Window {
                     update_hosts_clicked => { root.update_hosts_clicked(); }
                     language_changed(v) => { root.set_language(v); }
                     notifications_changed(v) => { root.set_notifications(v); }
+                    autostart_changed(v) => { root.set_autostart(v); }
+                    autoupdate_changed(v) => { root.set_autoupdate_check(v); }
+                    tray_changed(v) => { root.set_minimize_to_tray(v); }
+                    autoengage_changed(v) => { root.set_autoengage(v); }
+                    theme_changed(v) => { root.set_theme(v); }
                 }
             }
 
@@ -576,6 +597,7 @@ export component MainWindow inherits Window {
                     width: 100%;
                     height: 100%;
                     status: root.status;
+                    app_version: root.app_version;
                     open_url(u) => { root.open_url_clicked(u); }
                 }
             }

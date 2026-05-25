@@ -103,8 +103,10 @@ component ServiceCard inherits Rectangle {
                     AppButton {
                         text: I18n.t(I18n.lang, "service.install_btn");
                         variant: "primary";
+                        // Not gated on is_admin: the backend requests UAC on demand
+                        // for service operations (one-shot elevated helper).
                         icon: @image-url("../../assets/icons/service.svg");
-                        enabled: root.is_admin && !root.is_busy && root.has_strategy && root.status.installed;
+                        enabled: !root.is_busy && root.has_strategy && root.status.installed;
                         clicked => { root.install_clicked(); }
                     }
                 }
@@ -132,7 +134,7 @@ component ServiceCard inherits Rectangle {
                         text: root.pending_op == "start" ? I18n.t(I18n.lang, "service.starting") : I18n.t(I18n.lang, "service.start_btn");
                         variant: "primary";
                         icon: @image-url("../../assets/icons/play.svg");
-                        enabled: root.is_admin && !root.is_busy;
+                        enabled: !root.is_busy;
                         busy: root.pending_op == "start";
                         clicked => { root.start_clicked(); }
                     }
@@ -141,7 +143,7 @@ component ServiceCard inherits Rectangle {
                         variant: "danger";
                         size: "sm";
                         icon: @image-url("../../assets/icons/trash.svg");
-                        enabled: root.is_admin && !root.is_busy;
+                        enabled: !root.is_busy;
                         clicked => { root.remove_clicked(); }
                     }
                 }
@@ -163,7 +165,7 @@ component ServiceCard inherits Rectangle {
                         text: root.pending_op == "stop" ? I18n.t(I18n.lang, "service.stopping") : I18n.t(I18n.lang, "service.stop_btn");
                         variant: "default";
                         icon: @image-url("../../assets/icons/stop.svg");
-                        enabled: root.is_admin && !root.is_busy;
+                        enabled: !root.is_busy;
                         busy: root.pending_op == "stop";
                         clicked => { root.stop_clicked(); }
                     }
@@ -172,7 +174,7 @@ component ServiceCard inherits Rectangle {
                         variant: "danger";
                         size: "sm";
                         icon: @image-url("../../assets/icons/trash.svg");
-                        enabled: root.is_admin && !root.is_busy;
+                        enabled: !root.is_busy;
                         clicked => { root.remove_clicked(); }
                     }
                 }
@@ -328,6 +330,8 @@ export component HomePage inherits Rectangle {
     in property <string> pending_op;
     in property <bool> is_admin;
     in property <int> strategy_count;
+    // This app's version (from Cargo, via Rust) — shown in the stats strip.
+    in property <string> app_version;
     // Live bypass uptime in seconds — owned by MainWindow so it persists across
     // page navigation and reflects the real bypass session.
     in property <int> uptime;
@@ -420,7 +424,6 @@ export component HomePage inherits Rectangle {
                         }
                     }
                 }
-                Rectangle { height: 1px; background: ThemePalette.divider; }
 
                 // ── HERO ──
                 Rectangle {
@@ -668,7 +671,7 @@ export component HomePage inherits Rectangle {
                             background: ThemePalette.surface;
                             clip: true;
                             HorizontalLayout {
-                                Stat { label: I18n.t(I18n.lang, "home.stat_app"); value: "v0.1.0"; }
+                                Stat { label: I18n.t(I18n.lang, "home.stat_app"); value: root.app_version; }
                                 Stat {
                                     label: I18n.t(I18n.lang, "home.stat_core");
                                     value: root.installed ? root.status.installed_version : I18n.t(I18n.lang, "common.not_installed");
@@ -834,7 +837,9 @@ export component HomePage inherits Rectangle {
                         title: root.installed ? I18n.t(I18n.lang, "home.reinstall") : I18n.t(I18n.lang, "home.install");
                         sub: root.installed ? I18n.t(I18n.lang, "home.redownload") : I18n.t(I18n.lang, "home.fetch_prefix") + (root.status.latest_version != "" ? root.status.latest_version : I18n.t(I18n.lang, "common.latest_word"));
                         highlight: !root.installed;
-                        enabled: !root.is_busy;
+                        // Disabled while the bypass runs: replacing the install dir
+                        // with winws.exe locked would fail / corrupt the install.
+                        enabled: !root.is_busy && !root.running;
                         clicked => { root.install_clicked(); }
                     }
                     ActionTile {
@@ -842,7 +847,7 @@ export component HomePage inherits Rectangle {
                         title: root.has-update ? I18n.t(I18n.lang, "home.update_available") : I18n.t(I18n.lang, "home.check_updates");
                         sub: root.has-update ? root.status.installed_version + " → " + root.status.latest_version : "github.com / flowseal";
                         highlight: root.has-update;
-                        enabled: !root.is_busy;
+                        enabled: !root.is_busy && !root.running;
                         clicked => { root.update_clicked(); }
                     }
                     ActionTile {

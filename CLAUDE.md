@@ -43,7 +43,7 @@ Do not call Slint setters directly from backend tasks — always go through a `U
 
 ### Elevation model (important)
 
-The UI runs **unelevated**. Only service operations need admin. When a `ServiceCtl` call returns an error whose string contains `"NeedsElevation"`, `app.rs` calls `relaunch_elevated(task, strategy)`, which re-launches *this same exe* via `ShellExecuteW` with the `runas` verb and `--elevated-task=<task> [--strategy=<id>]`. `main.rs::parse_args` detects those flags, runs `run_elevated_task` against a fresh `WindowsServiceCtl`, and exits — it never shows the UI. So service actions briefly spawn a second, elevated process that does the SCM work and quits.
+The UI runs **unelevated**. Only service operations need admin. When a `ServiceCtl` call returns an error whose string contains `"NeedsElevation"`, `app.rs` calls `relaunch_elevated(task, strategy, install_dir)`, which re-launches *this same exe* via `ShellExecuteW` with the `runas` verb and **correctly quoted** args: `--elevated-task=<task> [--strategy=<id>] --install-dir=<dir> --result-file=<path> --nonce=<n>`. `main.rs::parse_args` detects those flags, runs `run_elevated_task` against a fresh `WindowsServiceCtl`, writes its outcome to the nonce result file, and exits — it never shows the UI. The unelevated parent awaits that result file (`wait_for_elevated_result`) so it can surface the helper's real success/error. For **service-mode**, `run_elevated_task` first copies the install into the admin-only `%ProgramData%\zapret-ui\zapret` and locks its ACLs (`service::prepare_protected_dir`), then registers the `LocalSystem` service to run `winws.exe` from *there* — never from the user-writable `%APPDATA%` dir.
 
 ### UI (`ui/`)
 
@@ -67,7 +67,6 @@ Every user-visible string is written as `I18n.t(I18n.lang, "some.key")` — `I18
 ## Notes / traps
 
 - Strategies are discovered **at runtime** by `LocalStrategyCatalog` (`.bat` scanning) — there is no hardcoded strategy list. (The old `src/zapret/strategies.rs` auto-generated `STRATEGIES` const and its `tools/extract_strategies.rs` generator have been removed.)
-- `src/self_update.rs` is a stub.
 - Paths: config `%APPDATA%\zapret-ui\config.toml`, install dir `%APPDATA%\zapret-ui\zapret\` (overridable via `install_dir_override`), logs `%APPDATA%\zapret-ui\logs\app.log`. `AppConfig::load` self-heals a corrupt config by backing it up to `.toml.bak`.
 - Logging (`src/log.rs`) tees `tracing` output to both the rolling log file and the broadcast channel that feeds the in-app Logs page.
 - Single-instance is enforced with a named mutex; a second launch focuses the existing window (`src/single_instance.rs`).
