@@ -1,21 +1,13 @@
-<div align="center">
-
 # zapret-ui
 
-**Удобный графический интерфейс для обхода DPI-блокировок на Windows.**
+Удобный графический интерфейс для обхода DPI-блокировок на Windows. Discord, YouTube и другие сервисы снова работают — без командной строки и возни с `.bat`-файлами.
 
-Discord, YouTube и другие сервисы снова работают — без командной строки и возни с `.bat`-файлами.
-
-[![Release](https://img.shields.io/github/v/release/meldxkviel/zapret-ui?style=flat-square&label=релиз)](https://github.com/meldxkviel/zapret-ui/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/meldxkviel/zapret-ui/total?style=flat-square&label=загрузки)](https://github.com/meldxkviel/zapret-ui/releases)
-[![License](https://img.shields.io/github/license/meldxkviel/zapret-ui?style=flat-square&label=лицензия)](LICENSE)
-![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D6?style=flat-square)
-
-<img src="docs/screenshots/dashboard.png" alt="Главный экран zapret-ui" width="760">
-
-</div>
-
----
+![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)
+![Slint](https://img.shields.io/badge/UI-Slint-2379F4)
+![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D6?logo=windows&logoColor=white)
+[![CI](https://github.com/meldxkviel/zapret-ui/actions/workflows/release.yml/badge.svg)](https://github.com/meldxkviel/zapret-ui/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/meldxkviel/zapret-ui?logo=github&logoColor=white)](https://github.com/meldxkviel/zapret-ui/releases/latest)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ## Что это
 
@@ -36,7 +28,7 @@ Discord, YouTube и другие сервисы снова работают — 
 1. Скачайте **`zapret-ui.exe`** из раздела [**Releases**](https://github.com/meldxkviel/zapret-ui/releases/latest).
 2. Запустите. Установка не требуется — всё в одном файле.
 
-> 💡 Рекомендуется запускать **от имени администратора**: обходу нужен драйвер WinDivert. Без прав окно работает, но недоступен запуск обхода и тест стратегий (баннер вверху предложит перезапуск).
+> ⚠️ Запускайте **от имени администратора** — это необходимо: обходу нужен драйвер WinDivert, а тесту стратегий и работе со службой нужны права. Без них окно откроется, но запустить обход не получится (баннер вверху предложит перезапуск).
 
 ## Как пользоваться
 
