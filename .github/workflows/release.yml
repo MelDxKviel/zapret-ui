@@ -1,4 +1,4 @@
-name: Release
+name: CI / Release
 
 on:
   push:
@@ -8,11 +8,16 @@ on:
   pull_request:
     branches: [ "main", "master" ]
 
-# Least privilege by default: the build/test job only needs read access. The
-# release job below opts into `contents: write` and only runs on tag pushes,
-# so PR code (which runs in `build`) never has a write-scoped token.
+# Least privilege by default: build/test only needs read access. The release
+# job below opts into `contents: write` and only runs on tag pushes, so PR code
+# (which runs in `build`) never has a write-scoped token.
 permissions:
   contents: read
+
+# Cancel superseded runs on the same ref (but never cancel a tag release).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   build:
@@ -25,9 +30,10 @@ jobs:
         with:
           # PR code runs here; don't leave a usable git credential around for it.
           persist-credentials: false
+          # Full history so build.rs `git describe` resolves a meaningful version.
+          fetch-depth: 0
 
       - name: Install Rust
-        # Pinned to the toolchain in rust-toolchain.toml for reproducible builds.
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -64,6 +70,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"          # e.g. v1.2.3 or v1.2.3-rc.1
+          $version = $tag.TrimStart('v')
+          $prerelease = if ($version -match '-') { 'true' } else { 'false' }
+          "version=$version"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Releasing $tag (version=$version, prerelease=$prerelease)"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,11 +90,29 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Build Release Binary
+        # build.rs stamps this into the binary + About page, so the shipped exe
+        # reports exactly the tag it was built from.
+        env:
+          ZAPRET_UI_VERSION: ${{ steps.ver.outputs.version }}
         run: cargo build --release --verbose
+
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $exe = "target/release/zapret-ui.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  zapret-ui.exe" | Out-File -FilePath "target/release/zapret-ui.exe.sha256" -Encoding ascii
+          Write-Host "SHA256: $hash"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/zapret-ui.exe
+          name: zapret-ui ${{ github.ref_name }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            target/release/zapret-ui.exe
+            target/release/zapret-ui.exe.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

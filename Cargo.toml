@@ -2,6 +2,12 @@
 name = "zapret-ui"
 version = "0.1.0"
 edition = "2021"
+description = "Native Windows GUI for the zapret DPI-bypass core (Flowseal/zapret-discord-youtube)."
+authors = ["meldxkviel"]
+license = "MIT"
+repository = "https://github.com/meldxkviel/zapret-ui"
+homepage = "https://github.com/meldxkviel/zapret-ui"
+readme = "README.md"
 
 [lib]
 name = "zapret_ui"

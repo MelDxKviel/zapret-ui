@@ -542,8 +542,10 @@ impl App {
             .unwrap_or(true);
         ui.set_notifications(notifications_seed);
 
-        // App version (from Cargo) — replaces the hardcoded UI string.
-        ui.set_app_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
+        // App version + repo, resolved at build time (build.rs) so the About
+        // page tracks the real release tag and project URL automatically.
+        ui.set_app_version(env!("APP_VERSION").into());
+        ui.set_repo_url(env!("CARGO_PKG_REPOSITORY").into());
         // Real OS light/dark preference, so the "system" theme is accurate.
         ui.set_system_is_dark(crate::winenv::system_is_dark());
 

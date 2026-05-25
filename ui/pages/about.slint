@@ -89,6 +89,7 @@ component AccentPill inherits Rectangle {
 export component AboutPage inherits Rectangle {
     in property <AppStatus> status;
     in property <string> app_version;
+    in property <string> repo_url;
     callback open_url(string);
 
     background: transparent;
@@ -213,14 +214,20 @@ export component AboutPage inherits Rectangle {
                             Rectangle { height: 18px; }
                             AboutLink {
                                 icon: @image-url("../../assets/icons/github.svg");
-                                label: "github.com/Flowseal/zapret-discord-youtube";
-                                url: "https://github.com/Flowseal/zapret-discord-youtube";
+                                label: I18n.t(I18n.lang, "about.project_repo");
+                                url: root.repo_url;
                                 clicked(u) => { root.open_url(u); }
                             }
                             AboutLink {
                                 icon: @image-url("../../assets/icons/rocket.svg");
                                 label: I18n.t(I18n.lang, "about.release_notes");
-                                url: "https://github.com/Flowseal/zapret-discord-youtube/releases";
+                                url: root.repo_url + "/releases";
+                                clicked(u) => { root.open_url(u); }
+                            }
+                            AboutLink {
+                                icon: @image-url("../../assets/icons/shield.svg");
+                                label: I18n.t(I18n.lang, "about.upstream");
+                                url: "https://github.com/Flowseal/zapret-discord-youtube";
                                 clicked(u) => { root.open_url(u); }
                             }
                             AboutLink {

@@ -444,8 +444,9 @@ fn main() -> anyhow::Result<()> {
     ui.set_log_lines(Rc::new(slint::VecModel::from(log_lines)).into());
     ui.set_log_text(log_text.into());
 
-    // App version for the stats strip / about page.
-    ui.set_app_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
+    // App version + repo for the stats strip / about page.
+    ui.set_app_version(env!("APP_VERSION").into());
+    ui.set_repo_url(env!("CARGO_PKG_REPOSITORY").into());
 
     ui.run()?;
     Ok(())

@@ -118,6 +118,8 @@ export component MainWindow inherits Window {
     in property <image> app_icon;
     // This app's version string (from Cargo, set by Rust).
     in-out property <string> app_version: "";
+    // This app's GitHub repository URL (from Cargo, set by Rust).
+    in-out property <string> repo_url: "";
 
     // ── Status (set from Rust) ──
     in-out property <bool> status_installed: false;
@@ -626,6 +628,7 @@ export component MainWindow inherits Window {
                     height: 100%;
                     status: root.status;
                     app_version: root.app_version;
+                    repo_url: root.repo_url;
                     open_url(u) => { root.open_url_clicked(u); }
                 }
             }
