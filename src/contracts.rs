@@ -121,6 +121,9 @@ pub struct MaintenanceStatus {
     pub ipset_mode: IpsetMode,
     /// Non-empty line count of `ipset-all.txt`, for display.
     pub ipset_lines: u32,
+    /// Age in whole days of `ipset-all.txt` (from its mtime); `None` when the
+    /// file is absent. Drives the "list is getting stale" reminder in the UI.
+    pub ipset_age_days: Option<u32>,
 }
 
 /// Result of the "Update Hosts File" check.

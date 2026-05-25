@@ -361,6 +361,8 @@ fn main() -> anyhow::Result<()> {
     ui.set_game_filter("off".into());
     ui.set_ipset_mode("loaded".into());
     ui.set_ipset_lines(2048);
+    // Old enough to demo the "list is getting stale" reminder on the home page.
+    ui.set_ipset_age_days(18);
     {
         let ui_weak = ui.as_weak();
         ui.on_set_game_filter(move |slug| {
@@ -385,6 +387,7 @@ fn main() -> anyhow::Result<()> {
             println!("UI: Update ipset list clicked");
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_ipset_ok(true);
+                ui.set_ipset_age_days(0);
                 ui.set_ipset_msg("Updated — 2048 IP entries loaded".into());
             }
         });

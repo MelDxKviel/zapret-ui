@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" shape-rendering="geometricPrecision">
+    <defs><linearGradient id="zu-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1c2237"></stop><stop offset="100%" stop-color="#0a0c14"></stop></linearGradient><linearGradient id="zu-lime" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#86d83a"></stop><stop offset="100%" stop-color="#bdf36b"></stop></linearGradient><filter id="zu-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"></feGaussianBlur></filter><clipPath id="zu-clip"><rect x="0" y="0" width="1024" height="1024" rx="229" ry="229"></rect></clipPath></defs>
+    <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="url(#zu-bg)"></rect>
+    <g clip-path="url(#zu-clip)">
+      <g opacity="0.045"><line x1="0" y1="128" x2="1024" y2="128" stroke="#ffffff" stroke-width="1.2"></line><line x1="128" y1="0" x2="128" y2="1024" stroke="#ffffff" stroke-width="1.2"></line><line x1="0" y1="256" x2="1024" y2="256" stroke="#ffffff" stroke-width="1.2"></line><line x1="256" y1="0" x2="256" y2="1024" stroke="#ffffff" stroke-width="1.2"></line><line x1="0" y1="384" x2="1024" y2="384" stroke="#ffffff" stroke-width="1.2"></line><line x1="384" y1="0" x2="384" y2="1024" stroke="#ffffff" stroke-width="1.2"></line><line x1="0" y1="512" x2="1024" y2="512" stroke="#ffffff" stroke-width="1.2"></line><line x1="512" y1="0" x2="512" y2="1024" stroke="#ffffff" stroke-width="1.2"></line><line x1="0" y1="640" x2="1024" y2="640" stroke="#ffffff" stroke-width="1.2"></line><line x1="640" y1="0" x2="640" y2="1024" stroke="#ffffff" stroke-width="1.2"></line><line x1="0" y1="768" x2="1024" y2="768" stroke="#ffffff" stroke-width="1.2"></line><line x1="768" y1="0" x2="768" y2="1024" stroke="#ffffff" stroke-width="1.2"></line><line x1="0" y1="896" x2="1024" y2="896" stroke="#ffffff" stroke-width="1.2"></line><line x1="896" y1="0" x2="896" y2="1024" stroke="#ffffff" stroke-width="1.2"></line></g>
+      
+      <ellipse cx="200" cy="140" rx="440" ry="280" fill="#a8eb5a" opacity="0.10"></ellipse>
+      <ellipse cx="512" cy="512" rx="420" ry="60" fill="#a8eb5a" opacity="0.32" filter="url(#zu-glow)"></ellipse>
+    
+      
+    <rect x="176" y="277" width="448" height="130" rx="65" fill="#4a5266" opacity="1"></rect>
+    <rect x="176" y="447" width="672" height="130" rx="65" fill="url(#zu-lime)"></rect>
+    <rect x="176" y="617" width="336" height="130" rx="65" fill="#4a5266" opacity="1"></rect>
+  
+    </g>
+    <rect x="2" y="2" width="1020" height="1020" rx="227" ry="227" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="3"></rect>
+  </svg>

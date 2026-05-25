@@ -6,7 +6,7 @@ fn main() {
     slint_build::compile("ui/main_window.slint").unwrap();
 
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
-        let mut res = winres::WindowsResource::new();
+        let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
         res.set_manifest_file("assets/app.manifest");
         res.compile().unwrap();

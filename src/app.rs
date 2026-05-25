@@ -1041,6 +1041,7 @@ impl App {
                                 ui.set_game_filter(m.game_filter.slug().into());
                                 ui.set_ipset_mode(m.ipset_mode.slug().into());
                                 ui.set_ipset_lines(m.ipset_lines as i32);
+                                ui.set_ipset_age_days(m.ipset_age_days.map(|d| d as i32).unwrap_or(-1));
                             }
                             UiEvent::MaintenanceResult { kind, ok, message } => {
                                 match kind.as_str() {
@@ -1101,6 +1102,27 @@ impl App {
                 let _ = self.cmd_tx.try_send(BackendCmd::Start(id));
             }
         }
+
+        // Push the embedded icon onto the native window as ICON_SMALL/ICON_BIG.
+        // The Slint `icon` property covers the taskbar, but the title-bar small
+        // icon needs WM_SETICON. The window can take a few seconds to appear
+        // (renderer warm-up), so retry on a timer until it lands, then stop.
+        let icon_timer = std::rc::Rc::new(slint::Timer::default());
+        let icon_timer_weak = std::rc::Rc::downgrade(&icon_timer);
+        let icon_attempts = std::cell::Cell::new(0u32);
+        icon_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(250),
+            move || {
+                let n = icon_attempts.get();
+                icon_attempts.set(n + 1);
+                if crate::winicon::set_window_icon("zapret-ui") || n >= 40 {
+                    if let Some(t) = icon_timer_weak.upgrade() {
+                        t.stop();
+                    }
+                }
+            },
+        );
 
         ui.run()?;
         Ok(())

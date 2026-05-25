@@ -3,6 +3,16 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
 };
 
+/// Decode the bundled white monochrome tray icon (`assets/icon-tray.png`, 32×32
+/// RGBA) into a `tray_icon::Icon`. Embedded via `include_bytes!` so the single
+/// binary stays self-contained.
+fn tray_icon_image() -> anyhow::Result<Icon> {
+    const PNG: &[u8] = include_bytes!("../assets/icon-tray.png");
+    let img = image::load_from_memory_with_format(PNG, image::ImageFormat::Png)?.into_rgba8();
+    let (w, h) = (img.width(), img.height());
+    Ok(Icon::from_rgba(img.into_raw(), w, h)?)
+}
+
 pub struct SystemTray {
     _tray_icon: TrayIcon,
     pub show_item_id: String,
@@ -21,18 +31,7 @@ impl SystemTray {
         tray_menu.append(&show_item)?;
         tray_menu.append(&quit_item)?;
 
-        // Create a simple 16x16 icon
-        let mut rgba = vec![0u8; 16 * 16 * 4];
-        for y in 0..16 {
-            for x in 0..16 {
-                let idx = (y * 16 + x) * 4;
-                rgba[idx] = 41;     // R
-                rgba[idx + 1] = 121; // G
-                rgba[idx + 2] = 255; // B
-                rgba[idx + 3] = 255; // A
-            }
-        }
-        let icon = Icon::from_rgba(rgba, 16, 16)?;
+        let icon = tray_icon_image()?;
 
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))

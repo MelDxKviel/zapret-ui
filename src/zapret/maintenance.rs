@@ -72,7 +72,12 @@ impl Maintenance for ZapretMaintenance {
         let ipset_lines = std::fs::read_to_string(self.ipset_path())
             .map(|c| c.lines().filter(|l| !l.trim().is_empty()).count() as u32)
             .unwrap_or(0);
-        MaintenanceStatus { game_filter, ipset_mode, ipset_lines }
+        let ipset_age_days = std::fs::metadata(self.ipset_path())
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .map(|d| (d.as_secs() / 86_400) as u32);
+        MaintenanceStatus { game_filter, ipset_mode, ipset_lines, ipset_age_days }
     }
 
     async fn set_game_filter(&self, mode: GameFilterMode) -> Result<()> {

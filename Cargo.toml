@@ -34,7 +34,7 @@ image = { version = "0.25", default-features = false, features = ["ico", "png"] 
 
 [build-dependencies]
 slint-build = "1.8"
-winres = "0.1"
+winresource = "0.1"
 
 [profile.release]
 lto = "fat"

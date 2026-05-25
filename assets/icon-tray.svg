@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" shape-rendering="geometricPrecision">
+    <defs><linearGradient id="zu-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1c2237"></stop><stop offset="100%" stop-color="#0a0c14"></stop></linearGradient><linearGradient id="zu-lime" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#86d83a"></stop><stop offset="100%" stop-color="#bdf36b"></stop></linearGradient><filter id="zu-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"></feGaussianBlur></filter><clipPath id="zu-clip"><rect x="0" y="0" width="1024" height="1024"></rect></clipPath></defs>
+    
+    <g clip-path="url(#zu-clip)">
+      
+      
+      
+    <rect x="176" y="277" width="448" height="130" rx="65" fill="currentColor" opacity="0.55"></rect>
+    <rect x="176" y="447" width="672" height="130" rx="65" fill="currentColor"></rect>
+    <rect x="176" y="617" width="336" height="130" rx="65" fill="currentColor" opacity="0.55"></rect>
+  
+    </g>
+    
+  </svg>

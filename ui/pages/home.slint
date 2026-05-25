@@ -320,6 +320,64 @@ component DetailRow inherits Rectangle {
     }
 }
 
+// ── A titled card wrapping one DPI-filter control (game filter / ipset) ──
+component FilterCard inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> hint;
+    horizontal-stretch: 1;
+    background: ThemePalette.surface;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    border-radius: ThemePalette.r-12;
+    clip: true;
+    vertical-stretch: 0;
+    VerticalLayout {
+        padding: 16px;
+        spacing: 14px;
+        alignment: start;
+        // header: icon badge + title / hint
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: start;
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: ThemePalette.r-8;
+                    background: ThemePalette.surface-2;
+                    Image {
+                        source: root.icon;
+                        width: 16px;
+                        height: 16px;
+                        colorize: ThemePalette.text-2;
+                    }
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text {
+                    text: root.title;
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-13;
+                    font-weight: 600;
+                    color: ThemePalette.text;
+                }
+                Text {
+                    text: root.hint;
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-12;
+                    color: ThemePalette.text-3;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        @children
+    }
+}
+
 export component HomePage inherits Rectangle {
     in property <AppStatus> status;
     in property <StrategyItem> chosen_item;
@@ -337,8 +395,20 @@ export component HomePage inherits Rectangle {
     in property <int> uptime;
     // Game filter mode (off | all | tcp | udp), shared with the Settings page.
     in-out property <string> game_filter;
+    // IPSet filter (any | none | loaded | unknown) + its update affordance, also
+    // shared with the Settings page.
+    in-out property <string> ipset_mode;
+    in property <int> ipset_lines;
+    // Age of ipset-all.txt in days (-1 = absent/unknown); when high we nudge the
+    // user to refresh the blocked-IP list.
+    in property <int> ipset_age_days: -1;
+    in property <bool> ipset_busy;
+    in property <string> ipset_msg;
+    in property <bool> ipset_ok: true;
 
     callback game_filter_changed(string);
+    callback ipset_mode_changed(string);
+    callback update_ipset_clicked();
     callback start_clicked();
     callback stop_clicked();
     callback install_clicked();
@@ -364,6 +434,10 @@ export component HomePage inherits Rectangle {
     property <color> state-color: !root.installed ? ThemePalette.danger
         : root.running ? ThemePalette.accent : ThemePalette.text;
     property <string> dot-variant: !root.installed ? "danger" : root.running ? "active" : "idle";
+
+    // The blocked-IP list is in active use (loaded) and old enough to be worth
+    // refreshing — surfaces the warning-tinted reminder in the IPSet card.
+    property <bool> ipset-stale: root.installed && root.ipset_mode == "loaded" && root.ipset_age_days >= 14;
 
     property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy && root.is_admin;
     // A start/stop is mid-flight: power button shows a spinner + label and locks.
@@ -759,59 +833,23 @@ export component HomePage inherits Rectangle {
 
                 Rectangle { height: 16px; }
 
-                // ── GAME FILTER ──
-                Rectangle {
-                    background: ThemePalette.surface;
-                    border-width: 1px;
-                    border-color: ThemePalette.border;
-                    border-radius: ThemePalette.r-12;
-                    clip: true;
-                    vertical-stretch: 0;
-                    HorizontalLayout {
-                        padding-left: 18px;
-                        padding-right: 18px;
-                        padding-top: 14px;
-                        padding-bottom: 14px;
-                        spacing: 16px;
-                        // icon badge
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 32px;
-                                height: 32px;
-                                border-radius: ThemePalette.r-8;
-                                background: ThemePalette.surface-2;
-                                Image {
-                                    source: @image-url("../../assets/icons/filter.svg");
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: ThemePalette.text-2;
-                                }
-                            }
-                        }
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 2px;
-                            alignment: center;
-                            Text {
-                                text: I18n.t(I18n.lang, "common.game_filter");
-                                font-family: ThemePalette.font-sans;
-                                font-size: ThemePalette.fs-13;
-                                font-weight: 600;
-                                color: ThemePalette.text;
-                            }
-                            Text {
-                                text: root.installed
-                                    ? I18n.t(I18n.lang, "home.game_filter_hint")
-                                    : I18n.t(I18n.lang, "common.game_filter_hint_install");
-                                font-family: ThemePalette.font-sans;
-                                font-size: ThemePalette.fs-12;
-                                color: ThemePalette.text-3;
-                                wrap: word-wrap;
-                            }
-                        }
-                        VerticalLayout {
-                            alignment: center;
+                // ── DPI FILTERS (game filter + ipset, side by side) ──
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    // game filter
+                    FilterCard {
+                        icon: @image-url("../../assets/icons/gamepad.svg");
+                        title: I18n.t(I18n.lang, "common.game_filter");
+                        hint: root.installed
+                            ? I18n.t(I18n.lang, "home.game_filter_hint")
+                            : I18n.t(I18n.lang, "common.game_filter_hint_install");
+                        // A fixed-width Segmented placed directly in the card's
+                        // VerticalLayout would cap the whole card's max-width to its
+                        // own; wrapping it in a start-aligned row keeps it natural-
+                        // width yet lets the card fill its half of the row.
+                        HorizontalLayout {
+                            alignment: start;
                             Segmented {
                                 enabled: root.installed;
                                 selected: root.game_filter;
@@ -822,6 +860,80 @@ export component HomePage inherits Rectangle {
                                     { value: "udp", label: I18n.t(I18n.lang, "common.gf_udp") },
                                 ];
                                 changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
+                            }
+                        }
+                    }
+
+                    // ipset filter + update / staleness reminder
+                    FilterCard {
+                        icon: @image-url("../../assets/icons/shield.svg");
+                        title: I18n.t(I18n.lang, "settings.ipset_label");
+                        hint: root.installed
+                            ? I18n.t(I18n.lang, "home.ipset_hint")
+                            : I18n.t(I18n.lang, "common.game_filter_hint_install");
+                        HorizontalLayout {
+                            alignment: start;
+                            Segmented {
+                                enabled: root.installed && root.ipset_mode != "unknown";
+                                selected: root.ipset_mode;
+                                options: [
+                                    { value: "loaded", label: I18n.t(I18n.lang, "settings.ipset_loaded") },
+                                    { value: "none", label: I18n.t(I18n.lang, "settings.ipset_none") },
+                                    { value: "any", label: I18n.t(I18n.lang, "settings.ipset_any") },
+                                ];
+                                changed(v) => { root.ipset_mode = v; root.ipset_mode_changed(v); }
+                            }
+                        }
+
+                        // update strip — turns into a warning-tinted nudge when the
+                        // loaded list is getting old.
+                        Rectangle {
+                            border-radius: ThemePalette.r-8;
+                            border-width: 1px;
+                            border-color: root.ipset-stale ? ThemePalette.warning : ThemePalette.border;
+                            background: root.ipset-stale ? ThemePalette.warning-soft : ThemePalette.surface-2;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                padding-top: 10px;
+                                padding-bottom: 10px;
+                                spacing: 10px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Icon {
+                                        source: root.ipset-stale
+                                            ? @image-url("../../assets/icons/warning.svg")
+                                            : @image-url("../../assets/icons/download.svg");
+                                        size: 14px;
+                                        tint: root.ipset-stale ? ThemePalette.warning : ThemePalette.text-3;
+                                    }
+                                }
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: root.ipset_msg != "" ? root.ipset_msg
+                                        : root.ipset-stale ? I18n.t(I18n.lang, "home.ipset_stale_a") + root.ipset_age_days + I18n.t(I18n.lang, "home.ipset_stale_b")
+                                        : root.ipset_mode == "loaded" ? I18n.t(I18n.lang, "home.ipset_loaded_a") + root.ipset_lines + I18n.t(I18n.lang, "home.ipset_loaded_b")
+                                        : I18n.t(I18n.lang, "home.ipset_update_hint");
+                                    font-family: ThemePalette.font-sans;
+                                    font-size: ThemePalette.fs-12;
+                                    color: root.ipset_msg != "" ? (root.ipset_ok ? ThemePalette.text-2 : ThemePalette.danger)
+                                        : root.ipset-stale ? ThemePalette.warning
+                                        : ThemePalette.text-3;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    AppButton {
+                                        text: root.ipset_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "common.update");
+                                        size: "sm";
+                                        variant: root.ipset-stale ? "primary" : "default";
+                                        icon: @image-url("../../assets/icons/download.svg");
+                                        enabled: root.installed && !root.ipset_busy;
+                                        busy: root.ipset_busy;
+                                        clicked => { root.update_ipset_clicked(); }
+                                    }
+                                }
                             }
                         }
                     }

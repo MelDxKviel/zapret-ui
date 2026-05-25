@@ -12,6 +12,7 @@ pub mod log;
 pub mod notify;
 pub mod tray;
 pub mod single_instance;
+pub mod winicon;
 pub mod winenv;
 pub mod zapret;
 pub mod app;

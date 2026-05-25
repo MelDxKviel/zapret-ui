@@ -187,6 +187,8 @@ export component MainWindow inherits Window {
     in-out property <string> game_filter: "off";   // off | all | tcp | udp
     in-out property <string> ipset_mode: "unknown"; // any | none | loaded | unknown
     in-out property <int> ipset_lines: 0;
+    // Age of ipset-all.txt in days (-1 = absent/unknown); drives the stale reminder.
+    in-out property <int> ipset_age_days: -1;
     in-out property <bool> ipset_busy: false;
     in-out property <string> ipset_msg: "";
     in-out property <bool> ipset_ok: true;
@@ -501,7 +503,15 @@ export component MainWindow inherits Window {
                     app_version: root.app_version;
                     uptime: root.uptime;
                     game_filter <=> root.game_filter;
+                    ipset_mode <=> root.ipset_mode;
+                    ipset_lines: root.ipset_lines;
+                    ipset_age_days: root.ipset_age_days;
+                    ipset_busy: root.ipset_busy;
+                    ipset_msg: root.ipset_msg;
+                    ipset_ok: root.ipset_ok;
                     game_filter_changed(v) => { root.set_game_filter(v); }
+                    ipset_mode_changed(v) => { root.set_ipset_mode(v); }
+                    update_ipset_clicked => { root.update_ipset_clicked(); }
                     // Mark the transition + lock the UI the instant it's clicked; the
                     // backend round-trip (and the spinner) ends when Status arrives.
                     start_clicked => { root.pending_op = "start"; root.is_busy = true; root.start_clicked(root.chosen_item.id); }
