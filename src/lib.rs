@@ -4,6 +4,7 @@ pub mod config;
 pub mod i18n;
 pub mod state;
 pub mod log;
+pub mod notify;
 pub mod tray;
 pub mod single_instance;
 pub mod self_update;

@@ -121,6 +121,19 @@ fn main() -> anyhow::Result<()> {
 
     let ui = MainWindow::new()?;
 
+    // Window/taskbar icon, decoded from the bundled .ico.
+    {
+        use image::ImageReader;
+        use std::io::Cursor;
+        const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
+        if let Ok(img) = ImageReader::with_format(Cursor::new(ICON_BYTES), image::ImageFormat::Ico).decode() {
+            let img = img.into_rgba8();
+            let (w, h) = (img.width(), img.height());
+            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&img, w, h);
+            ui.set_app_icon(slint::Image::from_rgba8(buf));
+        }
+    }
+
     // i18n: back the `I18n.t` callback with the JSON catalogs so text renders.
     // The Settings → Language control flips `I18n.lang` itself, so switching
     // works in the preview without a persistence backend.
@@ -305,6 +318,15 @@ fn main() -> anyhow::Result<()> {
     ui.on_copy_to_clipboard(|text| {
         println!("UI: Copy to clipboard ({} chars)", text.len());
     });
+
+    // Notifications toggle (mock): seed on and echo the callback.
+    ui.set_notifications(true);
+    ui.on_set_notifications(|on| println!("UI: Set notifications: {}", on));
+
+    // Admin gating preview. Flip to `true` to preview the normal (elevated)
+    // state with the banner hidden and the admin-only buttons enabled.
+    ui.set_is_admin(false);
+    ui.on_restart_as_admin(|| println!("UI: Restart as administrator clicked"));
 
     // Mock log lines
     let mk = |no: i32, ts: &str, lvl: &str, msg: &str| LogLineItem {

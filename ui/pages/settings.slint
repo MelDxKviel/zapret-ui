@@ -81,6 +81,7 @@ export component SettingsPage inherits Rectangle {
     in-out property <bool> autostart;
     in-out property <bool> autoupdate_check;
     in-out property <bool> minimize_to_tray;
+    in-out property <bool> notifications;
     in-out property <bool> autoengage;
     in-out property <bool> compact;
     in-out property <string> install_dir;
@@ -101,6 +102,7 @@ export component SettingsPage inherits Rectangle {
     callback open_folder_clicked();
     callback theme_changed(string);
     callback language_changed(string);
+    callback notifications_changed(bool);
     callback game_filter_changed(string);
     callback ipset_mode_changed(string);
     callback update_ipset_clicked();
@@ -154,6 +156,14 @@ export component SettingsPage inherits Rectangle {
                         label: I18n.t(I18n.lang, "settings.tray_label");
                         hint: I18n.t(I18n.lang, "settings.tray_hint");
                         AppSwitch { checked <=> root.minimize_to_tray; }
+                    }
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "settings.notifications_label");
+                        hint: I18n.t(I18n.lang, "settings.notifications_hint");
+                        AppSwitch {
+                            checked <=> root.notifications;
+                            toggled(v) => { root.notifications_changed(v); }
+                        }
                     }
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.autoengage_label");

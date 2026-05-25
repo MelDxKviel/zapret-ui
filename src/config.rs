@@ -54,6 +54,14 @@ pub struct AppConfig {
     /// keeps older configs loadable.
     #[serde(default)]
     pub favorites: Vec<String>,
+    /// Show a Windows toast when the bypass starts or stops. Defaults to on;
+    /// `#[serde(default = ...)]` keeps older configs loadable (and defaulting to on).
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -67,6 +75,7 @@ impl Default for AppConfig {
             minimize_to_tray: false,
             language: Language::default(),
             favorites: Vec::new(),
+            notifications_enabled: true,
         }
     }
 }

@@ -4,6 +4,7 @@ pub mod config;
 pub mod i18n;
 pub mod state;
 pub mod log;
+pub mod notify;
 pub mod tray;
 pub mod single_instance;
 pub mod self_update;
@@ -75,14 +76,35 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     }
 
-    // Single-instance check
-    let _instance = match single_instance::SingleInstance::new("Local\\zapret-ui-single-instance-mutex") {
-        Ok(inst) => inst,
-        Err(_) => {
+    // Single-instance check. When we relaunch ourselves elevated (--relaunch),
+    // the unelevated instance is still shutting down, so retry briefly to let it
+    // release the mutex instead of bouncing straight to "focus existing window".
+    const MUTEX_NAME: &str = "Local\\zapret-ui-single-instance-mutex";
+    let relaunched = std::env::args().any(|a| a == "--relaunch");
+    let instance = if relaunched {
+        let mut acquired = None;
+        for _ in 0..30 {
+            if let Ok(inst) = single_instance::SingleInstance::new(MUTEX_NAME) {
+                acquired = Some(inst);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        acquired
+    } else {
+        single_instance::SingleInstance::new(MUTEX_NAME).ok()
+    };
+    let _instance = match instance {
+        Some(inst) => inst,
+        None => {
             single_instance::focus_existing_window("Zapret UI");
             std::process::exit(0);
         }
     };
+
+    // Register our notification identity so bypass start/stop toasts render
+    // under the app's name (and appear at all).
+    notify::init();
 
     // Initialize event channel
     let (event_tx, _event_rx) = broadcast::channel::<UiEvent>(256);

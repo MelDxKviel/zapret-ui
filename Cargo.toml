@@ -30,6 +30,8 @@ tray-icon = "0.19"
 rust-embed = "8"
 tempfile = "3"
 clipboard-win = "5"
+tauri-winrt-notification = "0.7"
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 
 [build-dependencies]
 slint-build = "1.8"

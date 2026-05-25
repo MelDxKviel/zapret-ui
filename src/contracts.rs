@@ -165,6 +165,8 @@ pub enum BackendCmd {
     /// Persist the user's favorite-strategy ids (toggled with the star on the
     /// Strategies / Tester pages).
     SetFavorites(Vec<String>),
+    /// Persist whether bypass start/stop toasts are shown.
+    SetNotifications(bool),
 }
 
 /// Outcome of testing a single strategy against the target endpoints.

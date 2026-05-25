@@ -86,18 +86,18 @@
   "home.open_folder": "Открыть папку установки",
 
   "strategies.title": "Стратегии",
-  "strategies.subtitle": "Выберите пресет рассинхронизации. Если стандартный не разблокирует вашего провайдера, попробуйте ALT1 → ALT2 → ALT3…",
-  "strategies.search_placeholder": "Поиск по id, номеру ALT или описанию…",
+  "strategies.subtitle": "Выберите стратегию обхода. Запустите 'Тест стратегий', для выбора лучшей",
+  "strategies.search_placeholder": "Поиск по id или описанию…",
   "strategies.no_match_a": "Нет стратегий по запросу «",
   "strategies.no_match_b": "».",
   "strategies.running_badge": "работает",
   "strategies.selected_badge": "выбрана",
   "strategies.active_btn": "Активна",
-  "strategies.selected_btn": "Выбрана ✓",
+  "strategies.selected_btn": "Выбрана",
   "strategies.select_btn": "Выбрать",
 
   "tester.title": "Тестер стратегий",
-  "tester.subtitle": "Проверяет каждую стратегию на доступность Discord / YouTube / Google и автоматически выбирает ту, что разблокирует больше всего.",
+  "tester.subtitle": "Проверяет каждую стратегию на доступность Discord / YouTube / Google",
   "tester.best_label": "лучшая · выбрана автоматически",
   "tester.reachable": " доступно",
   "tester.ms_avg": " мс сред.",
@@ -121,7 +121,7 @@
   "tester.no_results_sub": "Запустите тест, чтобы ранжировать стратегии по доступности.",
 
   "logs.title": "Журнал активности",
-  "logs.subtitle": "Вывод логов winws и установщика в реальном времени",
+  "logs.subtitle": "Вывод логов winws и установщика",
   "logs.open_file": "Открыть файл логов",
   "logs.streaming_a": "streaming · ",
   "logs.streaming_b": " lines",
@@ -137,6 +137,8 @@
   "settings.tray_hint": "Сворачивать в трей вместо выхода. Правый клик по значку в трее — полный выход.",
   "settings.autoengage_label": "Включать обход при запуске приложения",
   "settings.autoengage_hint": "При старте zapret-ui автоматически запускать последнюю использованную стратегию в пользовательском режиме.",
+  "settings.notifications_label": "Уведомления Windows",
+  "settings.notifications_hint": "Показывать всплывающее уведомление при запуске и остановке обхода.",
   "settings.group_updates": "Обновления и пути",
   "settings.autoupdate_label": "Проверять обновления zapret при запуске",
   "settings.autoupdate_hint": "Сравнивает установленное ядро с последним тегом на GitHub.",
@@ -194,5 +196,14 @@
 
   "msg.hosts_up_to_date": "Файл hosts уже актуален",
   "msg.hosts_out_of_date": "Устарел — просмотрите записи и обновите ваш файл hosts",
-  "msg.ipset_updated": "Обновлено — загружено записей IP: {count}"
+  "msg.ipset_updated": "Обновлено — загружено записей IP: {count}",
+
+  "admin.banner_title": "Требуются права администратора",
+  "admin.banner_desc": "Запуск обхода, тест стратегий и управление службой Windows требуют прав администратора. Перезапустите приложение от имени администратора, чтобы включить их.",
+  "admin.restart_btn": "Перезапустить от администратора",
+
+  "notify.started_title": "Обход запущен",
+  "notify.started_body": "DPI-обход активен",
+  "notify.stopped_title": "Обход остановлен",
+  "notify.stopped_body": "DPI-обход выключен"
 }

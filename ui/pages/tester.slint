@@ -158,6 +158,7 @@ export component TesterPage inherits Rectangle {
     in property <string> best_id;
     in property <string> selected_strategy;
     in property <bool> installed;
+    in property <bool> is_admin;
     in property <int> strategy_count;
 
     callback start_clicked();
@@ -254,7 +255,7 @@ export component TesterPage inherits Rectangle {
                                 text: root.has-results ? I18n.t(I18n.lang, "tester.run_again") : I18n.t(I18n.lang, "tester.run_test");
                                 variant: "primary";
                                 icon: @image-url("../../assets/icons/rocket.svg");
-                                enabled: root.installed && root.strategy_count > 0;
+                                enabled: root.installed && root.strategy_count > 0 && root.is_admin;
                                 clicked => { root.start_clicked(); }
                             }
                         }

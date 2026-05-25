@@ -1,0 +1,82 @@
+import { ThemePalette } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
+import { AppButton } from "button.slint";
+
+// Full-width warning bar shown when the app is NOT elevated. It explains that
+// the admin-only actions (Engage, Tester, Windows service) are disabled and
+// offers a one-click elevated relaunch.
+export component AdminBanner inherits Rectangle {
+    callback restart_clicked();
+
+    background: ThemePalette.warning-soft;
+    vertical-stretch: 0;
+    height: row.preferred-height;
+
+    // bottom hairline in the warning hue
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: ThemePalette.warning;
+        opacity: 0.45;
+    }
+
+    row := HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 14px;
+        padding-bottom: 14px;
+        spacing: 14px;
+
+        // icon badge
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: ThemePalette.r-8;
+                background: ThemePalette.warning-soft;
+                border-width: 1px;
+                border-color: ThemePalette.warning;
+                Image {
+                    source: @image-url("../../assets/icons/shield.svg");
+                    width: 16px;
+                    height: 16px;
+                    colorize: ThemePalette.warning;
+                }
+            }
+        }
+
+        // text
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            alignment: center;
+            Text {
+                text: I18n.t(I18n.lang, "admin.banner_title");
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-13;
+                font-weight: 600;
+                color: ThemePalette.text;
+            }
+            Text {
+                text: I18n.t(I18n.lang, "admin.banner_desc");
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-12;
+                color: ThemePalette.text-2;
+                wrap: word-wrap;
+            }
+        }
+
+        // action
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            AppButton {
+                text: I18n.t(I18n.lang, "admin.restart_btn");
+                variant: "primary";
+                icon: @image-url("../../assets/icons/shield.svg");
+                clicked => { root.restart_clicked(); }
+            }
+        }
+    }
+}

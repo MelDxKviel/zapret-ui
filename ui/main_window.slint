@@ -11,6 +11,7 @@ import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
+import { AdminBanner } from "components/admin_banner.slint";
 import { HomePage } from "pages/home.slint";
 import { StrategiesPage } from "pages/strategies.slint";
 import { TesterPage } from "pages/tester.slint";
@@ -106,11 +107,15 @@ component Fade inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "zapret-ui";
+    icon: root.app_icon;
     preferred-width: 1080px;
     preferred-height: 880px;
     min-width: 920px;
     min-height: 640px;
     background: ThemePalette.bg;
+
+    // Window/taskbar icon (set from Rust).
+    in property <image> app_icon;
 
     // ── Status (set from Rust) ──
     in-out property <bool> status_installed: false;
@@ -127,6 +132,12 @@ export component MainWindow inherits Window {
     in-out property <bool> is_busy: false;
     in-out property <bool> has_update: false;
     in-out property <string> latest_version: "";
+
+    // Whether this process is elevated. When false, the admin banner shows and
+    // the admin-only actions (Engage, Tester, Windows service) are disabled.
+    in-out property <bool> is_admin: true;
+    // Windows toast notifications on bypass start/stop (Settings → Application).
+    in-out property <bool> notifications: true;
 
     // ── Data ──
     in-out property <[StrategyItem]> strategies: [];
@@ -229,6 +240,8 @@ export component MainWindow inherits Window {
     callback update_ipset_clicked();
     callback update_hosts_clicked();
     callback copy_to_clipboard(string);
+    callback set_notifications(bool);
+    callback restart_as_admin();
 
     in-out property <string> current_page: "home";
 
@@ -427,6 +440,17 @@ export component MainWindow inherits Window {
             background: ThemePalette.bg;
             clip: true;
 
+            VerticalLayout {
+                // Admin-rights warning bar (only when running unelevated).
+                if !root.is_admin : AdminBanner {
+                    restart_clicked => { root.restart_as_admin(); }
+                }
+
+                // page stack
+                Rectangle {
+                    vertical-stretch: 1;
+                    clip: true;
+
             if root.current_page == "home" : Fade {
                 HomePage {
                     width: 100%;
@@ -435,6 +459,7 @@ export component MainWindow inherits Window {
                     chosen_item: root.chosen_item;
                     has_strategy: root.has_strategy;
                     is_busy: root.is_busy;
+                    is_admin: root.is_admin;
                     strategy_count: root.strategies.length;
                     uptime: root.uptime;
                     game_filter <=> root.game_filter;
@@ -478,6 +503,7 @@ export component MainWindow inherits Window {
                     width: 100%;
                     height: 100%;
                     results: root.test_results;
+                    is_admin: root.is_admin;
                     running: root.test_running;
                     current: root.test_current;
                     total: root.test_total;
@@ -500,6 +526,7 @@ export component MainWindow inherits Window {
                     autostart <=> root.autostart;
                     autoupdate_check <=> root.autoupdate_check;
                     minimize_to_tray <=> root.minimize_to_tray;
+                    notifications <=> root.notifications;
                     autoengage <=> root.autoengage;
                     compact <=> root.compact;
                     install_dir <=> root.install_dir;
@@ -520,6 +547,7 @@ export component MainWindow inherits Window {
                     update_ipset_clicked => { root.update_ipset_clicked(); }
                     update_hosts_clicked => { root.update_hosts_clicked(); }
                     language_changed(v) => { root.set_language(v); }
+                    notifications_changed(v) => { root.set_notifications(v); }
                 }
             }
 
@@ -541,6 +569,8 @@ export component MainWindow inherits Window {
                     height: 100%;
                     status: root.status;
                     open_url(u) => { root.open_url_clicked(u); }
+                }
+            }
                 }
             }
         }

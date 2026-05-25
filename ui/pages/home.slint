@@ -12,6 +12,7 @@ component ServiceCard inherits Rectangle {
     in property <AppStatus> status;
     in property <bool> is_busy;
     in property <bool> has_strategy;
+    in property <bool> is_admin;
     in property <StrategyItem> chosen_item;
 
     callback install_clicked();
@@ -99,7 +100,7 @@ component ServiceCard inherits Rectangle {
                         text: I18n.t(I18n.lang, "service.install_btn");
                         variant: "primary";
                         icon: @image-url("../../assets/icons/service.svg");
-                        enabled: !root.is_busy && root.has_strategy && root.status.installed;
+                        enabled: root.is_admin && !root.is_busy && root.has_strategy && root.status.installed;
                         clicked => { root.install_clicked(); }
                     }
                 }
@@ -127,7 +128,7 @@ component ServiceCard inherits Rectangle {
                         text: I18n.t(I18n.lang, "service.start_btn");
                         variant: "primary";
                         icon: @image-url("../../assets/icons/play.svg");
-                        enabled: !root.is_busy;
+                        enabled: root.is_admin && !root.is_busy;
                         clicked => { root.start_clicked(); }
                     }
                     AppButton {
@@ -135,7 +136,7 @@ component ServiceCard inherits Rectangle {
                         variant: "danger";
                         size: "sm";
                         icon: @image-url("../../assets/icons/trash.svg");
-                        enabled: !root.is_busy;
+                        enabled: root.is_admin && !root.is_busy;
                         clicked => { root.remove_clicked(); }
                     }
                 }
@@ -157,7 +158,7 @@ component ServiceCard inherits Rectangle {
                         text: I18n.t(I18n.lang, "service.stop_btn");
                         variant: "default";
                         icon: @image-url("../../assets/icons/stop.svg");
-                        enabled: !root.is_busy;
+                        enabled: root.is_admin && !root.is_busy;
                         clicked => { root.stop_clicked(); }
                     }
                     AppButton {
@@ -165,7 +166,7 @@ component ServiceCard inherits Rectangle {
                         variant: "danger";
                         size: "sm";
                         icon: @image-url("../../assets/icons/trash.svg");
-                        enabled: !root.is_busy;
+                        enabled: root.is_admin && !root.is_busy;
                         clicked => { root.remove_clicked(); }
                     }
                 }
@@ -316,6 +317,7 @@ export component HomePage inherits Rectangle {
     in property <StrategyItem> chosen_item;
     in property <bool> has_strategy;
     in property <bool> is_busy;
+    in property <bool> is_admin;
     in property <int> strategy_count;
     // Live bypass uptime in seconds — owned by MainWindow so it persists across
     // page navigation and reflects the real bypass session.
@@ -350,7 +352,7 @@ export component HomePage inherits Rectangle {
         : root.running ? ThemePalette.accent : ThemePalette.text;
     property <string> dot-variant: !root.installed ? "danger" : root.running ? "active" : "idle";
 
-    property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy;
+    property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy && root.is_admin;
 
     // Uptime is supplied by MainWindow (see `uptime` property above).
     property <int> up-h: floor(root.uptime / 3600);
@@ -669,6 +671,7 @@ export component HomePage inherits Rectangle {
                         status: root.status;
                         is_busy: root.is_busy;
                         has_strategy: root.has_strategy;
+                        is_admin: root.is_admin;
                         chosen_item: root.chosen_item;
                         install_clicked => { root.service_install_clicked(); }
                         start_clicked => { root.service_start_clicked(); }

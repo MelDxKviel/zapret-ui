@@ -137,6 +137,8 @@
   "settings.tray_hint": "Hide to tray instead of quitting. Right-click the tray icon to fully exit.",
   "settings.autoengage_label": "Engage bypass on app start",
   "settings.autoengage_hint": "When zapret-ui starts, automatically start the last-used strategy in user mode.",
+  "settings.notifications_label": "Windows notifications",
+  "settings.notifications_hint": "Show a toast when the bypass starts or stops.",
   "settings.group_updates": "Updates & paths",
   "settings.autoupdate_label": "Check for zapret updates on launch",
   "settings.autoupdate_hint": "Compares your installed core to the latest tag on GitHub.",
@@ -194,5 +196,14 @@
 
   "msg.hosts_up_to_date": "Hosts file is already up to date",
   "msg.hosts_out_of_date": "Out of date — review the entries and update your hosts file",
-  "msg.ipset_updated": "Updated — {count} IP entries loaded"
+  "msg.ipset_updated": "Updated — {count} IP entries loaded",
+
+  "admin.banner_title": "Administrator rights required",
+  "admin.banner_desc": "Engaging the bypass, testing strategies and managing the Windows service all need administrator rights. Restart the app as administrator to enable them.",
+  "admin.restart_btn": "Restart as administrator",
+
+  "notify.started_title": "Bypass started",
+  "notify.started_body": "DPI bypass is now active",
+  "notify.stopped_title": "Bypass stopped",
+  "notify.stopped_body": "DPI bypass is now off"
 }

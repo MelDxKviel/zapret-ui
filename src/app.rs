@@ -24,6 +24,24 @@ thread_local! {
 
 const LOG_BUF_CAP: usize = 4000;
 
+/// Decode the bundled `icon.ico` into a Slint `Image` for use as the window
+/// (title bar + taskbar) icon. The `.ico` is also embedded as a Win32 resource
+/// via `build.rs` (Explorer icon), but winit needs the icon set at runtime to
+/// show it on the window and in the taskbar.
+fn app_window_icon() -> Option<slint::Image> {
+    use image::ImageReader;
+    use std::io::Cursor;
+
+    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
+    let img = ImageReader::with_format(Cursor::new(ICON_BYTES), image::ImageFormat::Ico)
+        .decode()
+        .ok()?
+        .into_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&img, w, h);
+    Some(slint::Image::from_rgba8(buf))
+}
+
 /// Whether `id` is currently a favorite (reads the UI-thread mirror).
 fn is_favorite(id: &str) -> bool {
     FAVORITES.with(|f| f.borrow().iter().any(|x| x == id))
@@ -220,6 +238,63 @@ pub fn relaunch_elevated(task: &str, strategy: Option<&str>) -> anyhow::Result<(
     Ok(())
 }
 
+/// Relaunch *this whole app* elevated (the normal UI, not a one-shot task) via
+/// the `runas` verb. The new instance carries `--relaunch` so it retries the
+/// single-instance mutex while this (unelevated) instance exits. Used by the
+/// "run as administrator" banner.
+pub fn relaunch_self_elevated() -> anyhow::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    let current_exe = std::env::current_exe()?;
+    let exe_path_w: Vec<u16> = current_exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let params_w: Vec<u16> = OsStr::new("--relaunch").encode_wide().chain(Some(0)).collect();
+    let verb_w: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+
+    unsafe {
+        let result = ShellExecuteW(
+            ptr::null_mut(),
+            verb_w.as_ptr(),
+            exe_path_w.as_ptr(),
+            params_w.as_ptr(),
+            ptr::null(),
+            1, // SW_SHOWNORMAL
+        );
+        if (result as usize) <= 32 {
+            return Err(anyhow::anyhow!("Failed to relaunch elevated: error code {}", result as usize));
+        }
+    }
+
+    Ok(())
+}
+
+/// Fire a bypass start/stop toast when the user has notifications enabled.
+/// Reads the live config so a toggle takes effect immediately; the toast itself
+/// runs on a blocking thread so it never stalls the backend loop.
+async fn notify_bypass(config: &Arc<RwLock<AppConfig>>, started: bool, strategy: Option<&str>) {
+    let (enabled, lang) = {
+        let c = config.read().await;
+        (c.notifications_enabled, crate::i18n::code(c.language))
+    };
+    if !enabled {
+        return;
+    }
+    let (title, body) = if started {
+        let body = strategy
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| crate::i18n::tr(lang, "notify.started_body"));
+        (crate::i18n::tr(lang, "notify.started_title"), body)
+    } else {
+        (
+            crate::i18n::tr(lang, "notify.stopped_title"),
+            crate::i18n::tr(lang, "notify.stopped_body"),
+        )
+    };
+    tokio::task::spawn_blocking(move || crate::notify::show(&title, &body));
+}
+
 pub struct App {
     installer: Arc<dyn Installer>,
     runner: Arc<dyn Runner>,
@@ -270,6 +345,12 @@ impl App {
     ) -> anyhow::Result<()> {
         let ui = MainWindow::new()?;
 
+        // Window/taskbar icon (winit needs this set at runtime, separate from the
+        // embedded .exe resource icon).
+        if let Some(icon) = app_window_icon() {
+            ui.set_app_icon(icon);
+        }
+
         // ── i18n ──
         // Back the Slint `I18n.t(lang, key)` callback with the JSON catalogs, then
         // seed the active language from the saved config (Russian by default).
@@ -306,6 +387,19 @@ impl App {
             .map(|c| (c.favorites.clone(), c.last_strategy.clone()))
             .unwrap_or_default();
         FAVORITES.with(|f| *f.borrow_mut() = fav_seed);
+
+        // Whether this process is elevated. Drives the admin banner + the
+        // disabled state of the buttons that actually need admin (Engage,
+        // Tester, service ops — all touch the WinDivert driver / SCM).
+        ui.set_is_admin(crate::zapret::elevation::is_elevated());
+
+        // Seed the notifications toggle from the saved config (default on).
+        let notifications_seed = self
+            .config
+            .try_read()
+            .map(|c| c.notifications_enabled)
+            .unwrap_or(true);
+        ui.set_notifications(notifications_seed);
 
         // Populate strategies list (favorites first).
         rebuild_strategies(&ui, &self.catalog);
@@ -525,6 +619,22 @@ impl App {
                 let _ = cmd_tx_c.try_send(BackendCmd::UpdateHostsFile);
             });
         }
+        // Persist the notifications toggle (Settings → Application).
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_set_notifications(move |on| {
+                let _ = cmd_tx_c.try_send(BackendCmd::SetNotifications(on));
+            });
+        }
+        // "Run as administrator" banner button: relaunch the whole app elevated,
+        // then exit this unelevated instance so the new one can take over.
+        ui.on_restart_as_admin(move || {
+            match relaunch_self_elevated() {
+                Ok(_) => std::process::exit(0),
+                Err(e) => tracing::error!("Failed to relaunch as administrator: {}", e),
+            }
+        });
+
         // Copy arbitrary text to the system clipboard (used by the hosts window).
         ui.on_copy_to_clipboard(move |text| {
             if let Err(e) = clipboard_win::set_clipboard_string(&text) {
@@ -839,6 +949,7 @@ impl App {
                                         cfg.last_strategy = Some(strategy_id.clone());
                                         let _ = cfg.save();
                                     }
+                                    notify_bypass(&config, true, Some(&strategy_id)).await;
                                     let mut status = runner.detect_running().await;
                                     status.running_mode = RunningMode::UserProcess;
                                     status.active_strategy = Some(strategy_id);
@@ -857,6 +968,7 @@ impl App {
                     BackendCmd::Stop => {
                         match runner.stop().await {
                             Ok(_) => {
+                                notify_bypass(&config, false, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -874,6 +986,8 @@ impl App {
                                     // Installed — now start it so the bypass is active immediately.
                                     if let Err(e) = service_ctl.start().await {
                                         let _ = event_tx.send(UiEvent::Error(format!("Service installed but failed to start: {}", e)));
+                                    } else {
+                                        notify_bypass(&config, true, Some(&strategy_id)).await;
                                     }
                                     let mut status = runner.detect_running().await;
                                     status.service_installed = service_ctl.is_installed().await;
@@ -897,6 +1011,7 @@ impl App {
                     BackendCmd::ServiceRemove => {
                         match service_ctl.remove().await {
                             Ok(_) => {
+                                notify_bypass(&config, false, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -916,6 +1031,7 @@ impl App {
                     BackendCmd::ServiceStart => {
                         match service_ctl.start().await {
                             Ok(_) => {
+                                notify_bypass(&config, true, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -935,6 +1051,7 @@ impl App {
                     BackendCmd::ServiceStop => {
                         match service_ctl.stop().await {
                             Ok(_) => {
+                                notify_bypass(&config, false, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -995,6 +1112,13 @@ impl App {
                         cfg.favorites = favs;
                         if let Err(e) = cfg.save() {
                             tracing::warn!("Failed to persist favorites: {}", e);
+                        }
+                    }
+                    BackendCmd::SetNotifications(on) => {
+                        let mut cfg = config.write().await;
+                        cfg.notifications_enabled = on;
+                        if let Err(e) = cfg.save() {
+                            tracing::warn!("Failed to persist notifications setting: {}", e);
                         }
                     }
                     BackendCmd::SetGameFilter(mode) => {
