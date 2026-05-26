@@ -900,11 +900,15 @@ impl App {
         let quit_id = tray.quit_item_id.clone();
         let cmd_tx_tray = self.cmd_tx.clone();
         std::thread::spawn(move || {
-            // Re-show and raise the window on the UI thread.
+            // Re-show and raise the window on the UI thread. `ui.show()` alone
+            // re-creates a window hidden to the tray, but won't restore one the
+            // user minimized to the taskbar nor raise it above other windows —
+            // so we also force a Win32 restore + foreground.
             let show_window = |w: slint::Weak<MainWindow>| {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = w.upgrade() {
                         let _ = ui.show();
+                        crate::winicon::restore_and_focus_window("zapret-ui");
                     }
                 });
             };
@@ -944,15 +948,23 @@ impl App {
                     }
                 }
 
-                // Left-click (button release) opens the app; right-click is
+                // Left-click (button release) opens the app; a double-click does
+                // too (some users double-click out of habit, and Windows may emit
+                // only the DoubleClick for the second press). Right-click is
                 // reserved for the context menu, so other events are ignored.
-                if let Ok(tray_icon::TrayIconEvent::Click {
-                    button: tray_icon::MouseButton::Left,
-                    button_state: tray_icon::MouseButtonState::Up,
-                    ..
-                }) = tray_icon::TrayIconEvent::receiver().try_recv()
-                {
-                    show_window(ui_weak.clone());
+                match tray_icon::TrayIconEvent::receiver().try_recv() {
+                    Ok(tray_icon::TrayIconEvent::Click {
+                        button: tray_icon::MouseButton::Left,
+                        button_state: tray_icon::MouseButtonState::Up,
+                        ..
+                    })
+                    | Ok(tray_icon::TrayIconEvent::DoubleClick {
+                        button: tray_icon::MouseButton::Left,
+                        ..
+                    }) => {
+                        show_window(ui_weak.clone());
+                    }
+                    _ => {}
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(50));

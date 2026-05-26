@@ -34,6 +34,9 @@ extern "system" {
         cy: i32,
         fuLoad: u32,
     ) -> Hwnd;
+    fn ShowWindow(hWnd: Hwnd, nCmdShow: i32) -> i32;
+    fn SetForegroundWindow(hWnd: Hwnd) -> i32;
+    fn IsIconic(hWnd: Hwnd) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -46,6 +49,8 @@ const WM_SETICON: u32 = 0x0080;
 const ICON_SMALL: usize = 0;
 const ICON_BIG: usize = 1;
 const IMAGE_ICON: u32 = 1;
+const SW_RESTORE: i32 = 9;
+const SW_SHOW: i32 = 5;
 
 /// Resource id `winresource` assigns to the app icon (`1 ICON "assets/icon.ico"`).
 const APP_ICON_RESOURCE_ID: u16 = 1;
@@ -72,22 +77,55 @@ unsafe extern "system" fn enum_cb(hwnd: Hwnd, lparam: isize) -> i32 {
     1
 }
 
-/// Locate our own top-level window (this process, matching `window_title`) and
-/// push the embedded icon onto it as both the small (title-bar) and big
-/// (Alt-Tab) icon. Returns `false` while the window doesn't exist yet — the
-/// caller should retry, since the window can take a few seconds to appear while
-/// the renderer warms up — and `true` once the icon has been applied.
-pub fn set_window_icon(window_title: &str) -> bool {
+/// Locate our own top-level window (this process, matching `window_title`).
+/// Uses `EnumWindows` rather than `FindWindowW`, which reliably fails to match
+/// winit's "Window Class" window on this platform. Returns null while the
+/// window doesn't exist yet.
+fn find_own_window(window_title: &str) -> Hwnd {
     let title: Vec<u16> = std::ffi::OsStr::new(window_title).encode_wide().collect();
     let mut ctx = FindCtx {
         pid: unsafe { GetCurrentProcessId() },
         title,
         found: ptr::null_mut(),
     };
-
     unsafe {
         EnumWindows(enum_cb, &mut ctx as *mut FindCtx as isize);
-        let hwnd = ctx.found;
+    }
+    ctx.found
+}
+
+/// Restore our own window from a minimized (iconic) state and bring it to the
+/// foreground. `slint::Window::show()` alone re-creates a *hidden* window but
+/// does nothing for a window the user minimized to the taskbar, and never
+/// raises an already-visible window above others — so a tray click could leave
+/// the window stuck minimized. This forces `SW_RESTORE` + `SetForegroundWindow`
+/// (mirroring `single_instance::focus_existing_window`). Returns `false` while
+/// the window can't be found yet.
+pub fn restore_and_focus_window(window_title: &str) -> bool {
+    let hwnd = find_own_window(window_title);
+    if hwnd.is_null() {
+        return false;
+    }
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+        SetForegroundWindow(hwnd);
+    }
+    true
+}
+
+/// Locate our own top-level window (this process, matching `window_title`) and
+/// push the embedded icon onto it as both the small (title-bar) and big
+/// (Alt-Tab) icon. Returns `false` while the window doesn't exist yet — the
+/// caller should retry, since the window can take a few seconds to appear while
+/// the renderer warms up — and `true` once the icon has been applied.
+pub fn set_window_icon(window_title: &str) -> bool {
+    let hwnd = find_own_window(window_title);
+
+    unsafe {
         if hwnd.is_null() {
             return false;
         }

@@ -8,9 +8,9 @@ on:
   pull_request:
     branches: [ "main", "master" ]
 
-# Least privilege by default: build/test only needs read access. The release
-# job below opts into `contents: write` and only runs on tag pushes, so PR code
-# (which runs in `build`) never has a write-scoped token.
+# Least privilege by default: checks only need read access. The release job
+# below opts into `contents: write` and only runs on tag pushes, so PR code
+# (which runs in `checks`) never has a write-scoped token.
 permissions:
   contents: read
 
@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
-  build:
-    name: Build & Test
+  checks:
+    name: Lint & Test
     runs-on: windows-2022
 
     steps:
@@ -58,18 +58,9 @@ jobs:
       - name: Run Tests
         run: cargo test --verbose
 
-      - name: Build Release Binary
-        run: cargo build --release --verbose
-
-      - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: zapret-ui
-          path: target/release/zapret-ui.exe
-
   release:
     name: Publish Release
-    needs: build
+    needs: checks
     runs-on: windows-2022
     # Only tag pushes publish; this is the only job granted write access.
     if: startsWith(github.ref, 'refs/tags/v')
