@@ -313,6 +313,12 @@ fn main() -> anyhow::Result<()> {
     ui.on_open_folder_clicked(|| {
         println!("UI: Open folder clicked");
     });
+    ui.on_open_ipset_file_clicked(|| {
+        println!("UI: Open ipset file clicked");
+    });
+    ui.on_open_hosts_file_clicked(|| {
+        println!("UI: Open hosts file clicked");
+    });
     ui.on_refresh_status_clicked(|| {
         println!("UI: Refresh status clicked");
     });
@@ -457,6 +463,55 @@ fn main() -> anyhow::Result<()> {
     // App version + repo for the stats strip / about page.
     ui.set_app_version(env!("APP_VERSION").into());
     ui.set_repo_url(env!("CARGO_PKG_REPOSITORY").into());
+
+    // App self-update preview: seed a pending update so the home banner, the
+    // About row pill and the Settings row are all visible. The mock callbacks
+    // animate a fake download to completion (no real swap/relaunch).
+    ui.set_app_has_update(true);
+    ui.set_app_latest_version("v0.2.0".into());
+    ui.set_app_update_checked(true);
+    ui.set_app_update_ok(true);
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_app_update_clicked(move || {
+            println!("UI: App update clicked");
+            let ui_weak = ui_weak.clone();
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_app_update_downloading(true);
+                ui.set_app_update_progress(0.0);
+            }
+            // Step a fake download to 100%, then clear the update state.
+            for step in 1..=5 {
+                let ui_weak = ui_weak.clone();
+                slint::Timer::single_shot(std::time::Duration::from_millis(300 * step), move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let p = step as f32 / 5.0;
+                        ui.set_app_update_progress(p);
+                        if step == 5 {
+                            ui.set_app_update_downloading(false);
+                            ui.set_app_has_update(false);
+                        }
+                    }
+                });
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_app_check_update_clicked(move || {
+            println!("UI: App check-update clicked");
+            let ui_weak = ui_weak.clone();
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_app_update_checking(true);
+            }
+            slint::Timer::single_shot(std::time::Duration::from_millis(800), move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_app_update_checking(false);
+                    ui.set_app_update_checked(true);
+                }
+            });
+        });
+    }
 
     ui.run()?;
     Ok(())

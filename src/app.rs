@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use tokio::sync::{mpsc, broadcast, RwLock};
 use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, GameFilterMode, IpsetMode, split_alt};
-use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester, Maintenance};
+use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester, Maintenance, SelfUpdater};
 use crate::config::AppConfig;
 use crate::state::AppState;
 use crate::tray::SystemTray;
@@ -378,6 +378,18 @@ pub fn relaunch_self_elevated() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Relaunch the (freshly self-updated) binary at the original path, then let the
+/// caller exit. Uses a plain spawn — no elevation — and passes `--relaunch` so
+/// the new process retries the single-instance mutex while this one shuts down.
+pub fn relaunch_after_update() -> anyhow::Result<()> {
+    let current_exe = std::env::current_exe()?;
+    std::process::Command::new(current_exe)
+        .arg("--relaunch")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("Failed to relaunch updated binary: {e}"))
+}
+
 /// Fire a bypass start/stop toast when the user has notifications enabled.
 /// Reads the live config so a toggle takes effect immediately; the toast itself
 /// runs on a blocking thread so it never stalls the backend loop.
@@ -443,6 +455,7 @@ pub struct App {
     catalog: Arc<dyn StrategyCatalog>,
     tester: Arc<dyn StrategyTester>,
     maintenance: Arc<dyn Maintenance>,
+    self_updater: Arc<dyn SelfUpdater>,
     config: Arc<RwLock<AppConfig>>,
     state: AppState,
     cmd_tx: mpsc::Sender<BackendCmd>,
@@ -459,6 +472,7 @@ impl App {
         catalog: Arc<dyn StrategyCatalog>,
         tester: Arc<dyn StrategyTester>,
         maintenance: Arc<dyn Maintenance>,
+        self_updater: Arc<dyn SelfUpdater>,
         config: AppConfig,
         state: AppState,
         event_tx: broadcast::Sender<UiEvent>,
@@ -472,6 +486,7 @@ impl App {
             catalog,
             tester,
             maintenance,
+            self_updater,
             config: Arc::new(RwLock::new(config)),
             state,
             cmd_tx,
@@ -675,6 +690,31 @@ impl App {
                 dispatch(&cmd_tx_c, BackendCmd::Update);
             });
         }
+        // App self-update: "Update" downloads + swaps + relaunches; "Check" only
+        // re-resolves the latest release (Settings button).
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_app_update_clicked(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_app_update_downloading(true);
+                    ui.set_app_update_progress(0.0);
+                    ui.set_app_update_msg("".into());
+                }
+                dispatch(&cmd_tx_c, BackendCmd::SelfUpdate);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_app_check_update_clicked(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_app_update_checking(true);
+                    ui.set_app_update_msg("".into());
+                }
+                dispatch(&cmd_tx_c, BackendCmd::CheckSelfUpdate);
+            });
+        }
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_service_install_clicked(move |strat_id| {
@@ -703,6 +743,18 @@ impl App {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_open_folder_clicked(move || {
                 let _ = cmd_tx_c.try_send(BackendCmd::OpenInstallFolder);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_open_ipset_file_clicked(move || {
+                let _ = cmd_tx_c.try_send(BackendCmd::OpenIpsetFile);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_open_hosts_file_clicked(move || {
+                let _ = cmd_tx_c.try_send(BackendCmd::OpenHostsFile);
             });
         }
         {
@@ -1144,6 +1196,40 @@ impl App {
                                 ui.set_hosts_dir(hosts_dir.into());
                                 ui.set_hosts_modal_open(true);
                             }
+                            UiEvent::AppUpdateAvailable { latest, .. } => {
+                                ui.set_app_has_update(true);
+                                ui.set_app_latest_version(latest.into());
+                                ui.set_app_update_checking(false);
+                                ui.set_app_update_checked(true);
+                                ui.set_app_update_ok(true);
+                                ui.set_app_update_msg("".into());
+                                // A fresh detection un-dismisses the home banner.
+                                ui.set_app_update_dismissed(false);
+                            }
+                            UiEvent::AppUpToDate { latest } => {
+                                ui.set_app_has_update(false);
+                                ui.set_app_latest_version(latest.into());
+                                ui.set_app_update_checking(false);
+                                ui.set_app_update_checked(true);
+                                ui.set_app_update_ok(true);
+                                ui.set_app_update_msg("".into());
+                            }
+                            UiEvent::AppUpdateProgress { bytes, total } => {
+                                ui.set_app_update_downloading(true);
+                                let pct = match total {
+                                    Some(t) if t > 0 => bytes as f32 / t as f32,
+                                    _ => 0.0,
+                                };
+                                ui.set_app_update_progress(pct);
+                            }
+                            UiEvent::AppUpdateError(err) => {
+                                tracing::error!("Self-update error: {}", err);
+                                ui.set_app_update_checking(false);
+                                ui.set_app_update_downloading(false);
+                                ui.set_app_update_checked(true);
+                                ui.set_app_update_ok(false);
+                                ui.set_app_update_msg(err.into());
+                            }
                         }
                     }
                 });
@@ -1175,6 +1261,8 @@ impl App {
             .unwrap_or((true, false, None));
         if autoupdate {
             let _ = self.cmd_tx.try_send(BackendCmd::CheckUpdate);
+            // Also check whether zapret-ui itself has a newer release.
+            let _ = self.cmd_tx.try_send(BackendCmd::CheckSelfUpdate);
         }
         // Auto-start the last-used strategy on launch when enabled.
         if autoengage {
@@ -1222,6 +1310,7 @@ impl App {
         let catalog = self.catalog.clone();
         let tester = self.tester.clone();
         let maintenance = self.maintenance.clone();
+        let self_updater = self.self_updater.clone();
         let event_tx = self.event_tx.clone();
         let config = self.config.clone();
         let state = self.state.clone();
@@ -1290,6 +1379,47 @@ impl App {
                             }
                             Err(e) => {
                                 let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                            }
+                        }
+                    }
+                    BackendCmd::CheckSelfUpdate => {
+                        match self_updater.latest_version().await {
+                            Ok(latest) => {
+                                let current = self_updater.current_version();
+                                if crate::zapret::updater::is_update_available(&current, &latest) {
+                                    let _ = event_tx.send(UiEvent::AppUpdateAvailable { current, latest });
+                                } else {
+                                    let _ = event_tx.send(UiEvent::AppUpToDate { latest });
+                                }
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(UiEvent::AppUpdateError(e.to_string()));
+                            }
+                        }
+                    }
+                    BackendCmd::SelfUpdate => {
+                        let event_tx_c = event_tx.clone();
+                        let progress_cb = Box::new(move |bytes, total| {
+                            let _ = event_tx_c.send(UiEvent::AppUpdateProgress { bytes, total });
+                        });
+                        match self_updater.download_and_apply(progress_cb).await {
+                            Ok(_) => {
+                                // The new exe is now on disk at the original path.
+                                // Relaunch it and exit so the user lands on the
+                                // updated build; `--relaunch` makes the new process
+                                // wait for this one to drop the single-instance mutex.
+                                tracing::info!("Self-update applied — relaunching");
+                                match relaunch_after_update() {
+                                    Ok(_) => std::process::exit(0),
+                                    Err(e) => {
+                                        let _ = event_tx.send(UiEvent::AppUpdateError(format!(
+                                            "Update installed but relaunch failed: {e}. Please restart the app."
+                                        )));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(UiEvent::AppUpdateError(e.to_string()));
                             }
                         }
                     }
@@ -1464,6 +1594,26 @@ impl App {
                             })
                         };
                         let _ = std::process::Command::new("explorer").arg(&install_dir).spawn();
+                    }
+                    BackendCmd::OpenIpsetFile => {
+                        let install_dir = current_install_dir(&config).await;
+                        let path = install_dir.join("lists").join("ipset-all.txt");
+                        if path.exists() {
+                            open_external(&path.display().to_string());
+                        } else {
+                            let _ = event_tx.send(UiEvent::Error(format!(
+                                "ipset-all.txt not found at {}", path.display()
+                            )));
+                        }
+                    }
+                    BackendCmd::OpenHostsFile => {
+                        // The hosts file has no extension (no default association),
+                        // so open it explicitly in Notepad rather than via the shell.
+                        let system_root = std::env::var("SystemRoot")
+                            .unwrap_or_else(|_| r"C:\Windows".to_string());
+                        let hosts_path = std::path::PathBuf::from(system_root)
+                            .join("System32").join("drivers").join("etc").join("hosts");
+                        let _ = std::process::Command::new("notepad.exe").arg(&hosts_path).spawn();
                     }
                     BackendCmd::CancelTest => {
                         tester.cancel();

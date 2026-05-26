@@ -87,6 +87,17 @@ export component SettingsPage inherits Rectangle {
     in-out property <string> install_dir;
     in-out property <string> theme; // "dark" | "light" | "system"
 
+    // ── App self-update (zapret-ui itself) ──
+    in property <string> app_version;
+    in property <bool> app_has_update;
+    in property <string> app_latest_version;
+    in property <bool> app_update_checking;
+    in property <bool> app_update_downloading;
+    in property <float> app_update_progress;
+    in property <bool> app_update_checked;
+    in property <bool> app_update_ok;
+    in property <string> app_update_msg;
+
     // ── DPI bypass tuning (zapret service.bat filters) ──
     in property <bool> installed;
     in-out property <string> game_filter; // off | all | tcp | udp
@@ -103,6 +114,8 @@ export component SettingsPage inherits Rectangle {
     in property <bool> discord_ok;
 
     callback open_folder_clicked();
+    callback app_check_update_clicked();
+    callback app_update_clicked();
     callback theme_changed(string);
     callback language_changed(string);
     callback notifications_changed(bool);
@@ -115,6 +128,8 @@ export component SettingsPage inherits Rectangle {
     callback update_ipset_clicked();
     callback update_hosts_clicked();
     callback clear_discord_cache_clicked();
+    callback open_ipset_file_clicked();
+    callback open_hosts_file_clicked();
 
     background: transparent;
 
@@ -194,6 +209,65 @@ export component SettingsPage inherits Rectangle {
                 // Updates & paths
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_updates");
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "update.settings_label");
+                        hint: I18n.t(I18n.lang, "update.settings_hint");
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: end;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: root.app_version;
+                                        font-family: ThemePalette.font-mono;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.text-3;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                AppButton {
+                                    text: root.app_has_update
+                                        ? (root.app_update_downloading
+                                            ? I18n.t(I18n.lang, "update.downloading")
+                                            : I18n.t(I18n.lang, "common.update"))
+                                        : (root.app_update_checking
+                                            ? I18n.t(I18n.lang, "settings.checking")
+                                            : I18n.t(I18n.lang, "update.check_btn"));
+                                    variant: root.app_has_update ? "primary" : "default";
+                                    icon: root.app_has_update
+                                        ? @image-url("../../assets/icons/download.svg")
+                                        : @image-url("../../assets/icons/refresh.svg");
+                                    busy: root.app_update_checking || root.app_update_downloading;
+                                    enabled: !root.app_update_checking && !root.app_update_downloading;
+                                    clicked => {
+                                        if (root.app_has_update) {
+                                            root.app_update_clicked();
+                                        } else {
+                                            root.app_check_update_clicked();
+                                        }
+                                    }
+                                }
+                            }
+                            if (!root.app_update_ok && root.app_update_msg != "") || root.app_has_update || root.app_update_checked : Text {
+                                text: (!root.app_update_ok && root.app_update_msg != "")
+                                    ? root.app_update_msg
+                                    : (root.app_has_update
+                                        ? I18n.t(I18n.lang, "update.available_prefix") + root.app_latest_version
+                                        : I18n.t(I18n.lang, "update.up_to_date"));
+                                width: 240px;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: (!root.app_update_ok && root.app_update_msg != "")
+                                    ? ThemePalette.danger
+                                    : ThemePalette.text-3;
+                            }
+                        }
+                    }
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.autoupdate_label");
                         hint: I18n.t(I18n.lang, "settings.autoupdate_hint");
@@ -294,6 +368,14 @@ export component SettingsPage inherits Rectangle {
                             alignment: center;
                             HorizontalLayout {
                                 alignment: end;
+                                spacing: 8px;
+                                AppButton {
+                                    text: I18n.t(I18n.lang, "common.open");
+                                    variant: "ghost";
+                                    icon: @image-url("../../assets/icons/external.svg");
+                                    enabled: root.installed;
+                                    clicked => { root.open_ipset_file_clicked(); }
+                                }
                                 AppButton {
                                     text: root.ipset_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "common.update");
                                     icon: @image-url("../../assets/icons/download.svg");
@@ -320,6 +402,13 @@ export component SettingsPage inherits Rectangle {
                             alignment: center;
                             HorizontalLayout {
                                 alignment: end;
+                                spacing: 8px;
+                                AppButton {
+                                    text: I18n.t(I18n.lang, "common.open");
+                                    variant: "ghost";
+                                    icon: @image-url("../../assets/icons/external.svg");
+                                    clicked => { root.open_hosts_file_clicked(); }
+                                }
                                 AppButton {
                                     text: root.hosts_busy ? I18n.t(I18n.lang, "settings.checking") : I18n.t(I18n.lang, "settings.check_update");
                                     icon: @image-url("../../assets/icons/refresh.svg");

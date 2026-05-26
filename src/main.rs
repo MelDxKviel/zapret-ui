@@ -15,6 +15,7 @@ pub mod single_instance;
 pub mod winicon;
 pub mod winenv;
 pub mod zapret;
+pub mod selfupdate;
 pub mod app;
 
 use std::sync::Arc;
@@ -161,6 +162,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Clean up the binary left behind by a previous self-update (it can't delete
+    // itself while still mapped, so the successor removes it on next launch).
+    selfupdate::cleanup_old_binary();
+
     // Register our notification identity so bypass start/stop toasts render
     // under the app's name (and appear at all).
     notify::init();
@@ -199,6 +204,11 @@ async fn main() -> anyhow::Result<()> {
     let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(install_dir.clone()));
     let tester = Arc::new(zapret::tester::ConnectivityTester::new(runner.clone(), install_dir.clone()));
     let maintenance = Arc::new(zapret::maintenance::ZapretMaintenance::new(install_dir.clone(), client.clone()));
+    let self_updater = Arc::new(selfupdate::GithubSelfUpdater::from_repo_url(
+        client.clone(),
+        env!("CARGO_PKG_REPOSITORY"),
+        env!("APP_VERSION"),
+    ));
 
     // Instantiate and run App
     let mut app = app::App::new(
@@ -208,6 +218,7 @@ async fn main() -> anyhow::Result<()> {
         catalog,
         tester,
         maintenance,
+        self_updater,
         config,
         state,
         event_tx,

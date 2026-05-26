@@ -155,6 +155,10 @@ pub enum BackendCmd {
     Install,
     CheckUpdate,
     Update,
+    /// Check GitHub for a newer release of zapret-ui itself.
+    CheckSelfUpdate,
+    /// Download the latest zapret-ui.exe, swap it in and relaunch.
+    SelfUpdate,
     Start(String /* strategy_id */),
     Stop,
     ServiceInstall(String /* strategy_id */),
@@ -163,6 +167,10 @@ pub enum BackendCmd {
     ServiceStop,
     RefreshStatus,
     OpenInstallFolder,
+    /// Open `lists\ipset-all.txt` from the install dir in the default editor.
+    OpenIpsetFile,
+    /// Open the system hosts file in Notepad (it has no file association).
+    OpenHostsFile,
     /// Run a connectivity test across every available strategy, scoring each
     /// and picking the best (like upstream `test zapret.ps1`).
     TestStrategies,
@@ -242,6 +250,14 @@ pub enum UiEvent {
     MaintenanceResult { kind: String, ok: bool, message: String },
     /// The repo hosts file is out of date — open the review window with its content.
     HostsContent { content: String, hosts_path: String, hosts_dir: String },
+    /// A newer release of zapret-ui itself is available.
+    AppUpdateAvailable { current: String, latest: String },
+    /// zapret-ui is already on the latest release (`latest` echoed for display).
+    AppUpToDate { latest: String },
+    /// Streaming progress while the new zapret-ui.exe downloads.
+    AppUpdateProgress { bytes: u64, total: Option<u64> },
+    /// A self-update check or download failed.
+    AppUpdateError(String),
 }
 
 #[derive(Clone, Debug, Default)]

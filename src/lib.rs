@@ -9,3 +9,4 @@ pub mod tray;
 pub mod single_instance;
 pub mod winenv;
 pub mod zapret;
+pub mod selfupdate;

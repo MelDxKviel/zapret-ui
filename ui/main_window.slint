@@ -12,6 +12,7 @@ import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
 import { AdminBanner } from "components/admin_banner.slint";
+import { UpdateBanner } from "components/update_banner.slint";
 import { HomePage } from "pages/home.slint";
 import { StrategiesPage } from "pages/strategies.slint";
 import { TesterPage } from "pages/tester.slint";
@@ -142,6 +143,19 @@ export component MainWindow inherits Window {
     in-out property <bool> has_update: false;
     in-out property <string> latest_version: "";
 
+    // ── App self-update (zapret-ui itself; set from Rust) ──
+    in-out property <bool> app_has_update: false;
+    in-out property <string> app_latest_version: "";
+    // UI-local: the user dismissed the home banner (the X). Reset on a new check.
+    in-out property <bool> app_update_dismissed: false;
+    in-out property <bool> app_update_checking: false;
+    in-out property <bool> app_update_downloading: false;
+    in-out property <float> app_update_progress: 0.0;
+    // A self-update check has completed at least once (drives "up to date" copy).
+    in-out property <bool> app_update_checked: false;
+    in-out property <bool> app_update_ok: true;
+    in-out property <string> app_update_msg: "";
+
     // Whether this process is elevated. When false, the admin banner shows and
     // the admin-only actions (Engage, Tester, Windows service) are disabled.
     in-out property <bool> is_admin: true;
@@ -240,11 +254,16 @@ export component MainWindow inherits Window {
     callback strategy_selected(string);
     callback install_clicked();
     callback update_clicked();
+    // App self-update (zapret-ui itself).
+    callback app_update_clicked();
+    callback app_check_update_clicked();
     callback service_install_clicked(string);
     callback service_remove_clicked();
     callback service_start_clicked();
     callback service_stop_clicked();
     callback open_folder_clicked();
+    callback open_ipset_file_clicked();
+    callback open_hosts_file_clicked();
     callback refresh_status_clicked();
     callback strategies_search(string);
     callback test_start_clicked();
@@ -492,6 +511,15 @@ export component MainWindow inherits Window {
                     restart_clicked => { root.restart_as_admin(); }
                 }
 
+                // App self-update bar on the dashboard (dismissible via the X).
+                if root.current_page == "home" && root.app_has_update && !root.app_update_dismissed : UpdateBanner {
+                    latest: root.app_latest_version;
+                    downloading: root.app_update_downloading;
+                    progress: root.app_update_progress;
+                    update_clicked => { root.app_update_clicked(); }
+                    dismiss_clicked => { root.app_update_dismissed = true; }
+                }
+
                 // page stack
                 Rectangle {
                     vertical-stretch: 1;
@@ -589,6 +617,17 @@ export component MainWindow inherits Window {
                     compact <=> root.compact;
                     install_dir <=> root.install_dir;
                     theme <=> root.theme;
+                    app_version: root.app_version;
+                    app_has_update: root.app_has_update;
+                    app_latest_version: root.app_latest_version;
+                    app_update_checking: root.app_update_checking;
+                    app_update_downloading: root.app_update_downloading;
+                    app_update_progress: root.app_update_progress;
+                    app_update_checked: root.app_update_checked;
+                    app_update_ok: root.app_update_ok;
+                    app_update_msg: root.app_update_msg;
+                    app_check_update_clicked => { root.app_check_update_clicked(); }
+                    app_update_clicked => { root.app_update_clicked(); }
                     installed: root.status_installed;
                     game_filter <=> root.game_filter;
                     ipset_mode <=> root.ipset_mode;
@@ -603,6 +642,8 @@ export component MainWindow inherits Window {
                     discord_msg: root.discord_msg;
                     discord_ok: root.discord_ok;
                     open_folder_clicked => { root.open_folder_clicked(); }
+                    open_ipset_file_clicked => { root.open_ipset_file_clicked(); }
+                    open_hosts_file_clicked => { root.open_hosts_file_clicked(); }
                     game_filter_changed(v) => { root.set_game_filter(v); }
                     ipset_mode_changed(v) => { root.set_ipset_mode(v); }
                     update_ipset_clicked => { root.update_ipset_clicked(); }
@@ -637,7 +678,11 @@ export component MainWindow inherits Window {
                     status: root.status;
                     app_version: root.app_version;
                     repo_url: root.repo_url;
+                    app_has_update: root.app_has_update;
+                    app_latest_version: root.app_latest_version;
+                    app_update_downloading: root.app_update_downloading;
                     open_url(u) => { root.open_url_clicked(u); }
+                    app_update_clicked => { root.app_update_clicked(); }
                 }
             }
                 }

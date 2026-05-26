@@ -1,0 +1,129 @@
+import { ThemePalette } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
+import { AppButton } from "button.slint";
+import { Icon } from "icon.slint";
+
+// Full-width accent bar shown on the dashboard when a newer zapret-ui release is
+// available. Offers a one-click download-and-relaunch, plus a dismiss (X). While
+// the new binary downloads it shows a busy button and a thin progress bar along
+// the bottom edge. Sits directly under the admin banner when both are present.
+export component UpdateBanner inherits Rectangle {
+    in property <string> latest;
+    in property <bool> downloading: false;
+    in property <float> progress: 0.0;
+    callback update_clicked();
+    callback dismiss_clicked();
+
+    background: ThemePalette.accent-soft;
+    vertical-stretch: 0;
+    height: row.preferred-height;
+
+    // bottom hairline in the accent hue
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: ThemePalette.accent;
+        opacity: 0.45;
+    }
+
+    row := HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 14px;
+        padding-bottom: 14px;
+        spacing: 14px;
+
+        // icon badge
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: ThemePalette.r-8;
+                background: ThemePalette.accent-soft;
+                border-width: 1px;
+                border-color: ThemePalette.accent-line;
+                Image {
+                    source: @image-url("../../assets/icons/rocket.svg");
+                    width: 16px;
+                    height: 16px;
+                    colorize: ThemePalette.accent;
+                }
+            }
+        }
+
+        // text
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            alignment: center;
+            Text {
+                text: I18n.t(I18n.lang, "update.app_title") + (root.latest != "" ? " · " + root.latest : "");
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-13;
+                font-weight: 600;
+                color: ThemePalette.text;
+            }
+            Text {
+                text: I18n.t(I18n.lang, "update.app_desc");
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-12;
+                color: ThemePalette.text-2;
+                wrap: word-wrap;
+            }
+        }
+
+        // action
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            AppButton {
+                text: root.downloading
+                    ? I18n.t(I18n.lang, "update.downloading")
+                    : I18n.t(I18n.lang, "common.update");
+                variant: "primary";
+                busy: root.downloading;
+                icon: @image-url("../../assets/icons/download.svg");
+                clicked => { root.update_clicked(); }
+            }
+        }
+
+        // dismiss (hidden while downloading so the user keeps seeing progress)
+        if !root.downloading : VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: ThemePalette.r-8;
+                background: x-ta.has-hover ? ThemePalette.surface-hover : transparent;
+                animate background { duration: 120ms; }
+                HorizontalLayout {
+                    alignment: center;
+                    Icon {
+                        source: @image-url("../../assets/icons/close.svg");
+                        size: 14px;
+                        tint: x-ta.has-hover ? ThemePalette.text : ThemePalette.text-3;
+                    }
+                }
+                x-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.dismiss_clicked(); }
+                }
+            }
+        }
+    }
+
+    // download progress bar along the bottom edge
+    if root.downloading : Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: ThemePalette.accent-line;
+        Rectangle {
+            x: 0;
+            width: parent.width * root.progress;
+            height: parent.height;
+            background: ThemePalette.accent;
+        }
+    }
+}

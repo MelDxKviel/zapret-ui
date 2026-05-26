@@ -2,6 +2,7 @@ import { ThemePalette, AppStatus } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { BrandMark } from "../components/brand_mark.slint";
 import { Icon } from "../components/icon.slint";
+import { AppButton } from "../components/button.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component AboutLink inherits Rectangle {
@@ -90,7 +91,12 @@ export component AboutPage inherits Rectangle {
     in property <AppStatus> status;
     in property <string> app_version;
     in property <string> repo_url;
+    // App self-update (zapret-ui itself).
+    in property <bool> app_has_update;
+    in property <string> app_latest_version;
+    in property <bool> app_update_downloading;
     callback open_url(string);
+    callback app_update_clicked();
 
     background: transparent;
 
@@ -274,7 +280,28 @@ export component AboutPage inherits Rectangle {
                                 }
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.app_version");
-                                    AccentPill { text: root.app_version; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: end;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            AccentPill { text: root.app_version; }
+                                        }
+                                        if root.app_has_update : VerticalLayout {
+                                            alignment: center;
+                                            AccentPill { text: "↑ " + root.app_latest_version; }
+                                        }
+                                        if root.app_has_update : AppButton {
+                                            text: root.app_update_downloading
+                                                ? I18n.t(I18n.lang, "update.downloading")
+                                                : I18n.t(I18n.lang, "common.update");
+                                            variant: "primary";
+                                            size: "sm";
+                                            busy: root.app_update_downloading;
+                                            icon: @image-url("../../assets/icons/download.svg");
+                                            clicked => { root.app_update_clicked(); }
+                                        }
+                                    }
                                 }
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.zapret_core");

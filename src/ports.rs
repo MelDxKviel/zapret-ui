@@ -5,12 +5,31 @@ pub type ProgressCb = Box<dyn Fn(InstallStage, u64, Option<u64>) + Send + Sync>;
 /// Called before each strategy is tested: `(index_1based, total, strategy_id)`.
 pub type TestProgressCb = Box<dyn Fn(u32, u32, &str) + Send + Sync>;
 
+/// Called as a download streams: `(bytes_so_far, total_bytes_if_known)`.
+pub type DownloadProgressCb = Box<dyn Fn(u64, Option<u64>) + Send + Sync>;
+
 #[async_trait::async_trait]
 pub trait Installer: Send + Sync {
     async fn is_installed(&self) -> bool;
     async fn installed_version(&self) -> Option<String>;
     async fn latest_version(&self) -> anyhow::Result<String>;
     async fn install_or_update(&self, on_progress: ProgressCb) -> anyhow::Result<()>;
+}
+
+/// Self-update for the zapret-ui binary itself (distinct from [`Installer`],
+/// which manages the zapret *core*). The concrete adapter resolves the latest
+/// published release from GitHub, downloads the new `zapret-ui.exe`, verifies
+/// it and swaps it in for the running binary. The orchestrator relaunches.
+#[async_trait::async_trait]
+pub trait SelfUpdater: Send + Sync {
+    /// The version this running binary was built as (e.g. `"v0.1.0"`).
+    fn current_version(&self) -> String;
+    /// Resolve the latest published release tag (e.g. `"v0.2.0"`).
+    async fn latest_version(&self) -> anyhow::Result<String>;
+    /// Download the latest `zapret-ui.exe`, verify its checksum, and atomically
+    /// replace the running binary on disk. Does **not** relaunch or exit — the
+    /// caller spawns the freshly-written exe and terminates this process.
+    async fn download_and_apply(&self, on_progress: DownloadProgressCb) -> anyhow::Result<()>;
 }
 
 #[async_trait::async_trait]

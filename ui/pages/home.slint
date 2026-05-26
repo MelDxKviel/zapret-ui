@@ -486,17 +486,6 @@ export component HomePage inherits Rectangle {
                             wrap: word-wrap;
                         }
                     }
-                    VerticalLayout {
-                        horizontal-stretch: 0;
-                        alignment: end;
-                        AppButton {
-                            text: I18n.t(I18n.lang, "common.refresh");
-                            variant: "ghost";
-                            size: "sm";
-                            icon: @image-url("../../assets/icons/refresh.svg");
-                            clicked => { root.refresh_clicked(); }
-                        }
-                    }
                 }
 
                 // ── HERO ──
