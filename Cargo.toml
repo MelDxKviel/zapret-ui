@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 async-trait = "0.1"
 windows-service = "0.7"
-sysinfo = "0.32"
+sysinfo = "0.39"
 semver = "1"
 sha2 = "0.11"
 tray-icon = "0.24"
