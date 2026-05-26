@@ -9,9 +9,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use reqwest::header::USER_AGENT;
 
-use crate::contracts::{GameFilterMode, IpsetMode, MaintenanceStatus, HostsCheck};
+use crate::contracts::{GameFilterMode, IpsetMode, MaintenanceStatus, HostsCheck, DiscordCacheResult};
 use crate::ports::Maintenance;
 use crate::zapret::batparse;
+
+/// The Discord cache subfolders `service.bat` deletes under `%appdata%\discord`.
+const DISCORD_CACHE_DIRS: [&str; 3] = ["Cache", "Code Cache", "GPUCache"];
 
 /// The single placeholder entry `service.bat` writes for the ipset "none" mode.
 const IPSET_PLACEHOLDER: &str = "203.0.113.113/32";
@@ -211,6 +214,60 @@ impl Maintenance for ZapretMaintenance {
             hosts_dir: hosts_dir.display().to_string(),
         })
     }
+
+    async fn clear_discord_cache(&self) -> Result<DiscordCacheResult> {
+        // Discord locks its cache while running, so close it first (matches
+        // `service.bat`: `taskkill /IM Discord.exe /F`). taskkill returns a
+        // non-zero exit code when no matching process is found — that's not an
+        // error here, it just means Discord wasn't running.
+        let discord_was_running = kill_discord();
+
+        let cache_dir = PathBuf::from(
+            std::env::var("APPDATA").context("APPDATA is not set — cannot locate the Discord cache")?,
+        )
+        .join("discord");
+
+        let mut cleared = 0u32;
+        for sub in DISCORD_CACHE_DIRS {
+            let dir = cache_dir.join(sub);
+            if !dir.exists() {
+                continue;
+            }
+            match std::fs::remove_dir_all(&dir) {
+                Ok(_) => {
+                    cleared += 1;
+                    tracing::info!("Cleared Discord cache folder {}", dir.display());
+                }
+                Err(e) => {
+                    // A single locked file shouldn't abort the whole operation;
+                    // report the rest as cleared and surface the failure.
+                    tracing::warn!("Failed to delete {}: {}", dir.display(), e);
+                    anyhow::bail!("Failed to delete {}: {}", dir.display(), e);
+                }
+            }
+        }
+        tracing::info!(
+            "Discord cache clear done — {} folder(s) removed (was running: {})",
+            cleared,
+            discord_was_running
+        );
+        Ok(DiscordCacheResult { discord_was_running, cleared })
+    }
+}
+
+/// Force-close every `Discord.exe`, returning whether any process was running.
+/// Uses `taskkill` (like `service.bat`) with the no-window flag so no console
+/// flashes; the exit code distinguishes "killed" (0) from "not found" (128).
+fn kill_discord() -> bool {
+    use std::process::Command;
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/IM", "Discord.exe", "/F"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    matches!(cmd.output(), Ok(out) if out.status.success())
 }
 
 #[cfg(test)]

@@ -126,6 +126,17 @@ pub struct MaintenanceStatus {
     pub ipset_age_days: Option<u32>,
 }
 
+/// Result of the "Clear Discord cache" action (mirrors `service.bat`'s Discord
+/// cache clearing: close Discord if running, then delete its `Cache`,
+/// `Code Cache` and `GPUCache` folders under `%appdata%\discord`).
+#[derive(Clone, Debug, Default)]
+pub struct DiscordCacheResult {
+    /// Discord.exe was running and had to be closed first.
+    pub discord_was_running: bool,
+    /// Number of cache folders actually deleted.
+    pub cleared: u32,
+}
+
 /// Result of the "Update Hosts File" check.
 #[derive(Clone, Debug, Default)]
 pub struct HostsCheck {
@@ -165,6 +176,8 @@ pub enum BackendCmd {
     UpdateIpsetList,
     /// Compare the system hosts file to the repo hosts and open it for merge if stale.
     UpdateHostsFile,
+    /// Close Discord (if running) and clear its Cache/Code Cache/GPUCache folders.
+    ClearDiscordCache,
     /// Persist the user's favorite-strategy ids (toggled with the star on the
     /// Strategies / Tester pages).
     SetFavorites(Vec<String>),

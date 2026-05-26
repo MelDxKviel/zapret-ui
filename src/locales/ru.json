@@ -173,6 +173,9 @@
   "settings.update_hosts_hint": "Сравнить ваш системный файл hosts с репозиторием. Если устарел, загруженная копия откроется для ручного объединения.",
   "settings.checking": "Проверка…",
   "settings.check_update": "Проверить и обновить",
+  "settings.discord_cache_label": "Очистить кэш Discord",
+  "settings.discord_cache_hint": "Закрыть Discord и удалить его папки Cache, Code Cache и GPUCache — частое решение, когда Discord не загружается после включения обхода.",
+  "settings.clearing": "Очистка…",
   "settings.group_appearance": "Оформление",
   "settings.theme_label": "Тема",
   "settings.theme_hint": "По умолчанию тёмная. Светлая тема использует тёплый кремовый фон.",
@@ -210,6 +213,8 @@
   "msg.hosts_up_to_date": "Файл hosts уже актуален",
   "msg.hosts_out_of_date": "Устарел — просмотрите записи и обновите ваш файл hosts",
   "msg.ipset_updated": "Обновлено — загружено записей IP: {count}",
+  "msg.discord_closed": "Discord закрыт",
+  "msg.discord_cache_cleared": "Кэш очищен — удалено папок: {count}",
 
   "admin.banner_title": "Требуются права администратора",
   "admin.banner_desc": "Запуск обхода, тест стратегий и управление службой Windows требуют прав администратора. Перезапустите приложение от имени администратора, чтобы включить их.",

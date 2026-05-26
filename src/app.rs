@@ -808,6 +808,19 @@ impl App {
                 }
             });
         }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            let ui_weak = ui.as_weak();
+            ui.on_clear_discord_cache_clicked(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_discord_busy(true);
+                    ui.set_discord_msg("".into());
+                    if cmd_tx_c.try_send(BackendCmd::ClearDiscordCache).is_err() {
+                        ui.set_discord_busy(false);
+                    }
+                }
+            });
+        }
         // Persist the notifications toggle (Settings → Application).
         {
             let cmd_tx_c = self.cmd_tx.clone();
@@ -1116,6 +1129,11 @@ impl App {
                                         ui.set_hosts_busy(false);
                                         ui.set_hosts_msg(message.into());
                                         ui.set_hosts_ok(ok);
+                                    }
+                                    "discord" => {
+                                        ui.set_discord_busy(false);
+                                        ui.set_discord_msg(message.into());
+                                        ui.set_discord_ok(ok);
                                     }
                                     _ => {}
                                 }
@@ -1590,6 +1608,27 @@ impl App {
                                 });
                             }
                         }
+                    }
+                    BackendCmd::ClearDiscordCache => {
+                        let lang = crate::i18n::code(config.read().await.language);
+                        let (ok, message) = match maintenance.clear_discord_cache().await {
+                            Ok(res) => {
+                                let cleared = crate::i18n::tr(lang, "msg.discord_cache_cleared")
+                                    .replace("{count}", &res.cleared.to_string());
+                                let msg = if res.discord_was_running {
+                                    format!("{} · {}", crate::i18n::tr(lang, "msg.discord_closed"), cleared)
+                                } else {
+                                    cleared
+                                };
+                                (true, msg)
+                            }
+                            Err(e) => (false, e.to_string()),
+                        };
+                        let _ = event_tx.send(UiEvent::MaintenanceResult {
+                            kind: "discord".to_string(),
+                            ok,
+                            message,
+                        });
                     }
                     BackendCmd::TestStrategies => {
                         let strategies = catalog.all();

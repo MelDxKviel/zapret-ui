@@ -98,6 +98,9 @@ export component SettingsPage inherits Rectangle {
     in property <bool> hosts_busy;
     in property <string> hosts_msg;
     in property <bool> hosts_ok;
+    in property <bool> discord_busy;
+    in property <string> discord_msg;
+    in property <bool> discord_ok;
 
     callback open_folder_clicked();
     callback theme_changed(string);
@@ -111,6 +114,7 @@ export component SettingsPage inherits Rectangle {
     callback ipset_mode_changed(string);
     callback update_ipset_clicked();
     callback update_hosts_clicked();
+    callback clear_discord_cache_clicked();
 
     background: transparent;
 
@@ -311,7 +315,6 @@ export component SettingsPage inherits Rectangle {
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.update_hosts_label");
                         hint: I18n.t(I18n.lang, "settings.update_hosts_hint");
-                        last: true;
                         VerticalLayout {
                             spacing: 6px;
                             alignment: center;
@@ -332,6 +335,33 @@ export component SettingsPage inherits Rectangle {
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
                                 color: root.hosts_ok ? ThemePalette.text-3 : ThemePalette.danger;
+                            }
+                        }
+                    }
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "settings.discord_cache_label");
+                        hint: I18n.t(I18n.lang, "settings.discord_cache_hint");
+                        last: true;
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: end;
+                                AppButton {
+                                    text: root.discord_busy ? I18n.t(I18n.lang, "settings.clearing") : I18n.t(I18n.lang, "common.clear");
+                                    icon: @image-url("../../assets/icons/trash.svg");
+                                    enabled: !root.discord_busy;
+                                    clicked => { root.clear_discord_cache_clicked(); }
+                                }
+                            }
+                            if root.discord_msg != "" : Text {
+                                text: root.discord_msg;
+                                width: 240px;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: root.discord_ok ? ThemePalette.text-3 : ThemePalette.danger;
                             }
                         }
                     }

@@ -409,6 +409,16 @@ fn main() -> anyhow::Result<()> {
             }
         });
     }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_clear_discord_cache_clicked(move || {
+            println!("UI: Clear Discord cache clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_discord_ok(true);
+                ui.set_discord_msg("Discord closed · Cache cleared — 3 folder(s) removed".into());
+            }
+        });
+    }
     ui.on_copy_to_clipboard(|text| {
         println!("UI: Copy to clipboard ({} chars)", text.len());
     });

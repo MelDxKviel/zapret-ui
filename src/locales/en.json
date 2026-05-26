@@ -173,6 +173,9 @@
   "settings.update_hosts_hint": "Compare your system hosts file with the repository's. If outdated, the downloaded copy opens for a manual merge.",
   "settings.checking": "Checking…",
   "settings.check_update": "Check & update",
+  "settings.discord_cache_label": "Clear Discord cache",
+  "settings.discord_cache_hint": "Close Discord and delete its Cache, Code Cache and GPUCache folders — a common fix when Discord won't load after enabling the bypass.",
+  "settings.clearing": "Clearing…",
   "settings.group_appearance": "Appearance",
   "settings.theme_label": "Theme",
   "settings.theme_hint": "Dark by default. Light theme uses a warm off-white background.",
@@ -210,6 +213,8 @@
   "msg.hosts_up_to_date": "Hosts file is already up to date",
   "msg.hosts_out_of_date": "Out of date — review the entries and update your hosts file",
   "msg.ipset_updated": "Updated — {count} IP entries loaded",
+  "msg.discord_closed": "Discord closed",
+  "msg.discord_cache_cleared": "Cache cleared — {count} folder(s) removed",
 
   "admin.banner_title": "Administrator rights required",
   "admin.banner_desc": "Engaging the bypass, testing strategies and managing the Windows service all need administrator rights. Restart the app as administrator to enable them.",

@@ -197,6 +197,9 @@ export component MainWindow inherits Window {
     in-out property <bool> hosts_busy: false;
     in-out property <string> hosts_msg: "";
     in-out property <bool> hosts_ok: true;
+    in-out property <bool> discord_busy: false;
+    in-out property <string> discord_msg: "";
+    in-out property <bool> discord_ok: true;
     // Hosts review window (opened when the system hosts file is out of date).
     in-out property <bool> hosts_modal_open: false;
     in-out property <string> hosts_content: "";
@@ -257,6 +260,7 @@ export component MainWindow inherits Window {
     callback set_ipset_mode(string);
     callback update_ipset_clicked();
     callback update_hosts_clicked();
+    callback clear_discord_cache_clicked();
     callback copy_to_clipboard(string);
     callback set_notifications(bool);
     callback set_autostart(bool);
@@ -595,11 +599,15 @@ export component MainWindow inherits Window {
                     hosts_busy: root.hosts_busy;
                     hosts_msg: root.hosts_msg;
                     hosts_ok: root.hosts_ok;
+                    discord_busy: root.discord_busy;
+                    discord_msg: root.discord_msg;
+                    discord_ok: root.discord_ok;
                     open_folder_clicked => { root.open_folder_clicked(); }
                     game_filter_changed(v) => { root.set_game_filter(v); }
                     ipset_mode_changed(v) => { root.set_ipset_mode(v); }
                     update_ipset_clicked => { root.update_ipset_clicked(); }
                     update_hosts_clicked => { root.update_hosts_clicked(); }
+                    clear_discord_cache_clicked => { root.clear_discord_cache_clicked(); }
                     language_changed(v) => { root.set_language(v); }
                     notifications_changed(v) => { root.set_notifications(v); }
                     autostart_changed(v) => { root.set_autostart(v); }
