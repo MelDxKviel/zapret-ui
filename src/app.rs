@@ -53,7 +53,9 @@ fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
     StrategyItem {
         id: s.id.as_str().into(),
         display_name: s.display_name.as_str().into(),
-        category: format!("{:?}", s.category).into(),
+        // Lowercased slug so the Slint binding can drop it straight into
+        // an i18n key (`strategies.cat.<slug>`) without lowercasing logic.
+        category: s.category.slug().into(),
         description: s.description.as_str().into(),
         pretty: pretty.into(),
         alt: alt.into(),

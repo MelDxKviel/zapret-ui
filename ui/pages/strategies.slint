@@ -146,6 +146,36 @@ export component StrategiesPage inherits Rectangle {
                                         color: ThemePalette.text;
                                         vertical-alignment: center;
                                     }
+                                    // Category chip — coloured per family so the eye can pick
+                                    // out which preset targets which service at a glance.
+                                    // Hidden for "other" / unset categories.
+                                    if item.category != "" && item.category != "other" : Rectangle {
+                                        horizontal-stretch: 0;
+                                        width: cat-txt.preferred-width + 12px;
+                                        height: 18px;
+                                        border-radius: ThemePalette.r-full;
+                                        background: item.category == "discord" ? #5865F22e
+                                            : item.category == "youtube" ? #FF00002e
+                                            : item.category == "mixed" ? ThemePalette.accent-soft
+                                            : ThemePalette.surface-2;
+                                        border-width: 1px;
+                                        border-color: item.category == "discord" ? #5865F280
+                                            : item.category == "youtube" ? #FF000080
+                                            : item.category == "mixed" ? ThemePalette.accent-line
+                                            : ThemePalette.border;
+                                        cat-txt := Text {
+                                            text: I18n.t(I18n.lang, "strategies.cat." + item.category);
+                                            font-family: ThemePalette.font-mono;
+                                            font-size: ThemePalette.fs-10;
+                                            font-weight: 600;
+                                            color: item.category == "discord" ? #8b95f7
+                                                : item.category == "youtube" ? #f76b6b
+                                                : item.category == "mixed" ? ThemePalette.accent
+                                                : ThemePalette.text-2;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
                                     if item.alt != "" : Rectangle {
                                         horizontal-stretch: 0;
                                         width: chip-txt.preferred-width + 10px;

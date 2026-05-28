@@ -84,7 +84,7 @@
   "home.open_folder": "Открыть папку установки",
 
   "strategies.title": "Стратегии",
-  "strategies.subtitle": "Выберите пресет zapret2. Если по умолчанию не разблокирует у вашего ISP — попробуйте YouTube TLS → Discord → WireGuard…",
+  "strategies.subtitle": "Выберите пресет zapret2. Если General не работает — попробуйте General · aggressive, General · light или Auto: они покрывают то же самое разными десинк-приёмами.",
   "strategies.search_placeholder": "Поиск по id или описанию…",
   "strategies.no_match_a": "Нет стратегий по запросу «",
   "strategies.no_match_b": "».",
@@ -93,6 +93,14 @@
   "strategies.active_btn": "Активна",
   "strategies.selected_btn": "Выбрана",
   "strategies.select_btn": "Выбрать",
+  "strategies.cat.discord": "Discord",
+  "strategies.cat.youtube": "YouTube",
+  "strategies.cat.mixed": "Общая",
+  "strategies.cat.mgts": "МГТС",
+  "strategies.cat.rostelecom": "Ростелеком",
+  "strategies.cat.mts": "МТС",
+  "strategies.cat.beeline": "Билайн",
+  "strategies.cat.other": "Другое",
 
   "tester.title": "Тестер стратегий",
   "tester.subtitle": "Проверяет каждую стратегию на доступность Discord / YouTube / Google",

@@ -54,7 +54,7 @@ pub fn builtin_strategies() -> &'static [StrategyDef] {
     &BUILTIN
 }
 
-static BUILTIN: [StrategyDef; 5] = [
+static BUILTIN: [StrategyDef; 8] = [
     StrategyDef {
         id: "general-v2",
         display_name: "General (v2)",
@@ -71,6 +71,48 @@ static BUILTIN: [StrategyDef; 5] = [
             "windivert.filter/windivert_part.quic_initial_ietf.txt",
         ],
         build: build_general_v2,
+    },
+    StrategyDef {
+        id: "general-aggressive-v2",
+        display_name: "General · aggressive (v2)",
+        description: "Same coverage as General, with longer fake-packet repeat counts and a tcp_seq trick — try when the default isn't enough.",
+        category: Category::Mixed,
+        required_files: &[
+            "lua/zapret-lib.lua",
+            "lua/zapret-antidpi.lua",
+            "files/list-youtube.txt",
+            "files/quic_initial_www_google_com.bin",
+            "windivert.filter/windivert_part.discord_media.txt",
+            "windivert.filter/windivert_part.stun.txt",
+            "windivert.filter/windivert_part.wireguard.txt",
+            "windivert.filter/windivert_part.quic_initial_ietf.txt",
+        ],
+        build: build_general_aggressive_v2,
+    },
+    StrategyDef {
+        id: "general-light-v2",
+        display_name: "General · light (v2)",
+        description: "TLS-only minimal desync — skips HTTP/QUIC/WireGuard. Try when General breaks unrelated sites.",
+        category: Category::Mixed,
+        required_files: &[
+            "lua/zapret-lib.lua",
+            "lua/zapret-antidpi.lua",
+        ],
+        build: build_general_light_v2,
+    },
+    StrategyDef {
+        id: "auto-v2",
+        display_name: "Auto (v2)",
+        description: "Loads zapret-auto.lua + applies a hostlist-less TLS/QUIC desync. Works on any blocked TLS host, not just YouTube.",
+        category: Category::Mixed,
+        required_files: &[
+            "lua/zapret-lib.lua",
+            "lua/zapret-antidpi.lua",
+            "lua/zapret-auto.lua",
+            "files/quic_initial_www_google_com.bin",
+            "windivert.filter/windivert_part.quic_initial_ietf.txt",
+        ],
+        build: build_auto_v2,
     },
     StrategyDef {
         id: "youtube-tls-v2",
@@ -217,6 +259,118 @@ fn build_general_v2(install: &Path) -> Vec<String> {
     ];
     args.shrink_to_fit();
     args
+}
+
+/// Same coverage as `general-v2` but with the fake-packet counts dialled up
+/// (`repeats=20`) and an extra `tcp_seq` displacement on the TLS profile.
+/// Pick when the default doesn't budge — some DPIs only count short bursts
+/// of fakes, so cranking the repeats forces them past their cutoff.
+fn build_general_aggressive_v2(install: &Path) -> Vec<String> {
+    let mut args = vec![
+        "--wf-tcp-out=80,443".into(),
+        lua_init_file(install, "zapret-lib.lua"),
+        lua_init_file(install, "zapret-antidpi.lua"),
+        "--lua-init=fake_default_tls = tls_mod(fake_default_tls,'rnd,rndsni')".into(),
+        blob(install, "quic_google", "quic_initial_www_google_com.bin"),
+        raw_part(install, "windivert_part.discord_media.txt"),
+        raw_part(install, "windivert_part.stun.txt"),
+        raw_part(install, "windivert_part.wireguard.txt"),
+        raw_part(install, "windivert_part.quic_initial_ietf.txt"),
+        // HTTP — same as general but with 2x repeats on the fake.
+        "--filter-tcp=80".into(),
+        "--filter-l7=http".into(),
+        "--out-range=-d10".into(),
+        "--payload=http_req".into(),
+        "--lua-desync=fake:blob=fake_default_http:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:tcp_md5:repeats=4".into(),
+        "--lua-desync=fakedsplit:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:tcp_md5".into(),
+        "--new".into(),
+        // TLS YouTube — repeats=20, tcp_seq displacement.
+        "--filter-tcp=443".into(),
+        "--filter-l7=tls".into(),
+        hostlist(install, "list-youtube.txt"),
+        "--out-range=-d10".into(),
+        "--payload=tls_client_hello".into(),
+        "--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-20000:repeats=20:tls_mod=rnd,dupsid,sni=www.google.com".into(),
+        "--lua-desync=multidisorder:pos=2,midsld".into(),
+        "--new".into(),
+        // TLS generic — repeats=12.
+        "--filter-tcp=443".into(),
+        "--filter-l7=tls".into(),
+        "--out-range=-d10".into(),
+        "--payload=tls_client_hello".into(),
+        "--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-20000:repeats=12".into(),
+        "--lua-desync=multidisorder:pos=2,midsld".into(),
+        "--new".into(),
+        // QUIC YouTube — repeats=20.
+        "--filter-udp=443".into(),
+        "--filter-l7=quic".into(),
+        hostlist(install, "list-youtube.txt"),
+        "--payload=quic_initial".into(),
+        "--lua-desync=fake:blob=quic_google:repeats=20".into(),
+        "--new".into(),
+        // QUIC generic — repeats=20.
+        "--filter-udp=443".into(),
+        "--filter-l7=quic".into(),
+        "--payload=quic_initial".into(),
+        "--lua-desync=fake:blob=fake_default_quic:repeats=20".into(),
+        "--new".into(),
+        // WireGuard/STUN/Discord catch-all — repeats=4.
+        "--filter-l7=wireguard,stun,discord".into(),
+        "--payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery".into(),
+        "--lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=4".into(),
+    ];
+    args.shrink_to_fit();
+    args
+}
+
+/// TLS-only minimal desync. Skips HTTP, QUIC, WireGuard, STUN and Discord
+/// — useful when General drops connections to unrelated sites because of
+/// the aggressive catch-all profile. Costs less CPU too.
+fn build_general_light_v2(install: &Path) -> Vec<String> {
+    vec![
+        "--wf-tcp-out=443".into(),
+        lua_init_file(install, "zapret-lib.lua"),
+        lua_init_file(install, "zapret-antidpi.lua"),
+        "--lua-init=fake_default_tls = tls_mod(fake_default_tls,'rnd,rndsni')".into(),
+        "--filter-tcp=443".into(),
+        "--filter-l7=tls".into(),
+        "--out-range=-d10".into(),
+        "--payload=tls_client_hello".into(),
+        "--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=6".into(),
+        "--lua-desync=multidisorder:pos=midsld".into(),
+    ]
+}
+
+/// Hostlist-less TLS+QUIC desync with the `zapret-auto.lua` automation
+/// library loaded. Loading `zapret-auto.lua` only registers the
+/// `automate_*` helpers — the desync chain here doesn't call them — but
+/// it leaves the door open to adaptive per-host strategies in the future
+/// (the orchestration layer is already in place). For the user, the
+/// practical win is that this preset isn't tied to the YouTube hostlist
+/// so it works on any blocked TLS site.
+fn build_auto_v2(install: &Path) -> Vec<String> {
+    vec![
+        "--wf-tcp-out=443".into(),
+        lua_init_file(install, "zapret-lib.lua"),
+        lua_init_file(install, "zapret-antidpi.lua"),
+        lua_init_file(install, "zapret-auto.lua"),
+        "--lua-init=fake_default_tls = tls_mod(fake_default_tls,'rnd,rndsni')".into(),
+        blob(install, "quic_google", "quic_initial_www_google_com.bin"),
+        raw_part(install, "windivert_part.quic_initial_ietf.txt"),
+        // TLS (generic, no hostlist) — covers any blocked TLS host.
+        "--filter-tcp=443".into(),
+        "--filter-l7=tls".into(),
+        "--out-range=-d10".into(),
+        "--payload=tls_client_hello".into(),
+        "--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=11:tls_mod=rnd,dupsid,sni=www.google.com".into(),
+        "--lua-desync=multidisorder:pos=1,midsld".into(),
+        "--new".into(),
+        // QUIC (generic).
+        "--filter-udp=443".into(),
+        "--filter-l7=quic".into(),
+        "--payload=quic_initial".into(),
+        "--lua-desync=fake:blob=quic_google:repeats=11".into(),
+    ]
 }
 
 /// Minimal TCP/443 TLS desync constrained to the YouTube hostlist. Useful

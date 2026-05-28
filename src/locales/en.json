@@ -84,7 +84,7 @@
   "home.open_folder": "Open installation folder",
 
   "strategies.title": "Strategies",
-  "strategies.subtitle": "Pick a zapret2 preset. If the default doesn't unblock your ISP, try YouTube TLS → Discord → WireGuard…",
+  "strategies.subtitle": "Pick a zapret2 preset. If General doesn't work, try General · aggressive, General · light, or Auto — they cover the same territory with different desync tricks.",
   "strategies.search_placeholder": "Search by id, name or description…",
   "strategies.no_match_a": "No strategies match \"",
   "strategies.no_match_b": "\".",
@@ -93,6 +93,14 @@
   "strategies.active_btn": "Active",
   "strategies.selected_btn": "Selected ✓",
   "strategies.select_btn": "Select",
+  "strategies.cat.discord": "Discord",
+  "strategies.cat.youtube": "YouTube",
+  "strategies.cat.mixed": "General",
+  "strategies.cat.mgts": "MGTS",
+  "strategies.cat.rostelecom": "Rostelecom",
+  "strategies.cat.mts": "MTS",
+  "strategies.cat.beeline": "Beeline",
+  "strategies.cat.other": "Other",
 
   "tester.title": "Strategy Tester",
   "tester.subtitle": "Probe every strategy against Discord / YouTube / Google endpoints and auto-pick the one that unblocks the most.",

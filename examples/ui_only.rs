@@ -178,7 +178,7 @@ fn main() -> anyhow::Result<()> {
                         StrategyItem {
                             id: s.id.as_str().into(),
                             display_name: s.display_name.as_str().into(),
-                            category: format!("{:?}", s.category).into(),
+                            category: s.category.slug().into(),
                             description: s.description.as_str().into(),
                             pretty: pretty.into(),
                             alt: alt.into(),

@@ -11,6 +11,25 @@ pub struct Strategy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Category { Discord, Youtube, Mixed, Mgts, Rostelecom, Mts, Beeline, Other }
 
+impl Category {
+    /// Lowercased label exchanged with the UI — used by the Slint side as the
+    /// suffix of the `strategies.cat.<slug>` i18n key and as the colour class
+    /// of the per-strategy chip. Stable: serialised into `StrategyItem.category`,
+    /// so renaming a variant here means updating ru.json/en.json + tokens.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Self::Discord => "discord",
+            Self::Youtube => "youtube",
+            Self::Mixed => "mixed",
+            Self::Mgts => "mgts",
+            Self::Rostelecom => "rostelecom",
+            Self::Mts => "mts",
+            Self::Beeline => "beeline",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// Split a strategy id like `general (ALT2)` into its pretty name (`general`)
 /// and ALT tag (`ALT2`). Returns an empty tag when there are no parentheses.
 /// Kept for backwards compatibility with the Slint binding — zapret2 ids

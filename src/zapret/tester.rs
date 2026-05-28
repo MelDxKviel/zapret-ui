@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::contracts::{Strategy, StrategyTestResult};
+use crate::contracts::{Category, Strategy, StrategyTestResult};
 use crate::ports::{Runner, StrategyTester, TestProgressCb, TestResultCb};
 
 /// How long to let winws2 + WinDivert settle before probing. zapret2's startup
@@ -30,22 +30,54 @@ const INIT_WAIT: Duration = Duration::from_secs(6);
 /// Per-endpoint request timeout.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Built-in endpoints used when `utils/targets.txt` is absent. Kept in sync
-/// with the upstream defaults (HTTPS targets only).
-const DEFAULT_TARGETS: &[&str] = &[
+/// Endpoints split by what the strategy targets. A Discord-focused preset
+/// shouldn't be graded against YouTube URLs it never tried to unblock — that
+/// would make narrow but effective strategies look broken next to broad
+/// "general" ones. `targets_for_strategy` below picks the right subset per
+/// `Category`; the `GENERIC` set is always appended as a control so we can
+/// see whether a preset broke unrelated sites.
+const DISCORD_TARGETS: &[&str] = &[
     "https://discord.com",
     "https://gateway.discord.gg",
     "https://cdn.discordapp.com",
     "https://updates.discord.com",
+];
+const YOUTUBE_TARGETS: &[&str] = &[
     "https://www.youtube.com",
     "https://youtu.be",
     "https://i.ytimg.com",
     "https://redirector.googlevideo.com",
+];
+const GENERIC_TARGETS: &[&str] = &[
     "https://www.google.com",
     "https://www.gstatic.com",
     "https://www.cloudflare.com",
     "https://cdnjs.cloudflare.com",
 ];
+
+/// Pick the endpoints relevant to `strategy`. Discord/YouTube presets get
+/// their own service + the generic control set; general / unknown / ISP-
+/// specific presets get the full board (12 endpoints).
+fn targets_for_category(category: Category) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    match category {
+        Category::Discord => {
+            out.extend_from_slice(DISCORD_TARGETS);
+            out.extend_from_slice(GENERIC_TARGETS);
+        }
+        Category::Youtube => {
+            out.extend_from_slice(YOUTUBE_TARGETS);
+            out.extend_from_slice(GENERIC_TARGETS);
+        }
+        // Mixed / Other / ISP presets — full board.
+        _ => {
+            out.extend_from_slice(DISCORD_TARGETS);
+            out.extend_from_slice(YOUTUBE_TARGETS);
+            out.extend_from_slice(GENERIC_TARGETS);
+        }
+    }
+    out
+}
 
 pub struct ConnectivityTester {
     runner: Arc<dyn Runner>,
@@ -62,16 +94,17 @@ impl ConnectivityTester {
         }
     }
 
-    /// Load HTTPS endpoints. Defaults to the built-in list, but an optional
-    /// `utils/targets.txt` inside the install dir overrides it — supporting
-    /// both bare URLs (one per line) and the legacy Flowseal `Key = "value"`
-    /// form so an existing customized file keeps working after the zapret2
-    /// migration. zapret2's bundle doesn't ship this file, so the default
-    /// path is the built-in list.
-    fn load_targets(&self) -> Vec<String> {
+    /// Pick the endpoints relevant to a strategy. By default that's the
+    /// category-aware subset (see [`targets_for_category`]) so narrow
+    /// presets aren't graded against URLs they never targeted. An optional
+    /// `utils/targets.txt` inside the install dir overrides the per-strategy
+    /// subset with a single universal list (used for benchmarking against
+    /// a hand-picked endpoint set) — both bare URLs and the legacy Flowseal
+    /// `Key = "value"` form are accepted.
+    fn load_targets(&self, strategy: &Strategy) -> Vec<String> {
         let path = self.install_dir.join("utils").join("targets.txt");
-        let mut out = Vec::new();
         if let Ok(content) = std::fs::read_to_string(&path) {
+            let mut out: Vec<String> = Vec::new();
             for line in content.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
@@ -88,11 +121,14 @@ impl ConnectivityTester {
                 }
                 // `PING:` ICMP-only entries are intentionally skipped.
             }
+            if !out.is_empty() {
+                return out;
+            }
         }
-        if out.is_empty() {
-            out = DEFAULT_TARGETS.iter().map(|s| s.to_string()).collect();
-        }
-        out
+        targets_for_category(strategy.category)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// Probe every target concurrently; return (ok_count, avg_latency_ms).
@@ -151,13 +187,8 @@ impl StrategyTester for ConnectivityTester {
     ) -> anyhow::Result<Vec<StrategyTestResult>> {
         self.cancel.store(false, Ordering::SeqCst);
 
-        let targets = self.load_targets();
         let total = strategies.len() as u32;
-        tracing::info!(
-            "Strategy test starting: {} strategies × {} endpoints",
-            total,
-            targets.len()
-        );
+        tracing::info!("Strategy test starting: {} strategies", total);
 
         let mut results: Vec<StrategyTestResult> = Vec::new();
 
@@ -169,7 +200,14 @@ impl StrategyTester for ConnectivityTester {
 
             let index = i as u32 + 1;
             on_progress(index, total, &strategy.id);
-            tracing::info!("[{index}/{total}] testing strategy: {}", strategy.id);
+
+            // Category-aware target set — a Discord preset isn't graded
+            // against YouTube URLs it never tried to bypass.
+            let targets = self.load_targets(strategy);
+            tracing::info!(
+                "[{index}/{total}] testing strategy {} against {} relevant endpoints",
+                strategy.id, targets.len()
+            );
 
             // Clean slate, then start this preset.
             let _ = self.runner.stop().await;
@@ -222,13 +260,20 @@ impl StrategyTester for ConnectivityTester {
         // Make sure nothing is left running after a test.
         let _ = self.runner.stop().await;
 
-        // Rank: most endpoints reachable first, ties broken by lower latency.
+        // Rank by **percentage** reachable (not absolute) so a narrow preset
+        // scoring 4/4 doesn't lose to a broad one scoring 11/12. Ties go to
+        // larger sample size (more endpoints = more confidence), then to
+        // lower latency.
         results.sort_by(|a, b| {
-            b.ok.cmp(&a.ok).then_with(|| {
-                let al = if a.avg_latency_ms == 0 { u32::MAX } else { a.avg_latency_ms };
-                let bl = if b.avg_latency_ms == 0 { u32::MAX } else { b.avg_latency_ms };
-                al.cmp(&bl)
-            })
+            let a_pct = if a.total == 0 { 0 } else { (a.ok as u64) * 10_000 / a.total as u64 };
+            let b_pct = if b.total == 0 { 0 } else { (b.ok as u64) * 10_000 / b.total as u64 };
+            b_pct.cmp(&a_pct)
+                .then_with(|| b.total.cmp(&a.total))
+                .then_with(|| {
+                    let al = if a.avg_latency_ms == 0 { u32::MAX } else { a.avg_latency_ms };
+                    let bl = if b.avg_latency_ms == 0 { u32::MAX } else { b.avg_latency_ms };
+                    al.cmp(&bl)
+                })
         });
         for (i, r) in results.iter_mut().enumerate() {
             r.rank = i as u32 + 1;
@@ -258,4 +303,40 @@ async fn wait_cancellable(dur: Duration, cancel: &AtomicBool) -> bool {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     !cancel.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_category_targets_discord_plus_generic_only() {
+        let targets = targets_for_category(Category::Discord);
+        assert_eq!(targets.len(), DISCORD_TARGETS.len() + GENERIC_TARGETS.len());
+        for t in DISCORD_TARGETS {
+            assert!(targets.contains(t), "discord target {t} missing");
+        }
+        // YouTube targets must NOT leak into a Discord run.
+        for t in YOUTUBE_TARGETS {
+            assert!(!targets.contains(t), "youtube target {t} leaked into Discord set");
+        }
+    }
+
+    #[test]
+    fn youtube_category_targets_youtube_plus_generic_only() {
+        let targets = targets_for_category(Category::Youtube);
+        assert_eq!(targets.len(), YOUTUBE_TARGETS.len() + GENERIC_TARGETS.len());
+        for t in DISCORD_TARGETS {
+            assert!(!targets.contains(t), "discord target {t} leaked into YouTube set");
+        }
+    }
+
+    #[test]
+    fn mixed_category_targets_all_three_sets() {
+        let targets = targets_for_category(Category::Mixed);
+        assert_eq!(
+            targets.len(),
+            DISCORD_TARGETS.len() + YOUTUBE_TARGETS.len() + GENERIC_TARGETS.len()
+        );
+    }
 }
