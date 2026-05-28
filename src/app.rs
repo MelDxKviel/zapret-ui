@@ -393,7 +393,22 @@ pub fn relaunch_after_update() -> anyhow::Result<()> {
 /// Fire a bypass start/stop toast when the user has notifications enabled.
 /// Reads the live config so a toggle takes effect immediately; the toast itself
 /// runs on a blocking thread so it never stalls the backend loop.
-async fn notify_bypass(config: &Arc<RwLock<AppConfig>>, started: bool, strategy: Option<&str>) {
+///
+/// `last` tracks the last-notified running state so only genuine transitions
+/// toast: repeated start (or stop) requests — whether from re-engaging an
+/// already-running bypass, a service flap, or a second launch — are suppressed
+/// instead of spamming identical notifications.
+async fn notify_bypass(
+    config: &Arc<RwLock<AppConfig>>,
+    last: &mut Option<bool>,
+    started: bool,
+    strategy: Option<&str>,
+) {
+    if *last == Some(started) {
+        return;
+    }
+    *last = Some(started);
+
     let (enabled, lang) = {
         let c = config.read().await;
         (c.notifications_enabled, crate::i18n::code(c.language))
@@ -1098,6 +1113,10 @@ impl App {
                                 ui.set_is_busy(!matches!(stage, InstallStage::Done));
                                 if let InstallStage::Done = stage {
                                     ui.set_progress(1.0);
+                                    // The freshly-installed core's .bat presets are now
+                                    // on disk; re-scan so its strategies appear without
+                                    // needing an app restart.
+                                    rebuild_strategies(&ui, &catalog);
                                 }
                             }
                             UiEvent::LogLine(line) => {
@@ -1316,6 +1335,9 @@ impl App {
         let state = self.state.clone();
 
         tokio::spawn(async move {
+            // Last-notified bypass running state, so start/stop toasts fire only on
+            // a real transition (see `notify_bypass`). Seeded to "stopped".
+            let mut notified_running: Option<bool> = Some(false);
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     BackendCmd::Install => {
@@ -1432,7 +1454,7 @@ impl App {
                                         cfg.last_strategy = Some(strategy_id.clone());
                                         let _ = cfg.save();
                                     }
-                                    notify_bypass(&config, true, Some(&strategy_id)).await;
+                                    notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
                                     let mut status = runner.detect_running().await;
                                     status.running_mode = RunningMode::UserProcess;
                                     status.active_strategy = Some(strategy_id);
@@ -1451,7 +1473,7 @@ impl App {
                     BackendCmd::Stop => {
                         match runner.stop().await {
                             Ok(_) => {
-                                notify_bypass(&config, false, None).await;
+                                notify_bypass(&config, &mut notified_running, false, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -1464,13 +1486,17 @@ impl App {
                     }
                     BackendCmd::ServiceInstall(strategy_id) => {
                         if let Some(strategy) = catalog.by_id(&strategy_id) {
+                            // A user-process bypass holds the WinDivert driver, which
+                            // would make the service's own winws.exe fail to start.
+                            // Stop it first so the service can take over cleanly.
+                            let _ = runner.stop().await;
                             match service_ctl.install(&strategy).await {
                                 Ok(_) => {
                                     // Installed — now start it so the bypass is active immediately.
                                     if let Err(e) = service_ctl.start().await {
                                         let _ = event_tx.send(UiEvent::Error(format!("Service installed but failed to start: {}", e)));
                                     } else {
-                                        notify_bypass(&config, true, Some(&strategy_id)).await;
+                                        notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
                                     }
                                     let mut status = runner.detect_running().await;
                                     status.service_installed = service_ctl.is_installed().await;
@@ -1496,7 +1522,7 @@ impl App {
                     BackendCmd::ServiceRemove => {
                         match service_ctl.remove().await {
                             Ok(_) => {
-                                notify_bypass(&config, false, None).await;
+                                notify_bypass(&config, &mut notified_running, false, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -1516,9 +1542,12 @@ impl App {
                         }
                     }
                     BackendCmd::ServiceStart => {
+                        // Release the WinDivert driver from any user-process bypass so
+                        // the service's winws.exe isn't blocked from starting.
+                        let _ = runner.stop().await;
                         match service_ctl.start().await {
                             Ok(_) => {
-                                notify_bypass(&config, true, None).await;
+                                notify_bypass(&config, &mut notified_running, true, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;
@@ -1540,7 +1569,7 @@ impl App {
                     BackendCmd::ServiceStop => {
                         match service_ctl.stop().await {
                             Ok(_) => {
-                                notify_bypass(&config, false, None).await;
+                                notify_bypass(&config, &mut notified_running, false, None).await;
                                 let mut status = runner.detect_running().await;
                                 status.service_installed = service_ctl.is_installed().await;
                                 state.set_status(status.clone()).await;

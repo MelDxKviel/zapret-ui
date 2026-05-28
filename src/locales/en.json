@@ -134,6 +134,7 @@
   "logs.title": "Activity Logs",
   "logs.subtitle": "Real-time winws and installer output. Select text to copy.",
   "logs.open_file": "Open log file",
+  "logs.copy": "Copy",
   "logs.streaming_a": "streaming · ",
   "logs.streaming_b": " lines",
   "logs.grep_placeholder": "grep…",

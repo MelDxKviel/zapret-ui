@@ -134,6 +134,7 @@
   "logs.title": "Журнал активности",
   "logs.subtitle": "Вывод логов winws и установщика",
   "logs.open_file": "Открыть файл логов",
+  "logs.copy": "Копировать",
   "logs.streaming_a": "streaming · ",
   "logs.streaming_b": " lines",
   "logs.grep_placeholder": "поиск…",
