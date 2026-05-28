@@ -2,7 +2,7 @@
 name = "zapret-ui"
 version = "0.1.0"
 edition = "2021"
-description = "Native Windows GUI for the zapret DPI-bypass core (Flowseal/zapret-discord-youtube)."
+description = "Native Windows GUI for the zapret2 DPI-bypass core (bol-van/zapret2)."
 authors = ["meldxkviel"]
 license = "MIT"
 repository = "https://github.com/meldxkviel/zapret-ui"
@@ -14,6 +14,11 @@ name = "zapret_ui"
 path = "src/lib.rs"
 
 
+# Cross-platform dependencies. The Windows-only stack (SCM, WinDivert glue,
+# tray, clipboard, notifications) is partitioned into the target-specific
+# table below so `cargo check --target x86_64-unknown-linux-gnu` succeeds at
+# the library level — the actual `zapret-ui` binary is still Windows-only
+# (see `src/main.rs` for the cross-platform compile_error gate).
 [dependencies]
 slint = { version = "1.8", features = ["backend-winit", "renderer-skia"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time"] }
@@ -28,18 +33,22 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 async-trait = "0.1"
-windows-service = "0.7"
 sysinfo = "0.32"
 semver = "1"
 sha2 = "0.11"
-tray-icon = "0.24"
 tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-service = "0.7"
+tray-icon = "0.24"
 clipboard-win = "5"
 tauri-winrt-notification = "0.7"
-image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 
 [build-dependencies]
 slint-build = "1.8"
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"
 
 [profile.release]
@@ -48,4 +57,3 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = "z"
-

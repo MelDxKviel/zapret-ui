@@ -1,4 +1,4 @@
-use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage, StrategyTestResult, GameFilterMode, IpsetMode, MaintenanceStatus, HostsCheck, DiscordCacheResult};
+use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage, StrategyTestResult, DpiTuningState, DiscordCacheResult};
 
 pub type ProgressCb = Box<dyn Fn(InstallStage, u64, Option<u64>) + Send + Sync>;
 
@@ -76,23 +76,22 @@ pub trait StrategyTester: Send + Sync {
 /// Called as soon as a single strategy's result is ready (for incremental UI).
 pub type TestResultCb = Box<dyn Fn(StrategyTestResult) + Send + Sync>;
 
-/// The in-app port of the `service.bat` SETTINGS / UPDATES menu items: the game
-/// filter, the ipset filter, and the ipset-list / hosts-file updaters. All
-/// operations act on files inside the install dir (no elevation required).
+/// The in-app port of zapret2's user-facing DPI tuning surface. After the
+/// `bol-van/zapret2` migration this is much smaller than the pre-zapret-2
+/// `Maintenance` trait was: the Flowseal-specific `service.bat` knobs
+/// (game-filter port-range hack, `ipset-all.txt` swap, hosts-file merge) don't
+/// exist in zapret2's flag model on Windows, so all that's left here is
+/// hostlist housekeeping and Discord cache clearing. Everything in this trait
+/// is unprivileged — operations touch files inside the install dir, never the
+/// SCM or HKLM.
 #[async_trait::async_trait]
-pub trait Maintenance: Send + Sync {
-    /// Read the current game-filter + ipset state from the install dir.
-    async fn status(&self) -> MaintenanceStatus;
-    /// Persist the game filter mode (writes/removes `utils\game_filter.enabled`).
-    async fn set_game_filter(&self, mode: GameFilterMode) -> anyhow::Result<()>;
-    /// Switch `ipset-all.txt` to the target any/none/loaded state (with backup).
-    async fn set_ipset_mode(&self, mode: IpsetMode) -> anyhow::Result<()>;
-    /// Download the latest ipset list into `lists\ipset-all.txt`. Returns the
-    /// number of entries loaded (the caller builds the localized message).
-    async fn update_ipset_list(&self) -> anyhow::Result<usize>;
-    /// Download the repo hosts file and compare it to the system hosts file.
-    /// Returns the comparison plus the downloaded content for in-app review.
-    async fn update_hosts_file(&self) -> anyhow::Result<HostsCheck>;
+pub trait DpiTuning: Send + Sync {
+    /// Snapshot of the hostlist files currently in `<install>/files/`.
+    async fn status(&self) -> DpiTuningState;
+    /// Download fresh copies of every hostlist we know how to update into
+    /// `<install>/files/`. Returns the number of hostlists actually
+    /// written (the caller builds the localized status message).
+    async fn update_hostlists(&self) -> anyhow::Result<usize>;
     /// Close Discord (if running) and delete its `Cache`/`Code Cache`/`GPUCache`
     /// folders under `%appdata%\discord`. Returns what was closed/cleared.
     async fn clear_discord_cache(&self) -> anyhow::Result<DiscordCacheResult>;

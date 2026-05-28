@@ -1,17 +1,19 @@
-//! Strategy connectivity tester — the in-app equivalent of Flowseal's
-//! `utils/test zapret.ps1`.
+//! Strategy connectivity tester.
 //!
-//! For every strategy it (1) starts winws with that preset via the shared
-//! [`Runner`], (2) waits for the desync engine to initialise, (3) probes a set
-//! of normally-blocked HTTPS endpoints, and (4) scores the strategy by how many
-//! endpoints became reachable (tie-broken by average latency). The strategy
-//! with the highest score wins and is reported back so the UI can auto-select
-//! it.
+//! For every strategy it (1) starts winws2 with that preset via the shared
+//! [`Runner`], (2) waits for the desync engine + WinDivert driver to settle,
+//! (3) probes a set of normally-blocked HTTPS endpoints, and (4) scores the
+//! strategy by how many endpoints became reachable (tie-broken by average
+//! latency). The strategy with the highest score wins and is reported back so
+//! the UI can auto-select it.
 //!
-//! Endpoints come from the installed `utils/targets.txt` (same file the upstream
-//! script reads); if it is missing we fall back to a built-in Discord/YouTube/
-//! Google/Cloudflare list. `PING:` ICMP-only entries are ignored — we only do
-//! TLS/HTTP reachability, which is what actually exercises the DPI bypass.
+//! Endpoints default to a built-in Discord/YouTube/Google/Cloudflare list. A
+//! `utils/targets.txt` file (one URL per line, or the legacy Flowseal
+//! `KeyName = "value"` form for backwards compatibility) inside the install
+//! dir overrides the defaults if present — useful for benchmarking against a
+//! custom endpoint set without rebuilding. `PING:` ICMP-only lines are
+//! intentionally skipped: we only measure TLS/HTTP reachability, which is what
+//! actually exercises the DPI bypass.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,8 +23,10 @@ use std::time::{Duration, Instant};
 use crate::contracts::{Strategy, StrategyTestResult};
 use crate::ports::{Runner, StrategyTester, TestProgressCb, TestResultCb};
 
-/// How long to let winws settle before probing (matches the upstream 5s wait).
-const INIT_WAIT: Duration = Duration::from_secs(4);
+/// How long to let winws2 + WinDivert settle before probing. zapret2's startup
+/// involves loading the kernel-mode driver and parsing Lua scripts, both
+/// non-trivial — bumped from the 4 s the Flowseal-era tester used.
+const INIT_WAIT: Duration = Duration::from_secs(6);
 /// Per-endpoint request timeout.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -58,7 +62,12 @@ impl ConnectivityTester {
         }
     }
 
-    /// Load HTTPS endpoints from `utils/targets.txt`, falling back to defaults.
+    /// Load HTTPS endpoints. Defaults to the built-in list, but an optional
+    /// `utils/targets.txt` inside the install dir overrides it — supporting
+    /// both bare URLs (one per line) and the legacy Flowseal `Key = "value"`
+    /// form so an existing customized file keeps working after the zapret2
+    /// migration. zapret2's bundle doesn't ship this file, so the default
+    /// path is the built-in list.
     fn load_targets(&self) -> Vec<String> {
         let path = self.install_dir.join("utils").join("targets.txt");
         let mut out = Vec::new();
@@ -68,14 +77,16 @@ impl ConnectivityTester {
                 if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
-                // Format: `KeyName = "value"`
-                if let Some((_, rhs)) = line.split_once('=') {
-                    let val = rhs.trim().trim_matches('"').trim();
-                    if val.starts_with("http://") || val.starts_with("https://") {
-                        out.push(val.to_string());
-                    }
-                    // `PING:` ICMP-only entries are intentionally skipped.
+                // Either `KeyName = "value"` (Flowseal legacy) or a bare URL.
+                let val: String = if let Some((_, rhs)) = line.split_once('=') {
+                    rhs.trim().trim_matches('"').trim().to_string()
+                } else {
+                    line.to_string()
+                };
+                if val.starts_with("http://") || val.starts_with("https://") {
+                    out.push(val);
                 }
+                // `PING:` ICMP-only entries are intentionally skipped.
             }
         }
         if out.is_empty() {

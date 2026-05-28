@@ -36,33 +36,29 @@ impl ProcessRunner {
     }
 
     fn get_winws_path(&self) -> PathBuf {
-        let bin_path = self.install_dir.join("bin").join("winws.exe");
-        if bin_path.exists() {
-            bin_path
-        } else {
-            self.install_dir.join("winws.exe")
-        }
+        // zapret2 bundle ships `winws2.exe` at the install root (no `bin/`
+        // subdir, unlike the Flowseal layout we used pre-zapret-2).
+        self.install_dir.join("winws2.exe")
     }
 
-    /// The set of canonical winws.exe paths we consider "ours": the configured
-    /// install dir and the protected machine-wide service dir.
+    /// The set of canonical `winws2.exe` paths we consider "ours": the
+    /// configured install dir and the protected machine-wide service dir.
     fn owned_winws_paths(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let p = self.get_winws_path();
         out.push(p.canonicalize().unwrap_or(p));
         let svc_dir = crate::zapret::paths::service_install_dir();
-        for cand in [svc_dir.join("bin").join("winws.exe"), svc_dir.join("winws.exe")] {
-            if cand.exists() {
-                out.push(cand.canonicalize().unwrap_or(cand));
-            }
+        let svc_exe = svc_dir.join("winws2.exe");
+        if svc_exe.exists() {
+            out.push(svc_exe.canonicalize().unwrap_or(svc_exe));
         }
         out
     }
 
-    /// Whether `process` is a winws.exe that belongs to our installation.
+    /// Whether `process` is a `winws2.exe` that belongs to our installation.
     fn is_owned_winws(process: &sysinfo::Process, owned: &[PathBuf]) -> bool {
         let name = process.name().to_string_lossy();
-        if !(name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws")) {
+        if !(name.eq_ignore_ascii_case("winws2.exe") || name.eq_ignore_ascii_case("winws2")) {
             return false;
         }
         match process.exe() {
@@ -105,19 +101,35 @@ impl Runner for ProcessRunner {
 
         let winws_path = self.get_winws_path();
         if !winws_path.exists() {
-            return Err(anyhow::anyhow!("winws.exe not found at {:?}", winws_path));
+            return Err(anyhow::anyhow!("winws2.exe not found at {:?}", winws_path));
         }
 
-        // Make sure the user list files winws expects exist (service.bat does this too).
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
+        // Warn (don't fail) if the strategy's input files aren't all present.
+        // The bundle ships everything; a missing file points at a tampered or
+        // partial install. Surfaced via tracing so it lands in the in-app
+        // Logs page next to winws2's own startup output.
+        let missing = crate::zapret::strategies::check_required_files(
+            &self.install_dir,
+            strategy,
+        );
+        if !missing.is_empty() {
+            tracing::warn!(
+                "Starting {} but {} required input file(s) are missing: {:?}",
+                strategy.id, missing.len(), missing
+            );
+        }
 
-        // winws.exe is launched with bin/ as the working directory (matches the .bat: `cd /d %BIN%`).
-        let bin_dir = winws_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| self.install_dir.clone());
+        // winws2.exe is launched with the install root as the working
+        // directory: that's where WinDivert64.sys, WinDivert.dll and
+        // cygwin1.dll live, all of which winws2 loads relative to its CWD on
+        // startup. (The upstream preset .cmd files use `%~dp0` which expands
+        // to the script's own directory — same effect.)
+        let cwd = self.install_dir.clone();
 
         // Configure process command
         let mut cmd = tokio::process::Command::new(&winws_path);
         cmd.args(&strategy.winws_args);
-        cmd.current_dir(&bin_dir);
+        cmd.current_dir(&cwd);
 
         // Windows-specific flags: CREATE_NO_WINDOW (0x08000000) and CREATE_NEW_PROCESS_GROUP (0x00000200)
         #[cfg(windows)]
@@ -204,7 +216,7 @@ impl Runner for ProcessRunner {
                 }
             }
         } else {
-            // Clean up only winws.exe processes belonging to our installation
+            // Clean up only winws2.exe processes belonging to our installation.
             let winws_path = self.get_winws_path();
             let winws_path_canonical = winws_path.canonicalize().unwrap_or(winws_path.clone());
 
@@ -212,7 +224,7 @@ impl Runner for ProcessRunner {
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             for (pid, process) in sys.processes() {
                 let name = process.name().to_string_lossy();
-                if name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws") {
+                if name.eq_ignore_ascii_case("winws2.exe") || name.eq_ignore_ascii_case("winws2") {
                     let matches_path = if let Some(exe) = process.exe() {
                         let exe_canonical = exe.canonicalize().unwrap_or(exe.to_path_buf());
                         exe_canonical == winws_path_canonical

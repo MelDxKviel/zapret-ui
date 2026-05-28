@@ -33,7 +33,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
 ///
 /// Must be called from an elevated context (the SCM install already requires
 /// elevation). This closes the privilege-escalation hole where a `LocalSystem`
-/// service ran `winws.exe` out of a user-writable `%APPDATA%` directory.
+/// service ran `winws2.exe` out of a user-writable `%APPDATA%` directory.
+///
+/// The copy is recursive and unfiltered so the WinDivert driver
+/// (`WinDivert64.sys` + `WinDivert.dll`), the Cygwin DLL (`cygwin1.dll`) and
+/// every `lua/`, `files/`, `windivert.filter/` payload come along — winws2
+/// loads each of them from its working directory at startup.
 pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<PathBuf> {
     let dst = crate::zapret::paths::service_install_dir();
 
@@ -93,12 +98,8 @@ impl WindowsServiceCtl {
     }
 
     fn get_winws_path(&self) -> PathBuf {
-        let bin_path = self.install_dir.join("bin").join("winws.exe");
-        if bin_path.exists() {
-            bin_path
-        } else {
-            self.install_dir.join("winws.exe")
-        }
+        // zapret2 bundle layout — `winws2.exe` lives at the install root.
+        self.install_dir.join("winws2.exe")
     }
 }
 
@@ -141,7 +142,7 @@ impl ServiceCtl for WindowsServiceCtl {
 
         let winws_path = self.get_winws_path();
         if !winws_path.exists() {
-            return Err(anyhow::anyhow!("winws.exe not found at {:?}", winws_path));
+            return Err(anyhow::anyhow!("winws2.exe not found at {:?}", winws_path));
         }
 
         let manager = ServiceManager::local_computer(
@@ -160,12 +161,17 @@ impl ServiceCtl for WindowsServiceCtl {
             let owned = match existing.query_config() {
                 Ok(cfg) => {
                     let p = &cfg.executable_path;
-                    let is_winws = p.file_name()
-                        .map(|n| n.eq_ignore_ascii_case("winws.exe"))
+                    // Accept both winws2.exe (current zapret2) and the legacy
+                    // winws.exe (a service registered by an earlier zapret-ui
+                    // build before this migration). Either way, it's ours and
+                    // safe to replace.
+                    let is_ours_exe = p.file_name()
+                        .map(|n| {
+                            n.eq_ignore_ascii_case("winws2.exe")
+                                || n.eq_ignore_ascii_case("winws.exe")
+                        })
                         .unwrap_or(false);
-                    // Ours if it points at a winws.exe inside our (protected) dir
-                    // or the machine-wide service dir.
-                    is_winws
+                    is_ours_exe
                         && (p.starts_with(&self.install_dir)
                             || p.starts_with(crate::zapret::paths::service_install_dir()))
                 }
@@ -193,8 +199,19 @@ impl ServiceCtl for WindowsServiceCtl {
         // Prepare the launch arguments.
         let launch_arguments: Vec<OsString> = strategy.winws_args.iter().map(|s| OsString::from(s.as_str())).collect();
 
-        // Ensure user list files exist so the service's winws.exe can start.
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
+        // Warn (don't fail) if the strategy's input files aren't all present
+        // in the protected install dir — a missing Lua/hostlist/blob would
+        // make SCM start the service only to have winws2 die seconds later.
+        let missing = crate::zapret::strategies::check_required_files(
+            &self.install_dir,
+            strategy,
+        );
+        if !missing.is_empty() {
+            tracing::warn!(
+                "Installing service for {} but {} required input file(s) are missing: {:?}",
+                strategy.id, missing.len(), missing
+            );
+        }
 
         // Create the ServiceInfo structure.
         let service_info = ServiceInfo {

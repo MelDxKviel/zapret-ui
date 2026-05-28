@@ -17,3 +17,7 @@ desktop.ini
 
 # Claude local state
 .claude/
+
+# Local clone of bol-van/zapret-win-bundle for reference while iterating on
+# the zapret2 migration. Not shipped, not checked in.
+.bundle-ref/

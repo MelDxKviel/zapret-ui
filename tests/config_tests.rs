@@ -73,6 +73,42 @@ fn test_config_fallback_on_corrupt() {
     assert_eq!(parsed, AppConfig::default());
 }
 
+/// The zapret-2 migration rule: a `last_strategy` that no longer matches any
+/// builtin id gets reset to `None`. Mirrors what `src/main.rs` runs at
+/// startup against `crate::zapret::strategies::builtin_strategies()`.
+#[test]
+fn test_migrate_unknown_last_strategy_resets_flowseal_id() {
+    let mut cfg = AppConfig {
+        last_strategy: Some("general (ALT2)".to_string()),
+        ..AppConfig::default()
+    };
+    let reset = cfg.migrate_unknown_last_strategy(|id| id == "general-v2" || id == "discord-v2");
+    assert!(reset);
+    assert_eq!(cfg.last_strategy, None);
+}
+
+#[test]
+fn test_migrate_unknown_last_strategy_keeps_known_id() {
+    let mut cfg = AppConfig {
+        last_strategy: Some("discord-v2".to_string()),
+        ..AppConfig::default()
+    };
+    let reset = cfg.migrate_unknown_last_strategy(|id| id == "general-v2" || id == "discord-v2");
+    assert!(!reset);
+    assert_eq!(cfg.last_strategy, Some("discord-v2".to_string()));
+}
+
+#[test]
+fn test_migrate_unknown_last_strategy_noop_when_unset() {
+    let mut cfg = AppConfig {
+        last_strategy: None,
+        ..AppConfig::default()
+    };
+    let reset = cfg.migrate_unknown_last_strategy(|_| false);
+    assert!(!reset);
+    assert!(cfg.last_strategy.is_none());
+}
+
 #[tokio::test]
 async fn test_state_get_and_set_status() {
     let initial_status = RuntimeStatus {

@@ -34,6 +34,15 @@ export struct StrategyItem {
     favorite: bool,    // starred by the user (floats to the top of the list)
 }
 
+// One curated hostlist file in <install>/files/. Rendered as a row on the
+// Settings page so the user can see when each list was last refreshed.
+// Mirrors crate::contracts::HostlistInfo (Phase 5 of the zapret2 migration).
+export struct HostlistInfoItem {
+    name: string,        // e.g. "list-youtube.txt"
+    age_days: int,       // -1 when the file is absent
+    line_count: int,     // non-empty line count
+}
+
 // One row in the strategy-tester results table. `ok`/`total` are the reachable
 // endpoint counts; `latency` is the average latency in ms (0 if nothing passed).
 // `rank` is 1-based (0 while still streaming); `is_best` flags the winner.

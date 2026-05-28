@@ -1,7 +1,20 @@
 // Build as a Windows GUI app in release so no console window pops up next to the
 // UI. Debug builds keep the console attached so `tracing`/`eprintln!` logs are
-// visible while developing (`cargo run`).
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// visible while developing (`cargo run`). Gated to Windows so the attribute
+// doesn't surface on `cargo check --target x86_64-unknown-linux-gnu`.
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
+// The binary is Windows-only by design — it depends on the SCM, the WinDivert
+// driver, the Win32 tray, and several Cygwin DLLs the bundle ships. The
+// library (`zapret-ui` lib target) is partitioned so its cross-platform half
+// still type-checks on Linux, paving the way for a future nfqws2/systemd
+// port — but the *binary* refuses to build until that port lands so the
+// failure mode is loud and obvious instead of crypticly missing symbols.
+#[cfg(not(target_os = "windows"))]
+compile_error!(
+    "zapret-ui currently builds only on Windows. \
+     The cross-platform port (nfqws2 + systemd) is tracked separately."
+);
 
 pub mod contracts;
 pub mod ports;
@@ -76,7 +89,7 @@ async fn run_elevated_task(
             // lock down its ACLs, then run the service from THERE — never from
             // the user-writable %APPDATA% dir (privilege-escalation fix).
             let protected = zapret::service::prepare_protected_dir(&install_dir)?;
-            let catalog = zapret::catalog::LocalStrategyCatalog::new(protected.clone());
+            let catalog = zapret::strategies::BuiltinCatalog::new(protected.clone());
             let strategy = catalog.by_id(&strat_id).ok_or_else(|| anyhow::anyhow!("Strategy not found"))?;
             let service_ctl = zapret::service::WindowsServiceCtl::new(protected);
             service_ctl.install(&strategy).await?;
@@ -186,7 +199,27 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Load config and state
-    let config = config::AppConfig::load();
+    let mut config = config::AppConfig::load();
+    // Migration shim from the pre-zapret-2 build: if `last_strategy` is set
+    // to a Flowseal-era id (`"general (ALT2)"`, etc.) that no longer matches
+    // any builtin, reset it so we don't try to start a non-existent strategy
+    // on autoengage. The rule is unit-tested in `config::tests`; this just
+    // wires it to the strategies catalog and persists on a reset.
+    let previous = config.last_strategy.clone();
+    let reset = config.migrate_unknown_last_strategy(|id| {
+        zapret::strategies::builtin_strategies()
+            .iter()
+            .any(|s| s.id == id)
+    });
+    if reset {
+        tracing::warn!(
+            "Previous strategy '{}' is no longer in the catalog; resetting last_strategy",
+            previous.as_deref().unwrap_or("?")
+        );
+        if let Err(e) = config.save() {
+            tracing::warn!("Failed to persist reset of last_strategy: {e}");
+        }
+    }
     let state = state::AppState::default();
 
     let install_dir = config.install_dir_override.clone().unwrap_or_else(|| {
@@ -196,14 +229,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Instantiate ports
     let client = reqwest::Client::builder().build()?;
-    let github_client = zapret::github::GithubClient::new(client.clone(), None);
+    let bundle = zapret::winbundle::WinBundleSource::new(client.clone(), None);
 
-    let installer = Arc::new(zapret::installer::ZapretInstaller::new(install_dir.clone(), github_client));
+    let installer = Arc::new(zapret::installer::ZapretInstaller::new(install_dir.clone(), bundle));
     let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone(), event_tx.clone()));
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
-    let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(install_dir.clone()));
+    let catalog = Arc::new(zapret::strategies::BuiltinCatalog::new(install_dir.clone()));
     let tester = Arc::new(zapret::tester::ConnectivityTester::new(runner.clone(), install_dir.clone()));
-    let maintenance = Arc::new(zapret::maintenance::ZapretMaintenance::new(install_dir.clone(), client.clone()));
+    let tuning = Arc::new(zapret::maintenance::ZapretDpiTuning::new(install_dir.clone(), client.clone()));
     let self_updater = Arc::new(selfupdate::GithubSelfUpdater::from_repo_url(
         client.clone(),
         env!("CARGO_PKG_REPOSITORY"),
@@ -217,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
         service_ctl,
         catalog,
         tester,
-        maintenance,
+        tuning,
         self_updater,
         config,
         state,

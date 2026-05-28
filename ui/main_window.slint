@@ -6,11 +6,10 @@ import "assets/fonts/Geist-Bold.ttf";
 import "assets/fonts/GeistMono-Regular.ttf";
 import "assets/fonts/GeistMono-Medium.ttf";
 
-import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem } from "tokens.slint";
+import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem, HostlistInfoItem } from "tokens.slint";
 import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
-import { HostsDialog } from "components/hosts_dialog.slint";
 import { AdminBanner } from "components/admin_banner.slint";
 import { UpdateBanner } from "components/update_banner.slint";
 import { HomePage } from "pages/home.slint";
@@ -20,7 +19,7 @@ import { SettingsPage } from "pages/settings.slint";
 import { LogsPage } from "pages/logs.slint";
 import { AboutPage } from "pages/about.slint";
 
-export { StrategyItem, AppStatus, LogLineItem, TestResultItem, I18n }
+export { StrategyItem, AppStatus, LogLineItem, TestResultItem, HostlistInfoItem, I18n }
 
 // ── Sidebar nav row ──
 component NavItem inherits Rectangle {
@@ -199,26 +198,18 @@ export component MainWindow inherits Window {
     // "system" so that mode reflects the OS instead of always being dark.
     in-out property <bool> system_is_dark: true;
 
-    // ── DPI bypass tuning (zapret service.bat filters; set from Rust) ──
-    in-out property <string> game_filter: "off";   // off | all | tcp | udp
-    in-out property <string> ipset_mode: "unknown"; // any | none | loaded | unknown
-    in-out property <int> ipset_lines: 0;
-    // Age of ipset-all.txt in days (-1 = absent/unknown); drives the stale reminder.
-    in-out property <int> ipset_age_days: -1;
-    in-out property <bool> ipset_busy: false;
-    in-out property <string> ipset_msg: "";
-    in-out property <bool> ipset_ok: true;
-    in-out property <bool> hosts_busy: false;
-    in-out property <string> hosts_msg: "";
-    in-out property <bool> hosts_ok: true;
+    // ── DPI tuning (zapret2 hostlists; set from Rust) ──
+    // After the bol-van/zapret2 migration the Flowseal-port "game filter" /
+    // "ipset mode" / "hosts file" concepts go away — zapret2's winws2 doesn't
+    // expose any of them on Windows. What remains is curated hostlists in
+    // `<install>/files/` (refreshable on demand) and the Discord cache clear.
+    in-out property <[HostlistInfoItem]> hostlists: [];
+    in-out property <bool> hostlists_busy: false;
+    in-out property <string> hostlists_msg: "";
+    in-out property <bool> hostlists_ok: true;
     in-out property <bool> discord_busy: false;
     in-out property <string> discord_msg: "";
     in-out property <bool> discord_ok: true;
-    // Hosts review window (opened when the system hosts file is out of date).
-    in-out property <bool> hosts_modal_open: false;
-    in-out property <string> hosts_content: "";
-    in-out property <string> hosts_path: "";
-    in-out property <string> hosts_dir: "";
 
     // ── Aggregated status ──
     property <AppStatus> status: {
@@ -262,8 +253,6 @@ export component MainWindow inherits Window {
     callback service_start_clicked();
     callback service_stop_clicked();
     callback open_folder_clicked();
-    callback open_ipset_file_clicked();
-    callback open_hosts_file_clicked();
     callback refresh_status_clicked();
     callback strategies_search(string);
     callback test_start_clicked();
@@ -275,10 +264,7 @@ export component MainWindow inherits Window {
     callback open_log_file_clicked();
     callback open_url_clicked(string);
     callback set_language(string);
-    callback set_game_filter(string);
-    callback set_ipset_mode(string);
-    callback update_ipset_clicked();
-    callback update_hosts_clicked();
+    callback update_hostlists_clicked();
     callback clear_discord_cache_clicked();
     callback copy_to_clipboard(string);
     callback set_notifications(bool);
@@ -476,7 +462,13 @@ export component MainWindow inherits Window {
                         border-color: ThemePalette.border;
                         background: ThemePalette.surface;
                         HorizontalLayout {
-                            padding: 2px;
+                            // Symmetric vertical padding so the 26px buttons sit centered
+                            // in the 32px shell (HorizontalLayout doesn't cross-center
+                            // items with a fixed height — they pin to the top).
+                            padding-top: 3px;
+                            padding-bottom: 3px;
+                            padding-left: 2px;
+                            padding-right: 2px;
                             spacing: 2px;
                             // Order matches the Settings → Appearance segmented control.
                             ThemeToggleBtn {
@@ -538,16 +530,6 @@ export component MainWindow inherits Window {
                     strategy_count: root.strategies.length;
                     app_version: root.app_version;
                     uptime: root.uptime;
-                    game_filter <=> root.game_filter;
-                    ipset_mode <=> root.ipset_mode;
-                    ipset_lines: root.ipset_lines;
-                    ipset_age_days: root.ipset_age_days;
-                    ipset_busy: root.ipset_busy;
-                    ipset_msg: root.ipset_msg;
-                    ipset_ok: root.ipset_ok;
-                    game_filter_changed(v) => { root.set_game_filter(v); }
-                    ipset_mode_changed(v) => { root.set_ipset_mode(v); }
-                    update_ipset_clicked => { root.update_ipset_clicked(); }
                     // Mark the transition + lock the UI the instant it's clicked; the
                     // backend round-trip (and the spinner) ends when Status arrives.
                     start_clicked => { root.pending_op = "start"; root.is_busy = true; root.start_clicked(root.chosen_item.id); }
@@ -629,25 +611,15 @@ export component MainWindow inherits Window {
                     app_check_update_clicked => { root.app_check_update_clicked(); }
                     app_update_clicked => { root.app_update_clicked(); }
                     installed: root.status_installed;
-                    game_filter <=> root.game_filter;
-                    ipset_mode <=> root.ipset_mode;
-                    ipset_lines: root.ipset_lines;
-                    ipset_busy: root.ipset_busy;
-                    ipset_msg: root.ipset_msg;
-                    ipset_ok: root.ipset_ok;
-                    hosts_busy: root.hosts_busy;
-                    hosts_msg: root.hosts_msg;
-                    hosts_ok: root.hosts_ok;
+                    hostlists: root.hostlists;
+                    hostlists_busy: root.hostlists_busy;
+                    hostlists_msg: root.hostlists_msg;
+                    hostlists_ok: root.hostlists_ok;
                     discord_busy: root.discord_busy;
                     discord_msg: root.discord_msg;
                     discord_ok: root.discord_ok;
                     open_folder_clicked => { root.open_folder_clicked(); }
-                    open_ipset_file_clicked => { root.open_ipset_file_clicked(); }
-                    open_hosts_file_clicked => { root.open_hosts_file_clicked(); }
-                    game_filter_changed(v) => { root.set_game_filter(v); }
-                    ipset_mode_changed(v) => { root.set_ipset_mode(v); }
-                    update_ipset_clicked => { root.update_ipset_clicked(); }
-                    update_hosts_clicked => { root.update_hosts_clicked(); }
+                    update_hostlists_clicked => { root.update_hostlists_clicked(); }
                     clear_discord_cache_clicked => { root.clear_discord_cache_clicked(); }
                     language_changed(v) => { root.set_language(v); }
                     notifications_changed(v) => { root.set_notifications(v); }
@@ -688,15 +660,5 @@ export component MainWindow inherits Window {
                 }
             }
         }
-    }
-
-    // ── Hosts review modal (overlays everything when open) ──
-    HostsDialog {
-        open: root.hosts_modal_open;
-        content: root.hosts_content;
-        hosts_path: root.hosts_path;
-        copy_clicked => { root.copy_to_clipboard(root.hosts_content); }
-        open_folder_clicked => { root.open_url_clicked(root.hosts_dir); }
-        close_clicked => { root.hosts_modal_open = false; }
     }
 }

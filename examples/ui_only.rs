@@ -89,14 +89,22 @@ struct MockCatalog;
 
 impl MockCatalog {
     fn sample() -> Vec<Strategy> {
-        ["general", "general (ALT)", "general (ALT2)"]
+        // Mirror the zapret2 builtins (src/zapret/strategies.rs::BUILTIN) so
+        // the preview is a faithful approximation of the real strategy list.
+        [
+            ("general-v2", "General (v2)", Category::Mixed),
+            ("youtube-tls-v2", "YouTube TLS (v2)", Category::Youtube),
+            ("youtube-quic-v2", "YouTube QUIC (v2)", Category::Youtube),
+            ("discord-v2", "Discord / VoIP (v2)", Category::Discord),
+            ("wireguard-v2", "WireGuard (v2)", Category::Discord),
+        ]
             .iter()
-            .map(|name| Strategy {
-                id: name.to_string(),
+            .map(|(id, name, cat)| Strategy {
+                id: id.to_string(),
                 display_name: name.to_string(),
-                category: Category::Mixed,
-                description: "Mock preset for UI-only preview".to_string(),
-                winws_args: vec!["--wf-tcp=80,443".to_string()],
+                category: *cat,
+                description: "Mock zapret2 preset for UI-only preview".to_string(),
+                winws_args: vec!["--wf-tcp-out=80,443".to_string()],
                 requires_lists: vec![],
             })
             .collect()
@@ -313,12 +321,6 @@ fn main() -> anyhow::Result<()> {
     ui.on_open_folder_clicked(|| {
         println!("UI: Open folder clicked");
     });
-    ui.on_open_ipset_file_clicked(|| {
-        println!("UI: Open ipset file clicked");
-    });
-    ui.on_open_hosts_file_clicked(|| {
-        println!("UI: Open hosts file clicked");
-    });
     ui.on_refresh_status_clicked(|| {
         println!("UI: Refresh status clicked");
     });
@@ -343,15 +345,16 @@ fn main() -> anyhow::Result<()> {
                     favorite: false,
                 };
                 let rows = vec![
-                    mk("general (ALT2)", "general", "ALT2", 12, 12, 184, 1, true),
-                    mk("general", "general", "", 10, 12, 203, 2, false),
-                    mk("general (ALT)", "general", "ALT", 7, 12, 311, 3, false),
-                    mk("general (SIMPLE FAKE)", "general", "SIMPLE FAKE", 0, 12, 0, 4, false),
+                    mk("general-v2",      "General",          "v2", 12, 12, 184, 1, true),
+                    mk("youtube-tls-v2",  "YouTube TLS",      "v2", 10, 12, 203, 2, false),
+                    mk("discord-v2",      "Discord / VoIP",   "v2",  9, 12, 246, 3, false),
+                    mk("youtube-quic-v2", "YouTube QUIC",     "v2",  7, 12, 311, 4, false),
+                    mk("wireguard-v2",    "WireGuard",        "v2",  0, 12,   0, 5, false),
                 ];
                 ui.set_test_results(Rc::new(slint::VecModel::from(rows)).into());
-                ui.set_test_best_id("general (ALT2)".into());
-                ui.set_test_total(4);
-                ui.set_test_current(4);
+                ui.set_test_best_id("general-v2".into());
+                ui.set_test_total(5);
+                ui.set_test_current(5);
                 ui.set_test_running(false);
             }
         });
@@ -363,55 +366,42 @@ fn main() -> anyhow::Result<()> {
         println!("UI: Use tested strategy: {}", id);
     });
 
-    // DPI bypass tuning (mock): seed initial state and echo the callbacks.
-    ui.set_game_filter("off".into());
-    ui.set_ipset_mode("loaded".into());
-    ui.set_ipset_lines(2048);
-    // Old enough to demo the "list is getting stale" reminder on the home page.
-    ui.set_ipset_age_days(18);
+    // DPI tuning (mock): seed the hostlists model and echo the callbacks.
+    // Matches the real Settings page contract — name + age_days + line_count.
+    let mk_hl = |name: &str, age: i32, lines: i32| HostlistInfoItem {
+        name: name.into(),
+        age_days: age,
+        line_count: lines,
+    };
+    ui.set_hostlists(
+        Rc::new(slint::VecModel::from(vec![
+            mk_hl("list-youtube.txt", 7, 14),
+        ])).into(),
+    );
     {
         let ui_weak = ui.as_weak();
-        ui.on_set_game_filter(move |slug| {
-            println!("UI: Set game filter: {}", slug);
+        ui.on_update_hostlists_clicked(move || {
+            println!("UI: Update hostlists clicked");
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_game_filter(slug);
-            }
-        });
-    }
-    {
-        let ui_weak = ui.as_weak();
-        ui.on_set_ipset_mode(move |slug| {
-            println!("UI: Set ipset mode: {}", slug);
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_ipset_mode(slug);
-            }
-        });
-    }
-    {
-        let ui_weak = ui.as_weak();
-        ui.on_update_ipset_clicked(move || {
-            println!("UI: Update ipset list clicked");
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_ipset_ok(true);
-                ui.set_ipset_age_days(0);
-                ui.set_ipset_msg("Updated — 2048 IP entries loaded".into());
-            }
-        });
-    }
-    {
-        let ui_weak = ui.as_weak();
-        ui.on_update_hosts_clicked(move || {
-            println!("UI: Update hosts file clicked");
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_hosts_ok(true);
-                ui.set_hosts_msg("Out of date — review the entries and update your hosts file".into());
-                // Demo the review modal with sample content.
-                ui.set_hosts_content(
-                    "# zapret hosts\n127.0.0.1 localhost\n\n# YouTube\n0.0.0.0 example.googlevideo.com\n0.0.0.0 r1---sn-example.googlevideo.com\n# Discord\n0.0.0.0 example.discord.com\n".into(),
-                );
-                ui.set_hosts_path("C:\\Windows\\System32\\drivers\\etc\\hosts".into());
-                ui.set_hosts_dir("C:\\Windows\\System32\\drivers\\etc".into());
-                ui.set_hosts_modal_open(true);
+                ui.set_hostlists_busy(true);
+                ui.set_hostlists_msg("".into());
+                let ui_weak = ui.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(700), move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_hostlists(
+                            Rc::new(slint::VecModel::from(vec![
+                                HostlistInfoItem {
+                                    name: "list-youtube.txt".into(),
+                                    age_days: 0,
+                                    line_count: 14,
+                                },
+                            ])).into(),
+                        );
+                        ui.set_hostlists_busy(false);
+                        ui.set_hostlists_ok(true);
+                        ui.set_hostlists_msg("Updated — 1 hostlist refreshed".into());
+                    }
+                });
             }
         });
     }

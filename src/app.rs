@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::rc::Rc;
 use std::cell::RefCell;
 use tokio::sync::{mpsc, broadcast, RwLock};
-use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, GameFilterMode, IpsetMode, split_alt};
-use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester, Maintenance, SelfUpdater};
+use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, split_alt};
+use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester, DpiTuning, SelfUpdater};
 use crate::config::AppConfig;
 use crate::state::AppState;
 use crate::tray::SystemTray;
@@ -454,7 +454,7 @@ pub struct App {
     service_ctl: Arc<dyn ServiceCtl>,
     catalog: Arc<dyn StrategyCatalog>,
     tester: Arc<dyn StrategyTester>,
-    maintenance: Arc<dyn Maintenance>,
+    tuning: Arc<dyn DpiTuning>,
     self_updater: Arc<dyn SelfUpdater>,
     config: Arc<RwLock<AppConfig>>,
     state: AppState,
@@ -471,7 +471,7 @@ impl App {
         service_ctl: Arc<dyn ServiceCtl>,
         catalog: Arc<dyn StrategyCatalog>,
         tester: Arc<dyn StrategyTester>,
-        maintenance: Arc<dyn Maintenance>,
+        tuning: Arc<dyn DpiTuning>,
         self_updater: Arc<dyn SelfUpdater>,
         config: AppConfig,
         state: AppState,
@@ -485,7 +485,7 @@ impl App {
             service_ctl,
             catalog,
             tester,
-            maintenance,
+            tuning,
             self_updater,
             config: Arc::new(RwLock::new(config)),
             state,
@@ -747,18 +747,6 @@ impl App {
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_open_ipset_file_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::OpenIpsetFile);
-            });
-        }
-        {
-            let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_open_hosts_file_clicked(move || {
-                let _ = cmd_tx_c.try_send(BackendCmd::OpenHostsFile);
-            });
-        }
-        {
-            let cmd_tx_c = self.cmd_tx.clone();
             ui.on_refresh_status_clicked(move || {
                 let _ = cmd_tx_c.try_send(BackendCmd::RefreshStatus);
             });
@@ -822,40 +810,18 @@ impl App {
         }
 
         // ── DPI bypass tuning (Settings page) ──
-        {
-            let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_set_game_filter(move |slug| {
-                let _ = cmd_tx_c.try_send(BackendCmd::SetGameFilter(GameFilterMode::from_slug(&slug)));
-            });
-        }
-        {
-            let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_set_ipset_mode(move |slug| {
-                let _ = cmd_tx_c.try_send(BackendCmd::SetIpsetMode(IpsetMode::from_slug(&slug)));
-            });
-        }
+        // Refresh the curated hostlists in <install>/files/ — replaces the
+        // pre-zapret-2 "Update IPSet" and "Update Hosts" buttons (zapret2's
+        // filtration model doesn't need either).
         {
             let cmd_tx_c = self.cmd_tx.clone();
             let ui_weak = ui.as_weak();
-            ui.on_update_ipset_clicked(move || {
+            ui.on_update_hostlists_clicked(move || {
                 if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_ipset_busy(true);
-                    ui.set_ipset_msg("".into());
-                    if cmd_tx_c.try_send(BackendCmd::UpdateIpsetList).is_err() {
-                        ui.set_ipset_busy(false);
-                    }
-                }
-            });
-        }
-        {
-            let cmd_tx_c = self.cmd_tx.clone();
-            let ui_weak = ui.as_weak();
-            ui.on_update_hosts_clicked(move || {
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_hosts_busy(true);
-                    ui.set_hosts_msg("".into());
-                    if cmd_tx_c.try_send(BackendCmd::UpdateHostsFile).is_err() {
-                        ui.set_hosts_busy(false);
+                    ui.set_hostlists_busy(true);
+                    ui.set_hostlists_msg("".into());
+                    if cmd_tx_c.try_send(BackendCmd::UpdateHostlists).is_err() {
+                        ui.set_hostlists_busy(false);
                     }
                 }
             });
@@ -1164,37 +1130,35 @@ impl App {
                                     }
                                 }
                             }
-                            UiEvent::Maintenance(m) => {
-                                ui.set_game_filter(m.game_filter.slug().into());
-                                ui.set_ipset_mode(m.ipset_mode.slug().into());
-                                ui.set_ipset_lines(m.ipset_lines as i32);
-                                ui.set_ipset_age_days(m.ipset_age_days.map(|d| d as i32).unwrap_or(-1));
+                            UiEvent::Tuning(t) => {
+                                // Stash the hostlist rows into a Slint model
+                                // bound to the Settings page. The model's row
+                                // struct (HostlistInfoItem) is defined in
+                                // ui/tokens.slint to mirror crate::contracts::HostlistInfo.
+                                let items: Vec<HostlistInfoItem> = t.hostlists
+                                    .iter()
+                                    .map(|h| HostlistInfoItem {
+                                        name: h.name.as_str().into(),
+                                        age_days: h.age_days.map(|d| d as i32).unwrap_or(-1),
+                                        line_count: h.line_count as i32,
+                                    })
+                                    .collect();
+                                ui.set_hostlists(Rc::new(slint::VecModel::from(items)).into());
                             }
-                            UiEvent::MaintenanceResult { kind, ok, message } => {
+                            UiEvent::TuningResult { kind, ok, message } => {
                                 match kind.as_str() {
-                                    "ipset" => {
-                                        ui.set_ipset_busy(false);
-                                        ui.set_ipset_msg(message.into());
-                                        ui.set_ipset_ok(ok);
+                                    "hostlists" => {
+                                        ui.set_hostlists_busy(false);
+                                        ui.set_hostlists_msg(message.into());
+                                        ui.set_hostlists_ok(ok);
                                     }
-                                    "hosts" => {
-                                        ui.set_hosts_busy(false);
-                                        ui.set_hosts_msg(message.into());
-                                        ui.set_hosts_ok(ok);
-                                    }
-                                    "discord" => {
+                                    "discord_cache" => {
                                         ui.set_discord_busy(false);
                                         ui.set_discord_msg(message.into());
                                         ui.set_discord_ok(ok);
                                     }
                                     _ => {}
                                 }
-                            }
-                            UiEvent::HostsContent { content, hosts_path, hosts_dir } => {
-                                ui.set_hosts_content(content.into());
-                                ui.set_hosts_path(hosts_path.into());
-                                ui.set_hosts_dir(hosts_dir.into());
-                                ui.set_hosts_modal_open(true);
                             }
                             UiEvent::AppUpdateAvailable { latest, .. } => {
                                 ui.set_app_has_update(true);
@@ -1309,7 +1273,7 @@ impl App {
         let service_ctl = self.service_ctl.clone();
         let catalog = self.catalog.clone();
         let tester = self.tester.clone();
-        let maintenance = self.maintenance.clone();
+        let tuning = self.tuning.clone();
         let self_updater = self.self_updater.clone();
         let event_tx = self.event_tx.clone();
         let config = self.config.clone();
@@ -1352,7 +1316,7 @@ impl App {
                                     let _ = event_tx.send(UiEvent::UpdateAvailable {
                                         current,
                                         latest,
-                                        url: "https://github.com/Flowseal/zapret-discord-youtube/releases/latest".to_string(),
+                                        url: "https://github.com/bol-van/zapret-win-bundle/commits/master".to_string(),
                                     });
                                 }
                             }
@@ -1582,8 +1546,8 @@ impl App {
                         }
                         state.set_status(status.clone()).await;
                         let _ = event_tx.send(UiEvent::Status(status));
-                        // Keep the Settings filter toggles in sync with disk.
-                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
+                        // Keep the Settings hostlist rows in sync with disk.
+                        let _ = event_tx.send(UiEvent::Tuning(tuning.status().await));
                     }
                     BackendCmd::OpenInstallFolder => {
                         let install_dir = {
@@ -1594,26 +1558,6 @@ impl App {
                             })
                         };
                         let _ = std::process::Command::new("explorer").arg(&install_dir).spawn();
-                    }
-                    BackendCmd::OpenIpsetFile => {
-                        let install_dir = current_install_dir(&config).await;
-                        let path = install_dir.join("lists").join("ipset-all.txt");
-                        if path.exists() {
-                            open_external(&path.display().to_string());
-                        } else {
-                            let _ = event_tx.send(UiEvent::Error(format!(
-                                "ipset-all.txt not found at {}", path.display()
-                            )));
-                        }
-                    }
-                    BackendCmd::OpenHostsFile => {
-                        // The hosts file has no extension (no default association),
-                        // so open it explicitly in Notepad rather than via the shell.
-                        let system_root = std::env::var("SystemRoot")
-                            .unwrap_or_else(|_| r"C:\Windows".to_string());
-                        let hosts_path = std::path::PathBuf::from(system_root)
-                            .join("System32").join("drivers").join("etc").join("hosts");
-                        let _ = std::process::Command::new("notepad.exe").arg(&hosts_path).spawn();
                     }
                     BackendCmd::CancelTest => {
                         tester.cancel();
@@ -1685,83 +1629,26 @@ impl App {
                             tracing::warn!("Failed to persist theme setting: {}", e);
                         }
                     }
-                    BackendCmd::SetGameFilter(mode) => {
-                        match maintenance.set_game_filter(mode).await {
-                            Ok(_) => {
-                                tracing::info!("Game filter changed — restart the bypass to apply");
-                            }
-                            Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
-                            }
-                        }
-                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
-                    }
-                    BackendCmd::SetIpsetMode(mode) => {
-                        if let Err(e) = maintenance.set_ipset_mode(mode).await {
-                            let _ = event_tx.send(UiEvent::MaintenanceResult {
-                                kind: "ipset".to_string(),
-                                ok: false,
-                                message: e.to_string(),
-                            });
-                        } else {
-                            tracing::info!("IPSet filter changed — restart the bypass to apply");
-                        }
-                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
-                    }
-                    BackendCmd::UpdateIpsetList => {
+                    BackendCmd::UpdateHostlists => {
                         let lang = crate::i18n::code(config.read().await.language);
-                        let (ok, message) = match maintenance.update_ipset_list().await {
+                        let (ok, message) = match tuning.update_hostlists().await {
                             Ok(count) => (
                                 true,
-                                crate::i18n::tr(lang, "msg.ipset_updated")
+                                crate::i18n::tr(lang, "msg.hostlists_updated")
                                     .replace("{count}", &count.to_string()),
                             ),
                             Err(e) => (false, e.to_string()),
                         };
-                        let _ = event_tx.send(UiEvent::MaintenanceResult {
-                            kind: "ipset".to_string(),
+                        let _ = event_tx.send(UiEvent::TuningResult {
+                            kind: "hostlists".to_string(),
                             ok,
                             message,
                         });
-                        let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
-                    }
-                    BackendCmd::UpdateHostsFile => {
-                        let lang = crate::i18n::code(config.read().await.language);
-                        match maintenance.update_hosts_file().await {
-                            Ok(check) => {
-                                let message = if check.up_to_date {
-                                    crate::i18n::tr(lang, "msg.hosts_up_to_date")
-                                } else {
-                                    crate::i18n::tr(lang, "msg.hosts_out_of_date")
-                                };
-                                let _ = event_tx.send(UiEvent::MaintenanceResult {
-                                    kind: "hosts".to_string(),
-                                    ok: true,
-                                    message,
-                                });
-                                if !check.up_to_date {
-                                    // Open the folder containing the hosts file (so the
-                                    // user can paste), then open the in-app review window.
-                                    open_external(&check.hosts_dir);
-                                    let _ = event_tx.send(UiEvent::HostsContent {
-                                        content: check.content,
-                                        hosts_path: check.hosts_path,
-                                        hosts_dir: check.hosts_dir,
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                let _ = event_tx.send(UiEvent::MaintenanceResult {
-                                    kind: "hosts".to_string(),
-                                    ok: false,
-                                    message: e.to_string(),
-                                });
-                            }
-                        }
+                        let _ = event_tx.send(UiEvent::Tuning(tuning.status().await));
                     }
                     BackendCmd::ClearDiscordCache => {
                         let lang = crate::i18n::code(config.read().await.language);
-                        let (ok, message) = match maintenance.clear_discord_cache().await {
+                        let (ok, message) = match tuning.clear_discord_cache().await {
                             Ok(res) => {
                                 let cleared = crate::i18n::tr(lang, "msg.discord_cache_cleared")
                                     .replace("{count}", &res.cleared.to_string());
@@ -1774,8 +1661,8 @@ impl App {
                             }
                             Err(e) => (false, e.to_string()),
                         };
-                        let _ = event_tx.send(UiEvent::MaintenanceResult {
-                            kind: "discord".to_string(),
+                        let _ = event_tx.send(UiEvent::TuningResult {
+                            kind: "discord_cache".to_string(),
                             ok,
                             message,
                         });

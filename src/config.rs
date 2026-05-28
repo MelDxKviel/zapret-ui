@@ -194,4 +194,20 @@ impl AppConfig {
         let path = Self::default_config_path()?;
         self.save_to_path(&path)
     }
+
+    /// Drop `last_strategy` if its id is no longer recognised — covers the
+    /// zapret-2 migration where Flowseal-shaped ids like `"general (ALT2)"`
+    /// no longer match any builtin (the new ones are `"general-v2"` etc.).
+    /// Returns `true` when the field was reset, so the caller can choose to
+    /// persist immediately. Factored out of `main.rs` so the rule is
+    /// straightforward to unit-test without spinning up a real binary.
+    pub fn migrate_unknown_last_strategy<F: Fn(&str) -> bool>(&mut self, is_known: F) -> bool {
+        match self.last_strategy.as_deref() {
+            Some(id) if !is_known(id) => {
+                self.last_strategy = None;
+                true
+            }
+            _ => false,
+        }
+    }
 }

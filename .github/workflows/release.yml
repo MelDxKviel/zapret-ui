@@ -58,6 +58,49 @@ jobs:
       - name: Run Tests
         run: cargo test --verbose
 
+  # Cross-target sanity check: the library half of the crate must keep
+  # compiling on Linux so a future nfqws2/systemd port has somewhere to land.
+  # The binary itself stays Windows-only — `src/main.rs` carries a
+  # `compile_error!` on non-windows targets, so we deliberately only check
+  # `--lib` here (the bin would refuse to build, by design).
+  check-linux:
+    name: Cross-target check (Linux library)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Slint native deps
+        # Slint's `backend-winit` pulls in fontconfig and a few system libs on
+        # Linux. Install them so the cross-check can actually link the lib's
+        # build-script crates (yeslogic-fontconfig-sys, etc.).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libxkbcommon-dev
+
+      - name: Read pinned toolchain
+        id: toolchain
+        run: |
+          channel=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "channel=$channel" >> $GITHUB_OUTPUT
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+
+      - name: cargo check (lib only) for x86_64-unknown-linux-gnu
+        run: cargo check --lib --target x86_64-unknown-linux-gnu
+
   release:
     name: Publish Release
     needs: checks

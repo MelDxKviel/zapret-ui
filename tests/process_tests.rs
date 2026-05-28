@@ -1,3 +1,9 @@
+// The runner + service adapters under test are Windows-only (they touch the
+// SCM, WinDivert and sysinfo's Windows process backend). Skip the whole
+// suite on other targets so a Linux `cargo check` doesn't drag those modules
+// into a cross-platform build.
+#![cfg(target_os = "windows")]
+
 #[path = "../src/contracts.rs"]
 pub mod contracts;
 
@@ -34,7 +40,7 @@ fn main() {
 "#
     ).unwrap();
 
-    let stub_exe = temp_dir.path().join("winws.exe");
+    let stub_exe = temp_dir.path().join("winws2.exe");
     let status = std::process::Command::new("rustc")
         .arg(&stub_src)
         .arg("-o")
@@ -116,7 +122,7 @@ fn main() {
 "#
     ).unwrap();
 
-    let stub_exe = temp_dir.path().join("winws.exe");
+    let stub_exe = temp_dir.path().join("winws2.exe");
     let status = std::process::Command::new("rustc")
         .arg(&stub_src)
         .arg("-o")

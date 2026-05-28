@@ -6,23 +6,16 @@ use reqwest::header::USER_AGENT;
 use sha2::{Digest, Sha256};
 use crate::contracts::InstallStage;
 use crate::ports::{Installer, ProgressCb};
-use crate::zapret::github::GithubClient;
+use crate::zapret::winbundle::{WinBundleSource, BUNDLE_SUBDIR};
 use crate::zapret::paths;
 
 /// Hard ceiling on the compressed archive we will download (600 MB). The real
-/// zapret distribution is a few MB; this only fires on a corrupt/hostile server.
+/// bundle is a handful of MB; this only fires on a corrupt/hostile server.
 const MAX_DOWNLOAD_BYTES: u64 = 600 * 1024 * 1024;
 /// Hard ceiling on the total uncompressed size of the archive (zip-bomb guard).
 const MAX_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Hard ceiling on the number of entries in the archive.
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
-
-/// Optional pinned SHA-256 of the upstream archive. When `Some`, the download is
-/// rejected unless its digest matches — turning the otherwise trust-on-transport
-/// download into an integrity-checked one. Left `None` by default because the
-/// upstream project ships a moving `main` branch with no published checksum; set
-/// this (and pin the ref in `github.rs`) to lock installs to a vetted build.
-const EXPECTED_ARCHIVE_SHA256: Option<&str> = None;
 
 /// Lower-case hex encoding of a byte slice (avoids pulling in a hex crate).
 fn to_hex(bytes: &[u8]) -> String {
@@ -35,15 +28,12 @@ fn to_hex(bytes: &[u8]) -> String {
 
 pub struct ZapretInstaller {
     pub install_dir: PathBuf,
-    pub github_client: GithubClient,
+    pub bundle: WinBundleSource,
 }
 
 impl ZapretInstaller {
-    pub fn new(install_dir: PathBuf, github_client: GithubClient) -> Self {
-        Self {
-            install_dir,
-            github_client,
-        }
+    pub fn new(install_dir: PathBuf, bundle: WinBundleSource) -> Self {
+        Self { install_dir, bundle }
     }
 
     async fn perform_install_or_update(
@@ -52,46 +42,38 @@ impl ZapretInstaller {
         temp_zip_path: &Path,
         temp_extract_dir: &Path,
     ) -> Result<()> {
-        // 1. Resolving stage
+        // 1. Resolving — figure out which commit of the bundle we're pulling.
         on_progress(InstallStage::Resolving, 0, None);
-        
-        let release = self.github_client.get_latest_release().await
-            .context("Failed to get latest release metadata from GitHub")?;
-        
-        // Find zip asset: name ends with .zip, not containing "source"
-        let asset = release.assets.iter().find(|a| {
-            let name_lower = a.name.to_lowercase();
-            name_lower.ends_with(".zip") && !name_lower.contains("source")
-        }).or_else(|| {
-            release.assets.iter().find(|a| a.name.to_lowercase().ends_with(".zip"))
-        }).ok_or_else(|| anyhow::anyhow!("No ZIP asset found in the latest release"))?;
 
-        // Refuse anything that isn't fetched over TLS — we run the result as
-        // SYSTEM in service mode, so a plaintext (MITM-able) transport is not OK.
-        if !asset.browser_download_url.starts_with("https://") {
+        let release = self.bundle.get_latest_release().await
+            .context("Failed to resolve latest zapret-win-bundle snapshot")?;
+
+        // We always download the same codeload zip — it's the branch tarball,
+        // not a per-tag asset. Require TLS: this drops to SYSTEM in service
+        // mode, so a MITM-able transport is unacceptable.
+        if !release.archive_url.starts_with("https://") {
             return Err(anyhow::anyhow!(
-                "Refusing to download zapret over a non-HTTPS URL: {}",
-                asset.browser_download_url
+                "Refusing to download bundle over a non-HTTPS URL: {}",
+                release.archive_url
             ));
         }
 
-        // 2. Downloading stage
-        on_progress(InstallStage::Downloading, 0, Some(asset.size));
-        tracing::info!("Downloading zip from: {}", asset.browser_download_url);
+        // 2. Downloading
+        on_progress(InstallStage::Downloading, 0, None);
+        tracing::info!("Downloading bundle zip from: {}", release.archive_url);
 
-        let response = self.github_client.client.get(&asset.browser_download_url)
-            .header(USER_AGENT, "zapret-ui-updater")
+        let response = self.bundle.client.get(&release.archive_url)
+            .header(USER_AGENT, "zapret-ui-bundle")
             .send()
             .await
-            .context("Failed to send download request to GitHub")?;
+            .context("Failed to send bundle download request")?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("Failed to download asset: HTTP {}", response.status()));
+            return Err(anyhow::anyhow!("Bundle download failed: HTTP {}", response.status()));
         }
 
-        let total_size = response.content_length().unwrap_or(asset.size);
-        
-        // Ensure parent directory exists for temp_zip_path
+        let total_size = response.content_length().unwrap_or(0);
+
         if let Some(parent) = temp_zip_path.parent() {
             std::fs::create_dir_all(parent)
                 .context("Failed to create parent directory for temp download file")?;
@@ -99,13 +81,13 @@ impl ZapretInstaller {
 
         let mut file = tokio::fs::File::create(temp_zip_path).await
             .context("Failed to create temporary download file")?;
-        
+
         let mut downloaded: u64 = 0;
         let mut hasher = Sha256::new();
         let mut response = response; // make mutable to use chunk()
 
         while let Some(chunk) = response.chunk().await
-            .context("Error occurred while reading download stream")?
+            .context("Error occurred while reading bundle download stream")?
         {
             downloaded += chunk.len() as u64;
             if downloaded > MAX_DOWNLOAD_BYTES {
@@ -118,7 +100,14 @@ impl ZapretInstaller {
             use tokio::io::AsyncWriteExt;
             file.write_all(&chunk).await
                 .context("Failed to write download chunk to disk")?;
-            on_progress(InstallStage::Downloading, downloaded, Some(total_size));
+            // codeload doesn't always send Content-Length; pass Some(total) only
+            // when we actually got one, otherwise let the UI show an
+            // indeterminate spinner.
+            on_progress(
+                InstallStage::Downloading,
+                downloaded,
+                if total_size > 0 { Some(total_size) } else { None },
+            );
         }
 
         use tokio::io::AsyncWriteExt;
@@ -126,31 +115,24 @@ impl ZapretInstaller {
             .context("Failed to flush temporary file after download")?;
         drop(file);
 
-        // Integrity: record the archive digest (auditable) and, when a hash is
-        // pinned, refuse to install anything that doesn't match it.
+        // Audit trail. With a moving `master` branch there's nothing to pin
+        // against, but logging the digest of what we actually fetched lets a
+        // forensic check confirm two machines pulled identical bytes.
         let digest = to_hex(&hasher.finalize());
-        tracing::info!("Downloaded archive SHA-256 = {digest}");
-        if let Some(expected) = EXPECTED_ARCHIVE_SHA256 {
-            if !expected.eq_ignore_ascii_case(&digest) {
-                return Err(anyhow::anyhow!(
-                    "Integrity check failed: archive SHA-256 {digest} does not match the pinned {expected}"
-                ));
-            }
-            tracing::info!("Archive SHA-256 matches the pinned value");
-        }
+        tracing::info!("Downloaded bundle SHA-256 = {digest}");
 
-        // 3. Extracting stage
+        // 3. Extracting — full unpack into temp, then promote only what we need.
         on_progress(InstallStage::Extracting, 0, None);
-        tracing::info!("Extracting zip to temporary folder: {:?}", temp_extract_dir);
+        tracing::info!("Extracting bundle zip to {:?}", temp_extract_dir);
 
         std::fs::create_dir_all(temp_extract_dir)
             .context("Failed to create temporary extraction directory")?;
 
         let zip_file = std::fs::File::open(temp_zip_path)
-            .context("Failed to open downloaded ZIP archive")?;
-        
+            .context("Failed to open downloaded bundle archive")?;
+
         let mut archive = zip::ZipArchive::new(zip_file)
-            .context("Failed to parse downloaded ZIP archive format")?;
+            .context("Failed to parse downloaded bundle archive format")?;
 
         let total_files = archive.len();
         if total_files > MAX_ARCHIVE_ENTRIES {
@@ -163,7 +145,7 @@ impl ZapretInstaller {
         let mut total_uncompressed: u64 = 0;
         for i in 0..total_files {
             let mut file = archive.by_index(i)
-                .context("Failed to read file from ZIP archive by index")?;
+                .context("Failed to read file from bundle archive by index")?;
 
             total_uncompressed += file.size();
             if total_uncompressed > MAX_UNCOMPRESSED_BYTES {
@@ -196,48 +178,40 @@ impl ZapretInstaller {
             on_progress(InstallStage::Extracting, (i + 1) as u64, Some(total_files as u64));
         }
 
-        // Handle possible single root subdirectory inside the extracted files
-        let mut entries = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(temp_extract_dir) {
-            for entry in rd.flatten() {
-                entries.push(entry);
-            }
-        }
-        
-        if entries.len() == 1 && entries[0].file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            let sub_dir = entries[0].path();
-            tracing::info!("Promoting single root directory contents from {:?}", sub_dir);
-            if let Ok(rd) = std::fs::read_dir(&sub_dir) {
-                for entry in rd.flatten() {
-                    let from = entry.path();
-                    let to = temp_extract_dir.join(entry.file_name());
-                    std::fs::rename(&from, &to)
-                        .context("Failed to promote file out of root subdirectory")?;
-                }
-            }
-            let _ = std::fs::remove_dir(&sub_dir);
-        }
+        // Promote the Windows subdir to the extract root. The codeload zip is
+        // always `<repo>-<branch>/<everything>/` and the actual Windows
+        // distribution lives at `<root>/zapret-winws/`. We dig down, move its
+        // contents into a fresh `promoted/` dir, and continue from there —
+        // ignoring `arm64/`, `blockcheck/`, `cygwin/`, `tools/`, etc., which
+        // we don't ship.
+        let zapret_winws_dir = locate_bundle_subdir(temp_extract_dir, BUNDLE_SUBDIR)
+            .ok_or_else(|| anyhow::anyhow!(
+                "Downloaded bundle does not contain a `{BUNDLE_SUBDIR}/` subtree"
+            ))?;
+        let promoted = temp_extract_dir.join(".promoted");
+        std::fs::create_dir_all(&promoted)
+            .context("Failed to create promoted-staging directory")?;
+        promote_subtree(&zapret_winws_dir, &promoted)
+            .context("Failed to promote zapret-winws subtree")?;
 
-        // Determine version: prefer the upstream .service/version.txt, fall back to release tag.
-        let version = std::fs::read_to_string(temp_extract_dir.join(".service").join("version.txt"))
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| release.tag_name.clone());
-        std::fs::write(temp_extract_dir.join("version.txt"), &version)
+        // Record the resolved snapshot version so `installed_version` has
+        // something to return. The bundle has no `version.txt` upstream, so we
+        // write our own.
+        std::fs::write(promoted.join("version.txt"), &release.tag_name)
             .context("Failed to write version.txt")?;
 
-        // 4. Verifying stage
+        // 4. Verifying — make sure the promoted tree actually contains what we
+        // expect *before* swapping it over the live install, so a bad/partial
+        // archive can never leave the user with a broken installation.
         on_progress(InstallStage::Verifying, 0, None);
-
-        // Verify the freshly-extracted tree *before* we touch the live install,
-        // so a bad/incomplete archive can never leave the user without a working
-        // installation (the previous version stays in place on failure).
-        if !paths::is_valid_install_dir(temp_extract_dir) {
-            return Err(anyhow::anyhow!("Verification failed: extracted files are missing or incomplete"));
+        if !paths::is_valid_install_dir(&promoted) {
+            return Err(anyhow::anyhow!(
+                "Verification failed: promoted bundle is missing winws2.exe or lua/"
+            ));
         }
 
-        // Move to destination atomically
+        // Atomic swap. `tempfile::TempDir` will clean the extraction scaffold
+        // (everything we didn't promote) when the caller's guard drops.
         if self.install_dir.exists() {
             let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -249,22 +223,19 @@ impl ZapretInstaller {
             std::fs::rename(&self.install_dir, &old_dir)
                 .context("Failed to rename existing installation to backup directory")?;
 
-            if let Err(e) = std::fs::rename(temp_extract_dir, &self.install_dir) {
-                // Try rolling back
+            if let Err(e) = std::fs::rename(&promoted, &self.install_dir) {
                 let _ = std::fs::rename(&old_dir, &self.install_dir);
-                return Err(e).context("Failed to move extracted folder to target installation path");
+                return Err(e).context("Failed to move promoted bundle to target installation path");
             }
 
-            // Re-verify after the swap; if the moved tree somehow isn't valid,
-            // restore the backup rather than leaving a broken install behind.
             if !paths::is_valid_install_dir(&self.install_dir) {
                 let _ = std::fs::remove_dir_all(&self.install_dir);
                 let _ = std::fs::rename(&old_dir, &self.install_dir);
-                return Err(anyhow::anyhow!("Verification failed after swap; restored the previous installation"));
+                return Err(anyhow::anyhow!(
+                    "Verification failed after swap; restored the previous installation"
+                ));
             }
 
-            // Only now that the new install is verified do we drop the backup
-            // (might fail if files are locked, but that shouldn't fail the install).
             if let Err(err) = std::fs::remove_dir_all(&old_dir) {
                 tracing::warn!("Failed to delete old backup folder {:?}: {}", old_dir, err);
             }
@@ -273,22 +244,104 @@ impl ZapretInstaller {
                 std::fs::create_dir_all(parent)
                     .context("Failed to create parent directory for installation path")?;
             }
-            std::fs::rename(temp_extract_dir, &self.install_dir)
-                .context("Failed to move extracted folder to target installation path")?;
+            std::fs::rename(&promoted, &self.install_dir)
+                .context("Failed to move promoted bundle to target installation path")?;
 
             if !paths::is_valid_install_dir(&self.install_dir) {
-                return Err(anyhow::anyhow!("Verification failed: installed files are missing or incomplete"));
+                return Err(anyhow::anyhow!(
+                    "Verification failed: installed files are missing winws2.exe or lua/"
+                ));
             }
         }
 
-        // Create the user list files winws.exe expects (service.bat:load_user_lists).
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir)
-            .context("Failed to create winws user list files")?;
+        // Sanity-check that every file a built-in strategy will reference is
+        // present in the freshly-installed tree. Anything missing means the
+        // bundle layout drifted from what we expect; we log it (so support
+        // tickets carry the smoking gun) but don't fail the install — the
+        // user is free to pick a different strategy whose inputs are intact.
+        let mut missing = std::collections::BTreeSet::new();
+        for def in crate::zapret::strategies::builtin_strategies() {
+            for rel in def.required_files {
+                if !self.install_dir.join(rel).exists() {
+                    missing.insert((*rel).to_string());
+                }
+            }
+        }
+        if !missing.is_empty() {
+            tracing::warn!(
+                "Install finished but {} strategy input file(s) are missing: {:?}",
+                missing.len(),
+                missing
+            );
+        }
 
-        // 5. Done stage
+        // 5. Done
         on_progress(InstallStage::Done, 1, Some(1));
         Ok(())
     }
+}
+
+/// Walk `root` looking for a directory whose final component matches `name`.
+/// The codeload zip nests the actual content under `<repo>-<branch>/`, so we
+/// scan down a few levels rather than hardcoding the prefix. Returns the
+/// first match (depth-first), or `None` if nothing matched.
+fn locate_bundle_subdir(root: &Path, name: &str) -> Option<PathBuf> {
+    // Direct hit (won't happen for codeload zips, but handles hand-prepared
+    // archives in tests).
+    let direct = root.join(name);
+    if direct.is_dir() {
+        return Some(direct);
+    }
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // One level down is what we expect from codeload.
+            let candidate = path.join(name);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Move every entry under `src` to `dst`. Uses rename (same-volume = atomic);
+/// falls back to copy + delete if rename fails across mount points (shouldn't
+/// happen since both paths live in the same tempdir, but safe to handle).
+fn promote_subtree(src: &Path, dst: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(src)
+        .with_context(|| format!("Failed to read promote source {src:?}"))?;
+    for entry in entries.flatten() {
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if std::fs::rename(&from, &to).is_err() {
+            // Cross-device fallback. Recursive copy then delete the source.
+            copy_recursive(&from, &to)
+                .with_context(|| format!("Failed to copy {from:?} → {to:?}"))?;
+            if from.is_dir() {
+                let _ = std::fs::remove_dir_all(&from);
+            } else {
+                let _ = std::fs::remove_file(&from);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)?.flatten() {
+            copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -307,7 +360,7 @@ impl Installer for ZapretInstaller {
     }
 
     async fn latest_version(&self) -> Result<String> {
-        let release = self.github_client.get_latest_release().await?;
+        let release = self.bundle.get_latest_release().await?;
         Ok(release.tag_name)
     }
 
@@ -387,5 +440,46 @@ mod tests {
         drop(lock);
         // Once released, it can be acquired again.
         assert!(InstallLock::acquire(&path).is_ok());
+    }
+
+    #[test]
+    fn locate_bundle_subdir_finds_nested_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("zapret-win-bundle-master").join("zapret-winws")).unwrap();
+        std::fs::create_dir_all(root.join("zapret-win-bundle-master").join("arm64")).unwrap();
+        let found = locate_bundle_subdir(root, "zapret-winws").expect("nested found");
+        assert!(found.ends_with("zapret-winws"));
+    }
+
+    #[test]
+    fn locate_bundle_subdir_finds_direct_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("zapret-winws")).unwrap();
+        assert!(locate_bundle_subdir(tmp.path(), "zapret-winws").is_some());
+    }
+
+    #[test]
+    fn locate_bundle_subdir_returns_none_on_miss() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("other-bundle-master").join("nope")).unwrap();
+        assert!(locate_bundle_subdir(tmp.path(), "zapret-winws").is_none());
+    }
+
+    #[test]
+    fn promote_subtree_moves_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+        std::fs::write(src.join("sub").join("b.txt"), b"b").unwrap();
+        promote_subtree(&src, &dst).unwrap();
+        assert!(dst.join("a.txt").exists());
+        assert!(dst.join("sub").join("b.txt").exists());
+        // Source emptied (only the now-empty src dir remains).
+        let remaining: Vec<_> = std::fs::read_dir(&src).unwrap().collect();
+        assert!(remaining.is_empty());
     }
 }

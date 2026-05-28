@@ -1,4 +1,4 @@
-import { ThemePalette } from "../tokens.slint";
+import { ThemePalette, HostlistInfoItem } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { AppSwitch } from "../components/switch.slint";
 import { AppButton } from "../components/button.slint";
@@ -98,17 +98,14 @@ export component SettingsPage inherits Rectangle {
     in property <bool> app_update_ok;
     in property <string> app_update_msg;
 
-    // ── DPI bypass tuning (zapret service.bat filters) ──
+    // ── DPI tuning (zapret2 hostlists; the Flowseal-port "game filter" /
+    //    "ipset mode" / "hosts file" knobs go away — winws2 doesn't expose
+    //    any of them on Windows). ──
     in property <bool> installed;
-    in-out property <string> game_filter; // off | all | tcp | udp
-    in-out property <string> ipset_mode;  // any | none | loaded | unknown
-    in property <int> ipset_lines;
-    in property <bool> ipset_busy;
-    in property <string> ipset_msg;
-    in property <bool> ipset_ok;
-    in property <bool> hosts_busy;
-    in property <string> hosts_msg;
-    in property <bool> hosts_ok;
+    in-out property <[HostlistInfoItem]> hostlists;
+    in property <bool> hostlists_busy;
+    in property <string> hostlists_msg;
+    in property <bool> hostlists_ok;
     in property <bool> discord_busy;
     in property <string> discord_msg;
     in property <bool> discord_ok;
@@ -123,13 +120,8 @@ export component SettingsPage inherits Rectangle {
     callback autoupdate_changed(bool);
     callback tray_changed(bool);
     callback autoengage_changed(bool);
-    callback game_filter_changed(string);
-    callback ipset_mode_changed(string);
-    callback update_ipset_clicked();
-    callback update_hosts_clicked();
+    callback update_hostlists_clicked();
     callback clear_discord_cache_clicked();
-    callback open_ipset_file_clicked();
-    callback open_hosts_file_clicked();
 
     background: transparent;
 
@@ -320,110 +312,47 @@ export component SettingsPage inherits Rectangle {
                 }
                 Rectangle { height: 16px; }
 
-                // DPI bypass tuning — the zapret service.bat filters & updaters.
+                // DPI tuning — zapret2 hostlists + Discord cache housekeeping.
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_dpi");
                     SettingsRow {
-                        label: I18n.t(I18n.lang, "common.game_filter");
-                        hint: root.installed
-                            ? I18n.t(I18n.lang, "settings.gf_hint")
-                            : I18n.t(I18n.lang, "common.game_filter_hint_install");
-                        Segmented {
-                            enabled: root.installed;
-                            selected: root.game_filter;
-                            options: [
-                                { value: "off", label: I18n.t(I18n.lang, "common.gf_off") },
-                                { value: "all", label: I18n.t(I18n.lang, "common.gf_all") },
-                                { value: "tcp", label: I18n.t(I18n.lang, "common.gf_tcp") },
-                                { value: "udp", label: I18n.t(I18n.lang, "common.gf_udp") },
-                            ];
-                            changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
-                        }
-                    }
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.ipset_label");
-                        hint: root.ipset_mode == "loaded"
-                            ? I18n.t(I18n.lang, "settings.ipset_hint_loaded_a") + root.ipset_lines + I18n.t(I18n.lang, "settings.ipset_hint_loaded_b")
-                            : (root.ipset_mode == "none"
-                                ? I18n.t(I18n.lang, "settings.ipset_hint_none")
-                                : (root.ipset_mode == "any"
-                                    ? I18n.t(I18n.lang, "settings.ipset_hint_any")
-                                    : I18n.t(I18n.lang, "settings.ipset_hint_default")));
-                        Segmented {
-                            enabled: root.installed && root.ipset_mode != "unknown";
-                            selected: root.ipset_mode;
-                            options: [
-                                { value: "loaded", label: I18n.t(I18n.lang, "settings.ipset_loaded") },
-                                { value: "none", label: I18n.t(I18n.lang, "settings.ipset_none") },
-                                { value: "any", label: I18n.t(I18n.lang, "settings.ipset_any") },
-                            ];
-                            changed(v) => { root.ipset_mode = v; root.ipset_mode_changed(v); }
-                        }
-                    }
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.update_ipset_label");
-                        hint: I18n.t(I18n.lang, "settings.update_ipset_hint");
+                        label: I18n.t(I18n.lang, "settings.hostlists_label");
+                        hint: I18n.t(I18n.lang, "settings.hostlists_hint");
                         VerticalLayout {
                             spacing: 6px;
                             alignment: center;
                             HorizontalLayout {
                                 alignment: end;
-                                spacing: 8px;
                                 AppButton {
-                                    text: I18n.t(I18n.lang, "common.open");
-                                    variant: "ghost";
-                                    icon: @image-url("../../assets/icons/external.svg");
-                                    enabled: root.installed;
-                                    clicked => { root.open_ipset_file_clicked(); }
-                                }
-                                AppButton {
-                                    text: root.ipset_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "common.update");
+                                    text: root.hostlists_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "common.update");
                                     icon: @image-url("../../assets/icons/download.svg");
-                                    enabled: root.installed && !root.ipset_busy;
-                                    clicked => { root.update_ipset_clicked(); }
+                                    enabled: root.installed && !root.hostlists_busy;
+                                    busy: root.hostlists_busy;
+                                    clicked => { root.update_hostlists_clicked(); }
                                 }
                             }
-                            if root.ipset_msg != "" : Text {
-                                text: root.ipset_msg;
+                            // Per-list status line (only when at least one row is present).
+                            for h[i] in root.hostlists : Text {
+                                text: h.name + " · " + (h.age_days < 0 ? I18n.t(I18n.lang, "settings.hostlists_missing")
+                                    : (h.age_days == 0 ? I18n.t(I18n.lang, "settings.hostlists_today")
+                                                       : "\{h.age_days}" + I18n.t(I18n.lang, "settings.hostlists_days_ago")))
+                                    + " · " + "\{h.line_count}" + I18n.t(I18n.lang, "settings.hostlists_entries_suffix");
+                                width: 240px;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-11;
+                                color: h.age_days < 0 ? ThemePalette.danger
+                                    : (h.age_days >= 30 ? ThemePalette.warning : ThemePalette.text-3);
+                            }
+                            if root.hostlists_msg != "" : Text {
+                                text: root.hostlists_msg;
                                 width: 240px;
                                 horizontal-alignment: right;
                                 wrap: word-wrap;
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
-                                color: root.ipset_ok ? ThemePalette.text-3 : ThemePalette.danger;
-                            }
-                        }
-                    }
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.update_hosts_label");
-                        hint: I18n.t(I18n.lang, "settings.update_hosts_hint");
-                        VerticalLayout {
-                            spacing: 6px;
-                            alignment: center;
-                            HorizontalLayout {
-                                alignment: end;
-                                spacing: 8px;
-                                AppButton {
-                                    text: I18n.t(I18n.lang, "common.open");
-                                    variant: "ghost";
-                                    icon: @image-url("../../assets/icons/external.svg");
-                                    clicked => { root.open_hosts_file_clicked(); }
-                                }
-                                AppButton {
-                                    text: root.hosts_busy ? I18n.t(I18n.lang, "settings.checking") : I18n.t(I18n.lang, "settings.check_update");
-                                    icon: @image-url("../../assets/icons/refresh.svg");
-                                    enabled: !root.hosts_busy;
-                                    clicked => { root.update_hosts_clicked(); }
-                                }
-                            }
-                            if root.hosts_msg != "" : Text {
-                                text: root.hosts_msg;
-                                width: 240px;
-                                horizontal-alignment: right;
-                                wrap: word-wrap;
-                                font-family: ThemePalette.font-sans;
-                                font-size: ThemePalette.fs-12;
-                                color: root.hosts_ok ? ThemePalette.text-3 : ThemePalette.danger;
+                                color: root.hostlists_ok ? ThemePalette.text-3 : ThemePalette.danger;
                             }
                         }
                     }
