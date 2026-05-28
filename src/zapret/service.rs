@@ -74,6 +74,31 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<PathBuf>
     Ok(dst)
 }
 
+/// Securely install + start the Windows service for `strategy_id`, always
+/// running it out of the locked-down machine-wide directory rather than the
+/// user-writable install dir.
+///
+/// This is the single entry point both the elevated one-shot helper
+/// (`main.rs::run_elevated_task`) and the already-elevated in-app path
+/// (`app.rs`) must use: it stages the files into the protected dir, locks the
+/// ACLs, **re-resolves the strategy against that dir** (so the `winws.exe` path
+/// *and* its `--hostlist`/`--ipset` file arguments all point at admin-only
+/// locations), then registers the `LocalSystem` service. Skipping this — e.g.
+/// installing straight from `%APPDATA%` because the app already happens to be
+/// elevated — would reopen the privilege-escalation hole described in
+/// `paths::service_install_dir`.
+pub async fn install_service_protected(user_install_dir: &Path, strategy_id: &str) -> anyhow::Result<()> {
+    check_elevation()?;
+    let protected = prepare_protected_dir(user_install_dir)?;
+    let catalog = crate::zapret::catalog::LocalStrategyCatalog::new(protected.clone());
+    let strategy = crate::ports::StrategyCatalog::by_id(&catalog, strategy_id)
+        .ok_or_else(|| anyhow::anyhow!("Strategy not found"))?;
+    let ctl = WindowsServiceCtl::new(protected);
+    ctl.install(&strategy).await?;
+    ctl.start().await?;
+    Ok(())
+}
+
 pub struct WindowsServiceCtl {
     install_dir: PathBuf,
     service_name: String,

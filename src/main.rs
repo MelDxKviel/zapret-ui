@@ -67,20 +67,15 @@ async fn run_elevated_task(
     strategy_id: Option<String>,
     install_dir: std::path::PathBuf,
 ) -> anyhow::Result<()> {
-    use ports::{ServiceCtl, StrategyCatalog};
+    use ports::ServiceCtl;
 
     match task {
         "service-install" => {
             let strat_id = strategy_id.ok_or_else(|| anyhow::anyhow!("Strategy ID required for installation"))?;
-            // Stage the binaries into the protected machine-wide directory and
-            // lock down its ACLs, then run the service from THERE — never from
-            // the user-writable %APPDATA% dir (privilege-escalation fix).
-            let protected = zapret::service::prepare_protected_dir(&install_dir)?;
-            let catalog = zapret::catalog::LocalStrategyCatalog::new(protected.clone());
-            let strategy = catalog.by_id(&strat_id).ok_or_else(|| anyhow::anyhow!("Strategy not found"))?;
-            let service_ctl = zapret::service::WindowsServiceCtl::new(protected);
-            service_ctl.install(&strategy).await?;
-            service_ctl.start().await?;
+            // Stage into the protected machine-wide directory, lock its ACLs and
+            // run the service from THERE — never from the user-writable %APPDATA%
+            // dir (privilege-escalation fix). Shared with the in-app elevated path.
+            zapret::service::install_service_protected(&install_dir, &strat_id).await?;
         }
         "service-remove" => {
             let service_ctl = zapret::service::WindowsServiceCtl::new(install_dir);

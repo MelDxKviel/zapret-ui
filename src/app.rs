@@ -1485,19 +1485,18 @@ impl App {
                         }
                     }
                     BackendCmd::ServiceInstall(strategy_id) => {
-                        if let Some(strategy) = catalog.by_id(&strategy_id) {
+                        if catalog.by_id(&strategy_id).is_some() {
                             // A user-process bypass holds the WinDivert driver, which
                             // would make the service's own winws.exe fail to start.
                             // Stop it first so the service can take over cleanly.
                             let _ = runner.stop().await;
-                            match service_ctl.install(&strategy).await {
+                            // Always install via the protected machine dir — even when
+                            // we're already elevated — so the LocalSystem service never
+                            // runs winws.exe out of the user-writable install dir.
+                            let install_dir = current_install_dir(&config).await;
+                            match crate::zapret::service::install_service_protected(&install_dir, &strategy_id).await {
                                 Ok(_) => {
-                                    // Installed — now start it so the bypass is active immediately.
-                                    if let Err(e) = service_ctl.start().await {
-                                        let _ = event_tx.send(UiEvent::Error(format!("Service installed but failed to start: {}", e)));
-                                    } else {
-                                        notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
-                                    }
+                                    notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
                                     let mut status = runner.detect_running().await;
                                     status.service_installed = service_ctl.is_installed().await;
                                     state.set_status(status.clone()).await;
