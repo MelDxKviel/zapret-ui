@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::rc::Rc;
 use std::cell::RefCell;
 use tokio::sync::{mpsc, broadcast, RwLock};
 use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, GameFilterMode, IpsetMode, split_alt};
@@ -9,6 +8,14 @@ use crate::state::AppState;
 use crate::tray::SystemTray;
 
 slint::include_modules!();
+
+mod winexec;
+mod ui_models;
+use winexec::{
+    open_external, relaunch_after_update, relaunch_elevated, relaunch_self_elevated,
+    wait_for_elevated_result,
+};
+use ui_models::{is_favorite, rebuild_logs, rebuild_strategies, rebuild_test_results, to_item};
 
 // ── Log buffer (lives on the Slint UI thread; both the event listener's
 //    invoke_from_event_loop closures and the UI callbacks run there) ──
@@ -35,7 +42,7 @@ fn app_window_icon() -> Option<slint::Image> {
     use image::ImageReader;
     use std::io::Cursor;
 
-    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
+    const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon.ico");
     let img = ImageReader::with_format(Cursor::new(ICON_BYTES), image::ImageFormat::Ico)
         .decode()
         .ok()?
@@ -43,354 +50,6 @@ fn app_window_icon() -> Option<slint::Image> {
     let (w, h) = (img.width(), img.height());
     let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&img, w, h);
     Some(slint::Image::from_rgba8(buf))
-}
-
-/// Whether `id` is currently a favorite (reads the UI-thread mirror).
-fn is_favorite(id: &str) -> bool {
-    FAVORITES.with(|f| f.borrow().iter().any(|x| x == id))
-}
-
-/// Map a catalog strategy to its Slint row, tagging its current favorite state.
-fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
-    let (pretty, alt) = split_alt(&s.id);
-    StrategyItem {
-        id: s.id.as_str().into(),
-        display_name: s.display_name.as_str().into(),
-        category: format!("{:?}", s.category).into(),
-        description: s.description.as_str().into(),
-        pretty: pretty.into(),
-        alt: alt.into(),
-        favorite: is_favorite(&s.id),
-    }
-}
-
-/// Rebuild the Slint `strategies` model from the catalog, applying the current
-/// search query and floating favorites to the top (keeping catalog order within
-/// each group). Runs on the UI thread.
-fn rebuild_strategies(ui: &MainWindow, catalog: &Arc<dyn StrategyCatalog>) {
-    let q = ui.get_strategies_query().to_string().trim().to_lowercase();
-    let mut list: Vec<crate::contracts::Strategy> = catalog
-        .all()
-        .into_iter()
-        .filter(|s| {
-            q.is_empty()
-                || format!("{} {} {}", s.id, s.display_name, s.description)
-                    .to_lowercase()
-                    .contains(&q)
-        })
-        .collect();
-    // Stable sort: favorites first, original (catalog) order preserved otherwise.
-    list.sort_by_key(|s| if is_favorite(&s.id) { 0 } else { 1 });
-    let items: Vec<StrategyItem> = list.iter().map(to_item).collect();
-    ui.set_strategies(Rc::new(slint::VecModel::from(items)).into());
-}
-
-/// Split a raw log line into (timestamp, level, message) for coloured display.
-fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
-    let mut rest = raw.trim_end();
-    let mut timestamp = String::new();
-    let mut level = String::new();
-
-    // Leading ISO-8601 timestamp, e.g. 2026-05-23T16:14:34.808277Z
-    if let Some((first, tail)) = rest.split_once(char::is_whitespace) {
-        let looks_ts = first.len() >= 20
-            && first.as_bytes()[0].is_ascii_digit()
-            && first.contains('T')
-            && first.ends_with('Z');
-        if looks_ts {
-            timestamp = first.to_string();
-            rest = tail.trim_start();
-        }
-    }
-
-    // Level tag
-    if let Some((first, tail)) = rest.split_once(char::is_whitespace) {
-        let up = first.to_uppercase();
-        if matches!(up.as_str(), "INFO" | "WARN" | "WARNING" | "ERROR" | "ERR" | "DEBUG" | "TRACE") {
-            level = if up.starts_with("ERR") { "ERROR".to_string() }
-                else if up.starts_with("WARN") { "WARN".to_string() }
-                else { up };
-            rest = tail.trim_start();
-        }
-    }
-
-    LogLineItem {
-        line_no: no as i32,
-        timestamp: timestamp.into(),
-        level: level.into(),
-        message: rest.to_string().into(),
-    }
-}
-
-fn line_passes(raw: &str, grep: &str, level: &str) -> bool {
-    if level != "ALL" {
-        let up = raw.to_uppercase();
-        let want = if level == "ERROR" { "ERR" } else { level };
-        if !up.contains(want) {
-            return false;
-        }
-    }
-    if !grep.is_empty() && !raw.to_lowercase().contains(&grep.to_lowercase()) {
-        return false;
-    }
-    true
-}
-
-/// Re-parse + re-filter the whole buffer into the Slint `log_lines` model.
-fn rebuild_logs(ui: &MainWindow) {
-    let (grep, level) = LOG_FILTER.with(|f| f.borrow().clone());
-    let (items, text) = LOG_BUF.with(|b| {
-        let mut items: Vec<LogLineItem> = Vec::new();
-        let mut text = String::new();
-        for raw in b.borrow().iter().filter(|raw| line_passes(raw, &grep, &level)) {
-            items.push(parse_log_line(items.len() + 1, raw));
-            text.push_str(raw);
-            text.push('\n');
-        }
-        (items, text)
-    });
-    ui.set_log_lines(Rc::new(slint::VecModel::from(items)).into());
-    // Plain-text mirror for the selectable / copyable terminal view.
-    ui.set_log_text(text.into());
-}
-
-/// Rebuild the Slint `test_results` model from the thread-local buffer.
-/// Sorts live by reachability (then latency) so the best strategies bubble to
-/// the top as results stream in, rather than appearing in catalog/name order.
-fn rebuild_test_results(ui: &MainWindow) {
-    let best_id = ui.get_test_best_id().to_string();
-    let mut sorted = TEST_RESULTS.with(|b| b.borrow().clone());
-    sorted.sort_by(|a, b| {
-        b.ok.cmp(&a.ok).then_with(|| {
-            let al = if a.avg_latency_ms == 0 { u32::MAX } else { a.avg_latency_ms };
-            let bl = if b.avg_latency_ms == 0 { u32::MAX } else { b.avg_latency_ms };
-            al.cmp(&bl)
-        })
-    });
-    let items: Vec<TestResultItem> = sorted
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let (pretty, alt) = split_alt(&r.id);
-            TestResultItem {
-                id: r.id.as_str().into(),
-                display_name: r.display_name.as_str().into(),
-                pretty: pretty.into(),
-                alt: alt.into(),
-                ok: r.ok as i32,
-                total: r.total as i32,
-                latency: r.avg_latency_ms as i32,
-                rank: i as i32 + 1,
-                is_best: !best_id.is_empty() && r.id == best_id,
-                favorite: is_favorite(&r.id),
-            }
-        })
-        .collect();
-    ui.set_test_results(Rc::new(slint::VecModel::from(items)).into());
-}
-
-/// Open a path with the OS default handler (folder in Explorer, URL in browser).
-/// Uses `ShellExecuteW` directly rather than `cmd /C start`, so shell
-/// metacharacters in the target can't be interpreted (command-injection fix).
-fn open_external(target: &str) {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr;
-    let file_w: Vec<u16> = OsStr::new(target).encode_wide().chain(Some(0)).collect();
-    unsafe {
-        // null lpOperation => default verb ("open"), which handles URLs, files
-        // and folders without going through a command interpreter.
-        ShellExecuteW(
-            ptr::null_mut(),
-            ptr::null(),
-            file_w.as_ptr(),
-            ptr::null(),
-            ptr::null(),
-            1, // SW_SHOWNORMAL
-        );
-    }
-}
-
-#[link(name = "shell32")]
-extern "system" {
-    fn ShellExecuteW(
-        hwnd: *mut std::ffi::c_void,
-        lpOperation: *const u16,
-        lpFile: *const u16,
-        lpParameters: *const u16,
-        lpDirectory: *const u16,
-        nShowCmd: i32,
-    ) -> *mut std::ffi::c_void;
-}
-
-/// Quote a single argument for a Windows command line so that the receiving
-/// process's `CommandLineToArgvW`/`std::env::args` reproduces it verbatim — even
-/// when it contains spaces or parentheses (real preset ids look like
-/// `general (ALT2)`). Implements the documented MSVC argv quoting rules.
-fn quote_arg(arg: &str) -> String {
-    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
-        return arg.to_string();
-    }
-    let mut out = String::from('"');
-    let mut backslashes = 0usize;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => {
-                backslashes += 1;
-            }
-            '"' => {
-                // Escape all pending backslashes (they precede a quote) + the quote.
-                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
-                backslashes = 0;
-                out.push('"');
-            }
-            _ => {
-                out.extend(std::iter::repeat_n('\\', backslashes));
-                backslashes = 0;
-                out.push(ch);
-            }
-        }
-    }
-    // Trailing backslashes precede the closing quote — double them.
-    out.extend(std::iter::repeat_n('\\', backslashes * 2));
-    out.push('"');
-    out
-}
-
-/// Handle to a launched elevated one-shot task: the nonce-named result file the
-/// helper writes its outcome into, plus the nonce used to authenticate it.
-pub struct ElevationHandle {
-    pub result_file: std::path::PathBuf,
-    pub nonce: String,
-}
-
-/// Launch this exe elevated to run a one-shot service task. Arguments (including
-/// the strategy id and an explicit install dir) are passed with correct quoting
-/// so spaces/parentheses survive, and an explicit install dir is handed over so
-/// the helper acts on the *same* directory regardless of which admin account UAC
-/// elevates to. Returns a handle whose result file the caller can await.
-pub fn relaunch_elevated(
-    task: &str,
-    strategy: Option<&str>,
-    install_dir: &std::path::Path,
-) -> anyhow::Result<ElevationHandle> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr;
-
-    let current_exe = std::env::current_exe()?;
-    let exe_path_w: Vec<u16> = current_exe.as_os_str().encode_wide().chain(Some(0)).collect();
-
-    // Unique nonce so the parent can authenticate the result file the helper
-    // writes (and so concurrent tasks don't collide).
-    let nonce = {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        format!("{}-{}", std::process::id(), nanos)
-    };
-    let result_file = std::env::temp_dir().join(format!("zapret-ui-elev-{nonce}.result"));
-
-    let mut args = vec![format!("--elevated-task={task}")];
-    if let Some(strat) = strategy {
-        args.push(format!("--strategy={strat}"));
-    }
-    args.push(format!("--install-dir={}", install_dir.display()));
-    args.push(format!("--result-file={}", result_file.display()));
-    args.push(format!("--nonce={nonce}"));
-    let params = args.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ");
-    let params_w: Vec<u16> = OsStr::new(&params).encode_wide().chain(Some(0)).collect();
-
-    let verb_w: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
-
-    unsafe {
-        let result = ShellExecuteW(
-            ptr::null_mut(),
-            verb_w.as_ptr(),
-            exe_path_w.as_ptr(),
-            params_w.as_ptr(),
-            ptr::null(),
-            1, // SW_SHOWNORMAL
-        );
-        if (result as usize) <= 32 {
-            return Err(anyhow::anyhow!("Failed to relaunch elevated: error code {}", result as usize));
-        }
-    }
-
-    Ok(ElevationHandle { result_file, nonce })
-}
-
-/// Await the result file written by an elevated one-shot task. Returns `Ok(())`
-/// on success, or the helper's error message. Times out (the user may have
-/// dismissed UAC, or the helper hung) after ~90s.
-pub async fn wait_for_elevated_result(handle: ElevationHandle) -> Result<(), String> {
-    use tokio::time::{sleep, Duration, Instant};
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let outcome = loop {
-        if let Ok(content) = std::fs::read_to_string(&handle.result_file) {
-            let mut lines = content.lines();
-            let got_nonce = lines.next().unwrap_or("");
-            if got_nonce == handle.nonce {
-                let status = lines.next().unwrap_or("");
-                if status == "OK" {
-                    break Ok(());
-                } else {
-                    let msg: String = lines.collect::<Vec<_>>().join("\n");
-                    break Err(if msg.is_empty() { status.to_string() } else { msg });
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            break Err("Elevated operation did not report a result (timed out or was cancelled).".to_string());
-        }
-        sleep(Duration::from_millis(250)).await;
-    };
-    let _ = std::fs::remove_file(&handle.result_file);
-    outcome
-}
-
-/// Relaunch *this whole app* elevated (the normal UI, not a one-shot task) via
-/// the `runas` verb. The new instance carries `--relaunch` so it retries the
-/// single-instance mutex while this (unelevated) instance exits. Used by the
-/// "run as administrator" banner.
-pub fn relaunch_self_elevated() -> anyhow::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr;
-
-    let current_exe = std::env::current_exe()?;
-    let exe_path_w: Vec<u16> = current_exe.as_os_str().encode_wide().chain(Some(0)).collect();
-    let params_w: Vec<u16> = OsStr::new("--relaunch").encode_wide().chain(Some(0)).collect();
-    let verb_w: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
-
-    unsafe {
-        let result = ShellExecuteW(
-            ptr::null_mut(),
-            verb_w.as_ptr(),
-            exe_path_w.as_ptr(),
-            params_w.as_ptr(),
-            ptr::null(),
-            1, // SW_SHOWNORMAL
-        );
-        if (result as usize) <= 32 {
-            return Err(anyhow::anyhow!("Failed to relaunch elevated: error code {}", result as usize));
-        }
-    }
-
-    Ok(())
-}
-
-/// Relaunch the (freshly self-updated) binary at the original path, then let the
-/// caller exit. Uses a plain spawn — no elevation — and passes `--relaunch` so
-/// the new process retries the single-instance mutex while this one shuts down.
-pub fn relaunch_after_update() -> anyhow::Result<()> {
-    let current_exe = std::env::current_exe()?;
-    std::process::Command::new(current_exe)
-        .arg("--relaunch")
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!("Failed to relaunch updated binary: {e}"))
 }
 
 /// Fire a bypass start/stop toast when the user has notifications enabled.
@@ -436,11 +95,7 @@ async fn notify_bypass(
 
 /// Resolve the user-facing install dir from config (the same dir the UI uses).
 async fn current_install_dir(config: &Arc<RwLock<AppConfig>>) -> std::path::PathBuf {
-    let cfg = config.read().await;
-    cfg.install_dir_override.clone().unwrap_or_else(|| {
-        let base = directories::BaseDirs::new().unwrap();
-        base.config_dir().join("zapret-ui").join("zapret")
-    })
+    config.read().await.install_dir()
 }
 
 /// Relaunch elevated for a one-shot service task and wait for its result,
@@ -463,6 +118,43 @@ async fn elevate_service_task(
         Err(e) => {
             let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", e)));
         }
+    }
+}
+
+/// Re-detect runtime status, patch `service_installed` from the SCM, store it in
+/// `AppState` and broadcast it to the UI. Almost every command ends with this
+/// same four-step "settle the status" sequence, so it lives here instead of
+/// being copy-pasted into each handler (see CLAUDE.md "Status flow").
+async fn refresh_and_broadcast(
+    runner: &Arc<dyn Runner>,
+    service_ctl: &Arc<dyn ServiceCtl>,
+    state: &AppState,
+    event_tx: &broadcast::Sender<UiEvent>,
+) {
+    let mut status = runner.detect_running().await;
+    status.service_installed = service_ctl.is_installed().await;
+    state.set_status(status.clone()).await;
+    let _ = event_tx.send(UiEvent::Status(status));
+}
+
+/// Shared error handling for the SCM service commands (remove/start/stop/install).
+/// On `NeedsElevation` it relaunches the elevated one-shot helper and returns
+/// `true` so the caller refreshes status; on any other error it reports it and
+/// returns `false`. The `{:#}` format surfaces the underlying winapi/OS error,
+/// not just the opaque top-level message.
+async fn elevate_or_report(
+    e: anyhow::Error,
+    elevate_task: &str,
+    strategy: Option<&str>,
+    config: &Arc<RwLock<AppConfig>>,
+    event_tx: &broadcast::Sender<UiEvent>,
+) -> bool {
+    if e.to_string().contains("NeedsElevation") {
+        elevate_service_task(elevate_task, strategy, config, event_tx).await;
+        true
+    } else {
+        let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+        false
     }
 }
 
@@ -590,12 +282,7 @@ impl App {
             ui.set_minimize_to_tray(c.minimize_to_tray);
             ui.set_autoengage(c.autoengage);
             ui.set_theme(c.theme.slug().into());
-            let install_dir = c.install_dir_override.clone().unwrap_or_else(|| {
-                directories::BaseDirs::new()
-                    .map(|b| b.config_dir().join("zapret-ui").join("zapret"))
-                    .unwrap_or_default()
-            });
-            ui.set_install_dir(install_dir.display().to_string().into());
+            ui.set_install_dir(c.install_dir().display().to_string().into());
         }
 
         // Populate strategies list (favorites first).
@@ -1369,7 +1056,10 @@ impl App {
             let mut notified_running: Option<bool> = Some(false);
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    BackendCmd::Install => {
+                    BackendCmd::Install | BackendCmd::Update => {
+                        // Install and Update are the same backend operation —
+                        // `install_or_update` handles both a fresh install and an
+                        // upgrade — so they share one handler; only the button differs.
                         let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Resolving));
                         let event_tx_c = event_tx.clone();
                         let progress_cb = Box::new(move |stage, bytes, total| {
@@ -1380,13 +1070,10 @@ impl App {
                         match installer.install_or_update(progress_cb).await {
                             Ok(_) => {
                                 let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
-                                let mut status = runner.detect_running().await;
-                                status.service_installed = service_ctl.is_installed().await;
-                                state.set_status(status.clone()).await;
-                                let _ = event_tx.send(UiEvent::Status(status));
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                             }
                             Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                             }
                         }
                     }
@@ -1408,28 +1095,7 @@ impl App {
                                 }
                             }
                             Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
-                            }
-                        }
-                    }
-                    BackendCmd::Update => {
-                        let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Resolving));
-                        let event_tx_c = event_tx.clone();
-                        let progress_cb = Box::new(move |stage, bytes, total| {
-                            let _ = event_tx_c.send(UiEvent::InstallProgress(stage));
-                            let _ = event_tx_c.send(UiEvent::DownloadProgress { bytes, total });
-                        });
-
-                        match installer.install_or_update(progress_cb).await {
-                            Ok(_) => {
-                                let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
-                                let mut status = runner.detect_running().await;
-                                status.service_installed = service_ctl.is_installed().await;
-                                state.set_status(status.clone()).await;
-                                let _ = event_tx.send(UiEvent::Status(status));
-                            }
-                            Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                             }
                         }
                     }
@@ -1444,7 +1110,7 @@ impl App {
                                 }
                             }
                             Err(e) => {
-                                let _ = event_tx.send(UiEvent::AppUpdateError(e.to_string()));
+                                let _ = event_tx.send(UiEvent::AppUpdateError(format!("{:#}", e)));
                             }
                         }
                     }
@@ -1470,7 +1136,7 @@ impl App {
                                 }
                             }
                             Err(e) => {
-                                let _ = event_tx.send(UiEvent::AppUpdateError(e.to_string()));
+                                let _ = event_tx.send(UiEvent::AppUpdateError(format!("{:#}", e)));
                             }
                         }
                     }
@@ -1492,7 +1158,7 @@ impl App {
                                     let _ = event_tx.send(UiEvent::Status(status));
                                 }
                                 Err(e) => {
-                                    let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                                 }
                             }
                         } else {
@@ -1503,13 +1169,10 @@ impl App {
                         match runner.stop().await {
                             Ok(_) => {
                                 notify_bypass(&config, &mut notified_running, false, None).await;
-                                let mut status = runner.detect_running().await;
-                                status.service_installed = service_ctl.is_installed().await;
-                                state.set_status(status.clone()).await;
-                                let _ = event_tx.send(UiEvent::Status(status));
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                             }
                             Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                             }
                         }
                     }
@@ -1526,22 +1189,11 @@ impl App {
                             match crate::zapret::service::install_service_protected(&install_dir, &strategy_id).await {
                                 Ok(_) => {
                                     notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
-                                    let mut status = runner.detect_running().await;
-                                    status.service_installed = service_ctl.is_installed().await;
-                                    state.set_status(status.clone()).await;
-                                    let _ = event_tx.send(UiEvent::Status(status));
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                                 }
                                 Err(e) => {
-                                    if e.to_string().contains("NeedsElevation") {
-                                        elevate_service_task("service-install", Some(&strategy_id), &config, &event_tx).await;
-                                        let mut status = runner.detect_running().await;
-                                        status.service_installed = service_ctl.is_installed().await;
-                                        state.set_status(status.clone()).await;
-                                        let _ = event_tx.send(UiEvent::Status(status));
-                                    } else {
-                                        // {:#} so the underlying winapi/OS error is shown,
-                                        // not just the opaque top-level message.
-                                        let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                    if elevate_or_report(e, "service-install", Some(&strategy_id), &config, &event_tx).await {
+                                        refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                                     }
                                 }
                             }
@@ -1553,20 +1205,11 @@ impl App {
                         match service_ctl.remove().await {
                             Ok(_) => {
                                 notify_bypass(&config, &mut notified_running, false, None).await;
-                                let mut status = runner.detect_running().await;
-                                status.service_installed = service_ctl.is_installed().await;
-                                state.set_status(status.clone()).await;
-                                let _ = event_tx.send(UiEvent::Status(status));
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                             }
                             Err(e) => {
-                                if e.to_string().contains("NeedsElevation") {
-                                    elevate_service_task("service-remove", None, &config, &event_tx).await;
-                                    let mut status = runner.detect_running().await;
-                                    status.service_installed = service_ctl.is_installed().await;
-                                    state.set_status(status.clone()).await;
-                                    let _ = event_tx.send(UiEvent::Status(status));
-                                } else {
-                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                if elevate_or_report(e, "service-remove", None, &config, &event_tx).await {
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                                 }
                             }
                         }
@@ -1578,20 +1221,11 @@ impl App {
                         match service_ctl.start().await {
                             Ok(_) => {
                                 notify_bypass(&config, &mut notified_running, true, None).await;
-                                let mut status = runner.detect_running().await;
-                                status.service_installed = service_ctl.is_installed().await;
-                                state.set_status(status.clone()).await;
-                                let _ = event_tx.send(UiEvent::Status(status));
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                             }
                             Err(e) => {
-                                if e.to_string().contains("NeedsElevation") {
-                                    elevate_service_task("service-start", None, &config, &event_tx).await;
-                                    let mut status = runner.detect_running().await;
-                                    status.service_installed = service_ctl.is_installed().await;
-                                    state.set_status(status.clone()).await;
-                                    let _ = event_tx.send(UiEvent::Status(status));
-                                } else {
-                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                if elevate_or_report(e, "service-start", None, &config, &event_tx).await {
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                                 }
                             }
                         }
@@ -1600,20 +1234,11 @@ impl App {
                         match service_ctl.stop().await {
                             Ok(_) => {
                                 notify_bypass(&config, &mut notified_running, false, None).await;
-                                let mut status = runner.detect_running().await;
-                                status.service_installed = service_ctl.is_installed().await;
-                                state.set_status(status.clone()).await;
-                                let _ = event_tx.send(UiEvent::Status(status));
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                             }
                             Err(e) => {
-                                if e.to_string().contains("NeedsElevation") {
-                                    elevate_service_task("service-stop", None, &config, &event_tx).await;
-                                    let mut status = runner.detect_running().await;
-                                    status.service_installed = service_ctl.is_installed().await;
-                                    state.set_status(status.clone()).await;
-                                    let _ = event_tx.send(UiEvent::Status(status));
-                                } else {
-                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                if elevate_or_report(e, "service-stop", None, &config, &event_tx).await {
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                                 }
                             }
                         }
@@ -1645,13 +1270,7 @@ impl App {
                         let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
                     }
                     BackendCmd::OpenInstallFolder => {
-                        let install_dir = {
-                            let cfg = config.read().await;
-                            cfg.install_dir_override.clone().unwrap_or_else(|| {
-                                let base = directories::BaseDirs::new().unwrap();
-                                base.config_dir().join("zapret-ui").join("zapret")
-                            })
-                        };
+                        let install_dir = current_install_dir(&config).await;
                         let _ = std::process::Command::new("explorer").arg(&install_dir).spawn();
                     }
                     BackendCmd::OpenIpsetFile => {
@@ -1750,7 +1369,7 @@ impl App {
                                 tracing::info!("Game filter changed — restart the bypass to apply");
                             }
                             Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                             }
                         }
                         let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
@@ -1893,10 +1512,7 @@ impl App {
                             }
 
                             // Settle the status display after the test churns winws.
-                            let mut status = runner_c.detect_running().await;
-                            status.service_installed = service_ctl_c.is_installed().await;
-                            state_c.set_status(status.clone()).await;
-                            let _ = event_tx_c.send(UiEvent::Status(status));
+                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c).await;
                         });
                     }
                 }

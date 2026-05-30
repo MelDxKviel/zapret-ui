@@ -172,13 +172,35 @@ export component LogsPage inherits Rectangle {
                     // its own scrollbar. (A TextInput inside a ScrollView made
                     // drag-to-select unreliable, which is why a Copy button used to
                     // be needed.) It exposes viewport-y, so autoscroll still works.
-                    term := TextEdit {
+                    // The TextEdit is wrapped in a FocusScope so Ctrl+C works on
+                    // non-Latin keyboard layouts too. Slint's built-in TextInput
+                    // matches the copy shortcut against the *produced character*
+                    // ("c"); on a Russian layout Ctrl+C yields "с" (Cyrillic) and
+                    // the built-in copy never fires. When the shortcut doesn't match,
+                    // the (Ctrl-held) TextInput reports the event as ignored, so it
+                    // bubbles up here and we invoke TextEdit::copy() ourselves —
+                    // which copies the current *selection* via Slint's clipboard,
+                    // exactly like the native shortcut. On a Latin layout the
+                    // TextInput consumes Ctrl+C itself and this handler isn't reached.
+                    FocusScope {
                         vertical-stretch: 1;
-                        read-only: true;
-                        text: root.log_text;
-                        font-family: ThemePalette.font-mono;
-                        font-size: ThemePalette.fs-12;
-                        wrap: word-wrap;
+                        key-pressed(event) => {
+                            if (event.modifiers.control
+                                && (event.text == "c" || event.text == "с" || event.text == "С")) {
+                                term.copy();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                        term := TextEdit {
+                            width: 100%;
+                            height: 100%;
+                            read-only: true;
+                            text: root.log_text;
+                            font-family: ThemePalette.font-mono;
+                            font-size: ThemePalette.fs-12;
+                            wrap: word-wrap;
+                        }
                     }
                 }
             }

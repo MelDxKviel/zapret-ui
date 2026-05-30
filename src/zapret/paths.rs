@@ -1,10 +1,4 @@
 use std::path::{Path, PathBuf};
-use directories::BaseDirs;
-
-/// Default installation directory under %APPDATA%\zapret-ui\zapret\
-pub fn default_install_dir() -> Option<PathBuf> {
-    BaseDirs::new().map(|base| base.config_dir().join("zapret-ui").join("zapret"))
-}
 
 /// Machine-wide, admin-only directory used for **service-mode** binaries:
 /// `%ProgramData%\zapret-ui\zapret`. The per-user `%APPDATA%` install dir is

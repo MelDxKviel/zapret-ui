@@ -83,6 +83,13 @@ fn default_true() -> bool {
     true
 }
 
+/// The per-user default zapret install dir, `%APPDATA%\zapret-ui\zapret`.
+/// `None` only if the OS user directories can't be resolved. Canonical home for
+/// the default-path logic that callers reach via [`AppConfig::install_dir`].
+pub fn default_install_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|b| b.config_dir().join("zapret-ui").join("zapret"))
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -102,6 +109,18 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// The effective zapret install dir: the explicit `install_dir_override` if
+    /// set, else the per-user default ([`default_install_dir`]). Falls back to an
+    /// empty path only if the OS user directories can't be resolved (effectively
+    /// never on Windows). Single source of truth for every caller that needs the
+    /// install dir (app.rs, main.rs).
+    pub fn install_dir(&self) -> PathBuf {
+        self.install_dir_override
+            .clone()
+            .or_else(default_install_dir)
+            .unwrap_or_default()
+    }
+
     /// Returns the default config path under `%APPDATA%\zapret-ui\config.toml`
     pub fn default_config_path() -> anyhow::Result<PathBuf> {
         let base_dirs = directories::BaseDirs::new()

@@ -53,13 +53,7 @@ fn parse_args() -> ElevatedArgs {
 /// passed explicitly (so we don't accidentally use a *different* admin account's
 /// `%APPDATA%`), falling back to config only if absent.
 fn elevated_install_dir(explicit: Option<std::path::PathBuf>) -> std::path::PathBuf {
-    explicit.unwrap_or_else(|| {
-        let config = config::AppConfig::load();
-        config.install_dir_override.clone().unwrap_or_else(|| {
-            let base = directories::BaseDirs::new().unwrap();
-            base.config_dir().join("zapret-ui").join("zapret")
-        })
-    })
+    explicit.unwrap_or_else(|| config::AppConfig::load().install_dir())
 }
 
 async fn run_elevated_task(
@@ -184,10 +178,7 @@ async fn main() -> anyhow::Result<()> {
     let config = config::AppConfig::load();
     let state = state::AppState::default();
 
-    let install_dir = config.install_dir_override.clone().unwrap_or_else(|| {
-        let base = directories::BaseDirs::new().unwrap();
-        base.config_dir().join("zapret-ui").join("zapret")
-    });
+    let install_dir = config.install_dir();
 
     // Instantiate ports
     let client = reqwest::Client::builder().build()?;
