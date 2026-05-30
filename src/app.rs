@@ -20,6 +20,9 @@ thread_local! {
     // Favorite strategy ids (mirrors AppConfig::favorites). Lives on the UI thread
     // so the model rebuilders (search, toggle, test results) can read it cheaply.
     static FAVORITES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    // Last error toast (message + when) so we can dedupe a burst of identical/rapid
+    // errors into a single notification instead of spamming the user.
+    static LAST_ERROR_TOAST: RefCell<Option<(String, std::time::Instant)>> = const { RefCell::new(None) };
 }
 
 const LOG_BUF_CAP: usize = 4000;
@@ -1140,6 +1143,32 @@ impl App {
                             UiEvent::Error(err) => {
                                 tracing::error!("UI Error: {}", err);
                                 ui.set_is_busy(false);
+                                // Surface the failure as a toast — errors used to be
+                                // logged only, so a failed action looked like it
+                                // silently did nothing. But dedupe: a single failed
+                                // operation can emit a burst of identical errors, so
+                                // suppress repeats of the same message within 30s and
+                                // rate-limit any toast to one per 5s. (Always logged.)
+                                let now = std::time::Instant::now();
+                                let show = LAST_ERROR_TOAST.with(|c| {
+                                    let mut last = c.borrow_mut();
+                                    let suppress = last.as_ref().is_some_and(|(msg, at)| {
+                                        let dt = now.duration_since(*at);
+                                        (*msg == err && dt < std::time::Duration::from_secs(30))
+                                            || dt < std::time::Duration::from_secs(5)
+                                    });
+                                    if suppress {
+                                        false
+                                    } else {
+                                        *last = Some((err.clone(), now));
+                                        true
+                                    }
+                                });
+                                if show {
+                                    let title = crate::i18n::tr(ui.global::<I18n>().get_lang().as_str(), "notify.error_title");
+                                    let body = err.clone();
+                                    std::thread::spawn(move || crate::notify::show(&title, &body));
+                                }
                             }
                             UiEvent::TestStarted { total } => {
                                 TEST_RESULTS.with(|b| b.borrow_mut().clear());
@@ -1510,7 +1539,9 @@ impl App {
                                         state.set_status(status.clone()).await;
                                         let _ = event_tx.send(UiEvent::Status(status));
                                     } else {
-                                        let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                        // {:#} so the underlying winapi/OS error is shown,
+                                        // not just the opaque top-level message.
+                                        let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                                     }
                                 }
                             }
@@ -1535,7 +1566,7 @@ impl App {
                                     state.set_status(status.clone()).await;
                                     let _ = event_tx.send(UiEvent::Status(status));
                                 } else {
-                                    let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                                 }
                             }
                         }
@@ -1560,7 +1591,7 @@ impl App {
                                     state.set_status(status.clone()).await;
                                     let _ = event_tx.send(UiEvent::Status(status));
                                 } else {
-                                    let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                                 }
                             }
                         }
@@ -1582,7 +1613,7 @@ impl App {
                                     state.set_status(status.clone()).await;
                                     let _ = event_tx.send(UiEvent::Status(status));
                                 } else {
-                                    let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
                                 }
                             }
                         }

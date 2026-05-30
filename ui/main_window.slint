@@ -27,6 +27,9 @@ component NavItem inherits Rectangle {
     in property <string> label;
     in property <image> icon;
     in property <bool> active;
+    // Draws an accent dot on the right to nudge the user toward this tab (used to
+    // point a freshly-installed user at Strategies). Suppressed once active.
+    in property <bool> attention: false;
     callback clicked;
 
     height: 32px;
@@ -73,6 +76,16 @@ component NavItem inherits Rectangle {
             vertical-alignment: center;
             animate color { duration: 120ms; }
         }
+        Rectangle { horizontal-stretch: 1; }
+        if root.attention && !root.active : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 7px;
+                height: 7px;
+                border-radius: 3.5px;
+                background: ThemePalette.accent;
+            }
+        }
     }
 }
 
@@ -82,7 +95,8 @@ component ThemeToggleBtn inherits Rectangle {
     in property <bool> active;
     callback clicked;
     horizontal-stretch: 1;
-    height: 26px;
+    // No fixed height: fill the toolbar row so the icon stays vertically centered
+    // (a HorizontalLayout top-aligns fixed-height children — see BrandMark).
     border-radius: ThemePalette.r-6;
     background: root.active ? ThemePalette.surface-2 : transparent;
     animate background { duration: 120ms; }
@@ -370,6 +384,8 @@ export component MainWindow inherits Window {
                         label: I18n.t(I18n.lang, "nav.strategies");
                         icon: @image-url("../assets/icons/strategies.svg");
                         active: root.current_page == "strategies";
+                        // Nudge a freshly-installed user (core present, nothing picked) here.
+                        attention: root.status_installed && !root.has_strategy;
                         clicked => { root.current_page = "strategies"; }
                     }
                     NavItem {
@@ -666,7 +682,6 @@ export component MainWindow inherits Window {
                     log_lines: root.log_lines;
                     log_text: root.log_text;
                     open_file_clicked => { root.open_log_file_clicked(); }
-                    copy_clicked => { root.copy_to_clipboard(root.log_text); }
                     clear_clicked => { root.logs_clear_clicked(); }
                     query_changed(g, l) => { root.logs_query_changed(g, l); }
                 }

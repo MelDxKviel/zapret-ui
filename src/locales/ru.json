@@ -65,6 +65,7 @@
   "home.hint_pick": "Выберите её на вкладке «Стратегии», затем вернитесь сюда для запуска.",
   "home.hint_stop": "Нажмите «Стоп», чтобы завершить процесс обхода",
   "home.hint_engage": "Нажмите «Запустить», чтобы стартовать в пользовательском режиме, или установите как службу ниже",
+  "home.btn_install": "УСТАНОВИТЬ ЯДРО",
   "home.btn_pick": "ВЫБРАТЬ",
   "home.btn_stop": "СТОП",
   "home.btn_engage": "ЗАПУСК",
@@ -134,7 +135,6 @@
   "logs.title": "Журнал активности",
   "logs.subtitle": "Вывод логов winws и установщика",
   "logs.open_file": "Открыть файл логов",
-  "logs.copy": "Копировать",
   "logs.streaming_a": "streaming · ",
   "logs.streaming_b": " lines",
   "logs.grep_placeholder": "поиск…",
@@ -236,6 +236,7 @@
   "notify.stopped_body": "DPI-обход выключен",
   "notify.tray_title": "zapret-ui продолжает работать",
   "notify.tray_body": "Приложение свёрнуто в трей и продолжает работать. Кликните по значку в трее, чтобы открыть его, или выберите «Выход».",
+  "notify.error_title": "Ошибка zapret-ui",
 
   "tray.open": "Открыть zapret-ui",
   "tray.start": "Запустить обход",

@@ -65,6 +65,7 @@
   "home.hint_pick": "Pick one from the Strategies tab, then return here to engage.",
   "home.hint_stop": "Click Stop to terminate the bypass process",
   "home.hint_engage": "Click Engage to start in user mode, or install as a service below",
+  "home.btn_install": "INSTALL CORE",
   "home.btn_pick": "PICK STRATEGY",
   "home.btn_stop": "STOP",
   "home.btn_engage": "ENGAGE",
@@ -134,7 +135,6 @@
   "logs.title": "Activity Logs",
   "logs.subtitle": "Real-time winws and installer output. Select text to copy.",
   "logs.open_file": "Open log file",
-  "logs.copy": "Copy",
   "logs.streaming_a": "streaming · ",
   "logs.streaming_b": " lines",
   "logs.grep_placeholder": "grep…",
@@ -236,6 +236,7 @@
   "notify.stopped_body": "DPI bypass is now off",
   "notify.tray_title": "zapret-ui is still running",
   "notify.tray_body": "The app keeps working in the system tray. Click the tray icon to reopen it, or use Quit to exit.",
+  "notify.error_title": "zapret-ui error",
 
   "tray.open": "Open zapret-ui",
   "tray.start": "Start bypass",

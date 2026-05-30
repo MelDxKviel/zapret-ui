@@ -3,7 +3,7 @@ import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { AppInput } from "../components/input.slint";
 import { Segmented } from "../components/segmented.slint";
-import { ScrollView } from "std-widgets.slint";
+import { TextEdit } from "std-widgets.slint";
 
 export component LogsPage inherits Rectangle {
     in property <[LogLineItem]> log_lines;
@@ -14,7 +14,6 @@ export component LogsPage inherits Rectangle {
     in-out property <bool> autoscroll: true;
 
     callback open_file_clicked();
-    callback copy_clicked();
     callback clear_clicked();
     callback query_changed(string, string); // grep, level
 
@@ -62,12 +61,6 @@ export component LogsPage inherits Rectangle {
                     alignment: end;
                     HorizontalLayout {
                         spacing: 8px;
-                        AppButton {
-                            text: I18n.t(I18n.lang, "logs.copy");
-                            icon: @image-url("../../assets/icons/copy.svg");
-                            enabled: root.log_text != "";
-                            clicked => { root.copy_clicked(); }
-                        }
                         AppButton {
                             text: I18n.t(I18n.lang, "logs.open_file");
                             icon: @image-url("../../assets/icons/external.svg");
@@ -174,32 +167,18 @@ export component LogsPage inherits Rectangle {
                         Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.border; }
                     }
 
-                    // terminal body — read-only, selectable text so the whole log
-                    // can be selected and copied (Ctrl+C), as it was before.
-                    Rectangle {
+                    // terminal body — a real TextEdit so the log can be
+                    // drag-selected and copied (Ctrl+C) directly in the block, with
+                    // its own scrollbar. (A TextInput inside a ScrollView made
+                    // drag-to-select unreliable, which is why a Copy button used to
+                    // be needed.) It exposes viewport-y, so autoscroll still works.
+                    term := TextEdit {
                         vertical-stretch: 1;
-                        background: ThemePalette.logs-bg;
-                        clip: true;
-                        term := ScrollView {
-                            viewport-width: term.visible-width;
-                            VerticalLayout {
-                                padding-left: 14px;
-                                padding-right: 14px;
-                                padding-top: 8px;
-                                padding-bottom: 8px;
-                                alignment: start;
-                                log-input := TextInput {
-                                    text: root.log_text;
-                                    read-only: true;
-                                    single-line: false;
-                                    wrap: word-wrap;
-                                    font-family: ThemePalette.font-mono;
-                                    font-size: ThemePalette.fs-12;
-                                    color: ThemePalette.logs-fg;
-                                    selection-background-color: ThemePalette.accent;
-                                }
-                            }
-                        }
+                        read-only: true;
+                        text: root.log_text;
+                        font-family: ThemePalette.font-mono;
+                        font-size: ThemePalette.fs-12;
+                        wrap: word-wrap;
                     }
                 }
             }

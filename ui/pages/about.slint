@@ -47,7 +47,9 @@ component AboutLink inherits Rectangle {
 component VRow inherits Rectangle {
     in property <string> key;
     in property <bool> last: false;
-    height: 49px;
+    // min-height (not a fixed height) so a row whose value wraps onto several
+    // lines (the app-version row when an update is available) can grow.
+    min-height: 49px;
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
@@ -71,19 +73,28 @@ component VRow inherits Rectangle {
 component AccentPill inherits Rectangle {
     in property <string> text;
     horizontal-stretch: 0;
-    width: pill-txt.preferred-width + 16px;
     height: 22px;
     border-radius: ThemePalette.r-full;
     background: ThemePalette.accent-soft;
     border-width: 1px;
     border-color: ThemePalette.accent-line;
-    pill-txt := Text {
-        text: root.text;
-        font-family: ThemePalette.font-mono;
-        font-size: ThemePalette.fs-11;
-        color: ThemePalette.accent;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    clip: true;
+    // A layout-wrapped (not free-floating) Text so the pill reports a real
+    // preferred width AND a shrinkable min-width: when the version string is long
+    // (e.g. a git-describe build like v0.1.0-5-gabc-dirty) the text elides here
+    // instead of forcing the parent card past the window edge.
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.text;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-11;
+            color: ThemePalette.accent;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
 }
 
@@ -134,10 +145,12 @@ export component AboutPage inherits Rectangle {
                 Rectangle { height: 1px; background: ThemePalette.divider; }
                 Rectangle { height: 20px; }
 
-                // about-grid
+                // about-grid — stretch (no `alignment: start`) so the two columns
+                // share the capped container width instead of growing to their
+                // content's preferred width (a long version string used to push
+                // the system card off the right edge).
                 HorizontalLayout {
                     spacing: 20px;
-                    alignment: start;
 
                     // LEFT — hero
                     Rectangle {
@@ -175,19 +188,27 @@ export component AboutPage inherits Rectangle {
                                         alignment: start;
                                         Rectangle {
                                             horizontal-stretch: 0;
-                                            width: ver-code.preferred-width + 12px;
                                             height: 20px;
                                             border-radius: ThemePalette.r-4;
                                             background: ThemePalette.surface-2;
                                             border-width: 1px;
                                             border-color: ThemePalette.border;
-                                            ver-code := Text {
-                                                text: root.app_version;
-                                                font-family: ThemePalette.font-mono;
-                                                font-size: ThemePalette.fs-12;
-                                                color: ThemePalette.text-3;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
+                                            clip: true;
+                                            // Layout-wrapped + eliding so a long
+                                            // git-describe version shrinks here instead
+                                            // of overrunning the hero card / window.
+                                            HorizontalLayout {
+                                                padding-left: 6px;
+                                                padding-right: 6px;
+                                                Text {
+                                                    text: root.app_version;
+                                                    font-family: ThemePalette.font-mono;
+                                                    font-size: ThemePalette.fs-12;
+                                                    color: ThemePalette.text-3;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
                                             }
                                         }
                                         Text {
@@ -280,26 +301,34 @@ export component AboutPage inherits Rectangle {
                                 }
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.app_version");
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: end;
-                                        VerticalLayout {
-                                            alignment: center;
+                                    // Stack the version pill, the "↑ latest" pill and the
+                                    // update button vertically (right-aligned) so a long
+                                    // version + update affordance can't overrun the card.
+                                    VerticalLayout {
+                                        spacing: 6px;
+                                        alignment: center;
+                                        padding-top: 12px;
+                                        padding-bottom: 12px;
+                                        HorizontalLayout {
+                                            alignment: end;
                                             AccentPill { text: root.app_version; }
                                         }
-                                        if root.app_has_update : VerticalLayout {
-                                            alignment: center;
+                                        if root.app_has_update : HorizontalLayout {
+                                            alignment: end;
                                             AccentPill { text: "↑ " + root.app_latest_version; }
                                         }
-                                        if root.app_has_update : AppButton {
-                                            text: root.app_update_downloading
-                                                ? I18n.t(I18n.lang, "update.downloading")
-                                                : I18n.t(I18n.lang, "common.update");
-                                            variant: "primary";
-                                            size: "sm";
-                                            busy: root.app_update_downloading;
-                                            icon: @image-url("../../assets/icons/download.svg");
-                                            clicked => { root.app_update_clicked(); }
+                                        if root.app_has_update : HorizontalLayout {
+                                            alignment: end;
+                                            AppButton {
+                                                text: root.app_update_downloading
+                                                    ? I18n.t(I18n.lang, "update.downloading")
+                                                    : I18n.t(I18n.lang, "common.update");
+                                                variant: "primary";
+                                                size: "sm";
+                                                busy: root.app_update_downloading;
+                                                icon: @image-url("../../assets/icons/download.svg");
+                                                clicked => { root.app_update_clicked(); }
+                                            }
                                         }
                                     }
                                 }

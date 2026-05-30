@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::ffi::OsString;
+use anyhow::Context;
 use crate::contracts::{Strategy, RunningMode};
 use crate::ports::ServiceCtl;
 use crate::zapret::elevation::check_elevation;
@@ -74,6 +75,110 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<PathBuf>
     Ok(dst)
 }
 
+/// Best-effort teardown of a pre-existing "zapret" service that belongs to us —
+/// i.e. one whose ImagePath is a `winws.exe` inside any directory in
+/// `owned_dirs` (the user install dir and/or the protected machine dir). Stops
+/// it (releasing the winws.exe file lock) and deletes its SCM registration so a
+/// fresh install can re-create it without an ownership conflict.
+///
+/// A "zapret" service that points somewhere else is left untouched, so we never
+/// tear down an unrelated service that merely shares the name. Caller must be
+/// elevated (it's only ever reached from `install_service_protected`).
+async fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) {
+    let manager = match ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let service = match manager.open_service(
+        "zapret",
+        ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            // ERROR_SERVICE_DOES_NOT_EXIST is normal (nothing to clean up); log
+            // anything else so an access problem here is visible.
+            let missing = matches!(&e, windows_service::Error::Winapi(io) if io.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST));
+            if !missing {
+                tracing::warn!("remove_prior: could not open existing zapret service: {e}");
+            }
+            return;
+        }
+    };
+
+    let ours = match service.query_config() {
+        Ok(cfg) => {
+            // The stored ImagePath of a service-with-args is the full quoted
+            // command line (`"C:\...\winws.exe" --wf-tcp=... ...`), so `file_name()`
+            // / `starts_with()` on it don't match. Compare as a case-insensitive
+            // substring instead: it must run winws.exe out of one of our dirs.
+            let image = cfg.executable_path.to_string_lossy().to_lowercase();
+            image.contains("winws.exe")
+                && owned_dirs.iter().any(|d| {
+                    let d = d.to_string_lossy().to_lowercase();
+                    !d.is_empty() && image.contains(&d)
+                })
+        }
+        Err(_) => false,
+    };
+    if !ours {
+        return;
+    }
+
+    if let Ok(status) = service.query_status() {
+        if status.current_state != ServiceState::Stopped {
+            if let Err(e) = service.stop() {
+                tracing::warn!("remove_prior: stopping existing zapret service failed: {e}");
+            }
+            wait_for_stopped(&service, std::time::Duration::from_secs(10)).await;
+        }
+    }
+    if let Err(e) = service.delete() {
+        tracing::warn!("remove_prior: deleting existing zapret service failed: {e}");
+    } else {
+        tracing::info!("remove_prior: removed pre-existing zapret service");
+    }
+    drop(service);
+    wait_for_deletion(&manager, "zapret", std::time::Duration::from_secs(10)).await;
+}
+
+/// Resolve `strategy_id` into a runnable `Strategy` whose winws.exe arg paths
+/// all point at `protected`, reading the preset template from `user_dir` (which
+/// is always readable, unlike the freshly ACL-locked protected copy). The id is
+/// the `.bat` file stem, so the preset is `user_dir/<id>.bat`. On a missing /
+/// unparseable preset it returns a diagnostic error listing the `.bat` files
+/// actually present in both locations.
+fn resolve_protected_strategy(
+    user_dir: &Path,
+    protected: &Path,
+    strategy_id: &str,
+    gf: crate::contracts::GameFilterMode,
+) -> anyhow::Result<Strategy> {
+    let bat_path = user_dir.join(format!("{strategy_id}.bat"));
+    if let Some(s) = crate::zapret::batparse::strategy_from_bat(&bat_path, protected, gf) {
+        return Ok(s);
+    }
+    let list_bats = |dir: &Path| -> Vec<String> {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|x| x.eq_ignore_ascii_case("bat")).unwrap_or(false))
+                    .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Err(anyhow::anyhow!(
+        "Strategy '{}' could not be resolved.\n  preset expected at: {}\n  .bat files in source {}: [{}]\n  .bat files staged at {}: [{}]",
+        strategy_id,
+        bat_path.display(),
+        user_dir.display(),
+        list_bats(user_dir).join(", "),
+        protected.display(),
+        list_bats(protected).join(", "),
+    ))
+}
+
 /// Securely install + start the Windows service for `strategy_id`, always
 /// running it out of the locked-down machine-wide directory rather than the
 /// user-writable install dir.
@@ -89,10 +194,29 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<PathBuf>
 /// `paths::service_install_dir`.
 pub async fn install_service_protected(user_install_dir: &Path, strategy_id: &str) -> anyhow::Result<()> {
     check_elevation()?;
+    // Tear down any prior "zapret" service of ours first. This matters for two
+    // reasons, both of which otherwise make a reinstall silently fail:
+    //   1. A service still running out of the protected dir locks its winws.exe,
+    //      so `prepare_protected_dir`'s `remove_dir_all` errors with "in use".
+    //   2. Older builds registered the service pointing at the user-writable
+    //      install dir (%APPDATA%); the new ownership check in `install()` only
+    //      accepts the protected dir, so it would reject that stale service as
+    //      "a different service named zapret". Removing it here clears the path.
+    remove_prior_zapret_service(&[
+        user_install_dir.to_path_buf(),
+        crate::zapret::paths::service_install_dir(),
+    ])
+    .await;
     let protected = prepare_protected_dir(user_install_dir)?;
-    let catalog = crate::zapret::catalog::LocalStrategyCatalog::new(protected.clone());
-    let strategy = crate::ports::StrategyCatalog::by_id(&catalog, strategy_id)
-        .ok_or_else(|| anyhow::anyhow!("Strategy not found"))?;
+    // Resolve the preset from the user dir's own .bat (always readable) but with
+    // every %BIN%/%LISTS%/%~dp0 path rebased onto the protected dir. We do NOT
+    // re-scan the freshly-staged copy: that scan proved unreliable in the field
+    // (it can come back empty even when the copy succeeded, surfacing as a bogus
+    // "Strategy not found"). winws.exe and the hostlist/ipset files are still
+    // taken from the ACL-locked protected dir, so the service never runs out of
+    // the user-writable location — the escalation fix is preserved.
+    let gf = crate::zapret::batparse::read_game_filter(user_install_dir);
+    let strategy = resolve_protected_strategy(user_install_dir, &protected, strategy_id, gf)?;
     let ctl = WindowsServiceCtl::new(protected);
     ctl.install(&strategy).await?;
     ctl.start().await?;
@@ -172,7 +296,7 @@ impl ServiceCtl for WindowsServiceCtl {
         let manager = ServiceManager::local_computer(
             None::<&str>,
             ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
-        )?;
+        ).context("OpenSCManager(CREATE_SERVICE)")?;
 
         // If a "zapret" service already exists, stop and delete it first — otherwise
         // create_service fails with ERROR_SERVICE_EXISTS. But only if it's *ours*:
@@ -184,15 +308,15 @@ impl ServiceCtl for WindowsServiceCtl {
         ) {
             let owned = match existing.query_config() {
                 Ok(cfg) => {
-                    let p = &cfg.executable_path;
-                    let is_winws = p.file_name()
-                        .map(|n| n.eq_ignore_ascii_case("winws.exe"))
-                        .unwrap_or(false);
-                    // Ours if it points at a winws.exe inside our (protected) dir
-                    // or the machine-wide service dir.
-                    is_winws
-                        && (p.starts_with(&self.install_dir)
-                            || p.starts_with(crate::zapret::paths::service_install_dir()))
+                    // The ImagePath is the full quoted command line, so match it as a
+                    // case-insensitive substring (see remove_prior_zapret_service):
+                    // ours if it runs winws.exe out of our dir or the machine dir.
+                    let image = cfg.executable_path.to_string_lossy().to_lowercase();
+                    let here = self.install_dir.to_string_lossy().to_lowercase();
+                    let svc_dir = crate::zapret::paths::service_install_dir().to_string_lossy().to_lowercase();
+                    image.contains("winws.exe")
+                        && ((!here.is_empty() && image.contains(&here))
+                            || (!svc_dir.is_empty() && image.contains(&svc_dir)))
                 }
                 Err(_) => false,
             };
@@ -209,7 +333,7 @@ impl ServiceCtl for WindowsServiceCtl {
                     wait_for_stopped(&existing, std::time::Duration::from_secs(10)).await;
                 }
             }
-            existing.delete()?;
+            existing.delete().context("DeleteService(existing)")?;
             // Deletion is finalized once all handles close; wait for the name to free up.
             drop(existing);
             wait_for_deletion(&manager, &self.service_name, std::time::Duration::from_secs(10)).await;
@@ -253,7 +377,7 @@ impl ServiceCtl for WindowsServiceCtl {
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         continue;
                     }
-                    return Err(e.into());
+                    return Err(anyhow::Error::new(e).context("CreateService"));
                 }
             }
         }
@@ -267,11 +391,11 @@ impl ServiceCtl for WindowsServiceCtl {
         let manager = ServiceManager::local_computer(
             None::<&str>,
             ServiceManagerAccess::CONNECT,
-        )?;
+        ).context("OpenSCManager(remove)")?;
         let service = manager.open_service(
             &self.service_name,
             ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
-        )?;
+        ).context("OpenService(remove)")?;
 
         // Stop the service first; Windows will not actually remove it until all
         // handles are closed and it has stopped running. Without this the service
@@ -284,7 +408,7 @@ impl ServiceCtl for WindowsServiceCtl {
             }
         }
 
-        service.delete()?;
+        service.delete().context("DeleteService")?;
         // Wait for the SCM to actually drop the registration so a follow-up
         // install/refresh sees a consistent state.
         drop(service);
@@ -298,13 +422,13 @@ impl ServiceCtl for WindowsServiceCtl {
         let manager = ServiceManager::local_computer(
             None::<&str>,
             ServiceManagerAccess::CONNECT,
-        )?;
+        ).context("OpenSCManager(start)")?;
         let service = manager.open_service(
             &self.service_name,
             ServiceAccess::START,
-        )?;
+        ).context("OpenService(start)")?;
 
-        service.start(&[] as &[&str])?;
+        service.start(&[] as &[&str]).context("StartService")?;
         Ok(())
     }
 
@@ -314,13 +438,13 @@ impl ServiceCtl for WindowsServiceCtl {
         let manager = ServiceManager::local_computer(
             None::<&str>,
             ServiceManagerAccess::CONNECT,
-        )?;
+        ).context("OpenSCManager(stop)")?;
         let service = manager.open_service(
             &self.service_name,
             ServiceAccess::STOP | ServiceAccess::QUERY_STATUS,
-        )?;
+        ).context("OpenService(stop)")?;
 
-        service.stop()?;
+        service.stop().context("ControlService(STOP)")?;
         // Wait for it to actually reach Stopped so the UI status is accurate.
         wait_for_stopped(&service, std::time::Duration::from_secs(10)).await;
         Ok(())
