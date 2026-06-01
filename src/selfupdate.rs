@@ -39,15 +39,26 @@ pub struct GithubSelfUpdater {
 impl GithubSelfUpdater {
     /// Build from a `https://github.com/<owner>/<repo>` URL (as produced by
     /// `CARGO_PKG_REPOSITORY`). Falls back to the known repo if parsing fails.
-    pub fn from_repo_url(client: reqwest::Client, repo_url: &str, current: impl Into<String>) -> Self {
-        let (owner, repo) = parse_owner_repo(repo_url).unwrap_or_else(|| {
-            ("meldxkviel".to_string(), "zapret-ui".to_string())
-        });
-        Self { client, owner, repo, current: current.into() }
+    pub fn from_repo_url(
+        client: reqwest::Client,
+        repo_url: &str,
+        current: impl Into<String>,
+    ) -> Self {
+        let (owner, repo) = parse_owner_repo(repo_url)
+            .unwrap_or_else(|| ("meldxkviel".to_string(), "zapret-ui".to_string()));
+        Self {
+            client,
+            owner,
+            repo,
+            current: current.into(),
+        }
     }
 
     async fn fetch_latest_tag(&self) -> Result<String> {
-        let url = format!("https://github.com/{}/{}/releases.atom", self.owner, self.repo);
+        let url = format!(
+            "https://github.com/{}/{}/releases.atom",
+            self.owner, self.repo
+        );
         tracing::info!("Fetching zapret-ui releases feed from {url}");
         let resp = self
             .client
@@ -59,7 +70,10 @@ impl GithubSelfUpdater {
         if !resp.status().is_success() {
             bail!("releases.atom request returned HTTP {}", resp.status());
         }
-        let body = resp.text().await.context("Failed to read releases feed body")?;
+        let body = resp
+            .text()
+            .await
+            .context("Failed to read releases feed body")?;
         parse_first_release_tag(&body)
             .ok_or_else(|| anyhow!("No published releases found in the feed"))
     }
@@ -79,7 +93,10 @@ impl GithubSelfUpdater {
         if !resp.status().is_success() {
             bail!("checksum request returned HTTP {}", resp.status());
         }
-        let body = resp.text().await.context("Failed to read the checksum body")?;
+        let body = resp
+            .text()
+            .await
+            .context("Failed to read the checksum body")?;
         // The file is "<hex>  zapret-ui.exe"; take the leading hex token.
         let hex = body
             .split_whitespace()
@@ -90,7 +107,12 @@ impl GithubSelfUpdater {
         Ok(hex)
     }
 
-    async fn download_asset(&self, tag: &str, dest: &Path, on_progress: &DownloadProgressCb) -> Result<String> {
+    async fn download_asset(
+        &self,
+        tag: &str,
+        dest: &Path,
+        on_progress: &DownloadProgressCb,
+    ) -> Result<String> {
         let url = format!(
             "https://github.com/{}/{}/releases/download/{}/{ASSET_NAME}",
             self.owner, self.repo, tag
@@ -104,7 +126,10 @@ impl GithubSelfUpdater {
             .await
             .context("Failed to send download request")?;
         if !response.status().is_success() {
-            bail!("Failed to download {ASSET_NAME}: HTTP {}", response.status());
+            bail!(
+                "Failed to download {ASSET_NAME}: HTTP {}",
+                response.status()
+            );
         }
 
         let total = response.content_length();
@@ -129,7 +154,9 @@ impl GithubSelfUpdater {
             }
             hasher.update(&chunk);
             use tokio::io::AsyncWriteExt;
-            file.write_all(&chunk).await.context("Failed to write download chunk")?;
+            file.write_all(&chunk)
+                .await
+                .context("Failed to write download chunk")?;
             on_progress(downloaded, total);
         }
         use tokio::io::AsyncWriteExt;
@@ -152,6 +179,12 @@ impl SelfUpdater for GithubSelfUpdater {
 
     async fn download_and_apply(&self, on_progress: DownloadProgressCb) -> Result<()> {
         let tag = self.fetch_latest_tag().await?;
+        if !crate::zapret::updater::is_update_available(&self.current, &tag) {
+            bail!(
+                "No newer zapret-ui release is available (current {}, latest {tag})",
+                self.current
+            );
+        }
 
         let current_exe = std::env::current_exe().context("Failed to resolve current exe path")?;
         // Download into the same directory so the final rename is a same-volume
@@ -167,7 +200,9 @@ impl SelfUpdater for GithubSelfUpdater {
             let actual = self.download_asset(&tag, &new_path, &on_progress).await?;
             let expected = self.fetch_expected_sha256(&tag).await?;
             if !expected.eq_ignore_ascii_case(&actual) {
-                bail!("Integrity check failed: downloaded SHA-256 {actual} != published {expected}");
+                bail!(
+                    "Integrity check failed: downloaded SHA-256 {actual} != published {expected}"
+                );
             }
             tracing::info!("New zapret-ui.exe verified (SHA-256 {actual})");
             swap_in_place(&current_exe, &new_path)

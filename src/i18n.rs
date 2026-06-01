@@ -66,8 +66,14 @@ mod tests {
         let mut missing_en: Vec<&String> = c.ru.keys().filter(|k| !c.en.contains_key(*k)).collect();
         missing_ru.sort();
         missing_en.sort();
-        assert!(missing_ru.is_empty(), "keys missing from ru.json: {missing_ru:?}");
-        assert!(missing_en.is_empty(), "keys missing from en.json: {missing_en:?}");
+        assert!(
+            missing_ru.is_empty(),
+            "keys missing from ru.json: {missing_ru:?}"
+        );
+        assert!(
+            missing_en.is_empty(),
+            "keys missing from en.json: {missing_en:?}"
+        );
     }
 
     #[test]
@@ -79,5 +85,45 @@ mod tests {
     fn returns_russian_by_default() {
         assert_eq!(tr(RU, "common.cancel"), "Отмена");
         assert_eq!(tr(EN, "common.cancel"), "Cancel");
+    }
+
+    #[test]
+    fn slint_i18n_keys_exist_in_catalogs() {
+        let files = [
+            include_str!("../ui/main_window.slint"),
+            include_str!("../ui/pages/home.slint"),
+            include_str!("../ui/pages/strategies.slint"),
+            include_str!("../ui/pages/tester.slint"),
+            include_str!("../ui/pages/logs.slint"),
+            include_str!("../ui/pages/settings.slint"),
+            include_str!("../ui/pages/about.slint"),
+            include_str!("../ui/components/admin_banner.slint"),
+            include_str!("../ui/components/hosts_dialog.slint"),
+            include_str!("../ui/components/update_banner.slint"),
+        ];
+        let c = catalog();
+        let mut missing = Vec::new();
+        for content in files {
+            let mut rest = content;
+            while let Some(pos) = rest.find("I18n.t(") {
+                rest = &rest[pos + "I18n.t(".len()..];
+                let Some(q1) = rest.find('"') else { continue };
+                let after_q1 = &rest[q1 + 1..];
+                let Some(q2) = after_q1.find('"') else {
+                    continue;
+                };
+                let key = &after_q1[..q2];
+                if !c.ru.contains_key(key) || !c.en.contains_key(key) {
+                    missing.push(key.to_string());
+                }
+                rest = &after_q1[q2 + 1..];
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "Slint keys missing from catalogs: {missing:?}"
+        );
     }
 }

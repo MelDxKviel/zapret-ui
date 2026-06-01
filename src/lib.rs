@@ -1,12 +1,12 @@
-pub mod contracts;
-pub mod ports;
 pub mod config;
+pub mod contracts;
 pub mod i18n;
-pub mod state;
 pub mod log;
 pub mod notify;
-pub mod tray;
+pub mod ports;
+pub mod selfupdate;
 pub mod single_instance;
+pub mod state;
+pub mod tray;
 pub mod winenv;
 pub mod zapret;
-pub mod selfupdate;

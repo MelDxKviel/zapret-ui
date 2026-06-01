@@ -1,4 +1,7 @@
-use crate::contracts::{Strategy, Category, RuntimeStatus, RunningMode, InstallStage, StrategyTestResult, GameFilterMode, IpsetMode, MaintenanceStatus, HostsCheck, DiscordCacheResult};
+use crate::contracts::{
+    Category, DiscordCacheResult, GameFilterMode, HostsCheck, InstallStage, IpsetMode,
+    MaintenanceStatus, RunningMode, RuntimeStatus, Strategy, StrategyTestResult,
+};
 
 pub type ProgressCb = Box<dyn Fn(InstallStage, u64, Option<u64>) + Send + Sync>;
 

@@ -29,7 +29,15 @@ pub fn init() {
     let key = format!("HKCU\\Software\\Classes\\AppUserModelId\\{APP_ID}");
     let result = std::process::Command::new("reg")
         .args([
-            "add", &key, "/v", "DisplayName", "/t", "REG_SZ", "/d", APP_DISPLAY_NAME, "/f",
+            "add",
+            &key,
+            "/v",
+            "DisplayName",
+            "/t",
+            "REG_SZ",
+            "/d",
+            APP_DISPLAY_NAME,
+            "/f",
         ])
         .creation_flags(CREATE_NO_WINDOW)
         .output();

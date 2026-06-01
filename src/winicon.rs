@@ -19,21 +19,12 @@ type Hwnd = *mut std::ffi::c_void;
 
 #[link(name = "user32")]
 extern "system" {
-    fn EnumWindows(
-        cb: unsafe extern "system" fn(Hwnd, isize) -> i32,
-        lparam: isize,
-    ) -> i32;
+    fn EnumWindows(cb: unsafe extern "system" fn(Hwnd, isize) -> i32, lparam: isize) -> i32;
     fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
     fn GetWindowTextW(hwnd: Hwnd, buf: *mut u16, max: i32) -> i32;
     fn SendMessageW(hWnd: Hwnd, msg: u32, wParam: usize, lParam: isize) -> isize;
-    fn LoadImageW(
-        hInst: Hwnd,
-        name: *const u16,
-        type_: u32,
-        cx: i32,
-        cy: i32,
-        fuLoad: u32,
-    ) -> Hwnd;
+    fn LoadImageW(hInst: Hwnd, name: *const u16, type_: u32, cx: i32, cy: i32, fuLoad: u32)
+        -> Hwnd;
     fn ShowWindow(hWnd: Hwnd, nCmdShow: i32) -> i32;
     fn SetForegroundWindow(hWnd: Hwnd) -> i32;
     fn IsIconic(hWnd: Hwnd) -> i32;

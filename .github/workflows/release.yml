@@ -58,6 +58,9 @@ jobs:
       - name: Run Tests
         run: cargo test --verbose
 
+      - name: Build Release Binary
+        run: cargo build --release --verbose
+
   release:
     name: Publish Release
     needs: checks

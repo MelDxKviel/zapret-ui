@@ -5,11 +5,13 @@
 //! hosts check, only *reads* the system hosts file), so none of them require
 //! elevation — unlike the SCM service operations.
 
-use std::path::PathBuf;
 use anyhow::{Context, Result};
 use reqwest::header::USER_AGENT;
+use std::path::PathBuf;
 
-use crate::contracts::{GameFilterMode, IpsetMode, MaintenanceStatus, HostsCheck, DiscordCacheResult};
+use crate::contracts::{
+    DiscordCacheResult, GameFilterMode, HostsCheck, IpsetMode, MaintenanceStatus,
+};
 use crate::ports::Maintenance;
 use crate::zapret::batparse;
 
@@ -33,7 +35,10 @@ pub struct ZapretMaintenance {
 
 impl ZapretMaintenance {
     pub fn new(install_dir: PathBuf, client: reqwest::Client) -> Self {
-        Self { install_dir, client }
+        Self {
+            install_dir,
+            client,
+        }
     }
 
     fn ipset_path(&self) -> PathBuf {
@@ -80,7 +85,12 @@ impl Maintenance for ZapretMaintenance {
             .ok()
             .and_then(|t| t.elapsed().ok())
             .map(|d| (d.as_secs() / 86_400) as u32);
-        MaintenanceStatus { game_filter, ipset_mode, ipset_lines, ipset_age_days }
+        MaintenanceStatus {
+            game_filter,
+            ipset_mode,
+            ipset_lines,
+            ipset_age_days,
+        }
     }
 
     async fn set_game_filter(&self, mode: GameFilterMode) -> Result<()> {
@@ -223,11 +233,13 @@ impl Maintenance for ZapretMaintenance {
         let discord_was_running = kill_discord();
 
         let cache_dir = PathBuf::from(
-            std::env::var("APPDATA").context("APPDATA is not set — cannot locate the Discord cache")?,
+            std::env::var("APPDATA")
+                .context("APPDATA is not set — cannot locate the Discord cache")?,
         )
         .join("discord");
 
         let mut cleared = 0u32;
+        let mut failures = Vec::new();
         for sub in DISCORD_CACHE_DIRS {
             let dir = cache_dir.join(sub);
             if !dir.exists() {
@@ -240,9 +252,9 @@ impl Maintenance for ZapretMaintenance {
                 }
                 Err(e) => {
                     // A single locked file shouldn't abort the whole operation;
-                    // report the rest as cleared and surface the failure.
+                    // try the remaining cache dirs, then surface all failures.
                     tracing::warn!("Failed to delete {}: {}", dir.display(), e);
-                    anyhow::bail!("Failed to delete {}: {}", dir.display(), e);
+                    failures.push(format!("{}: {}", dir.display(), e));
                 }
             }
         }
@@ -251,7 +263,17 @@ impl Maintenance for ZapretMaintenance {
             cleared,
             discord_was_running
         );
-        Ok(DiscordCacheResult { discord_was_running, cleared })
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "Discord cache partially cleared ({} folder(s) removed); failed to delete: {}",
+                cleared,
+                failures.join("; ")
+            );
+        }
+        Ok(DiscordCacheResult {
+            discord_was_running,
+            cleared,
+        })
     }
 }
 

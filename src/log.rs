@@ -33,7 +33,9 @@ impl<'a> fmt::writer::MakeWriter<'a> for UiWriter {
     }
 }
 
-pub fn init_logging(tx: tokio::sync::broadcast::Sender<String>) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
+pub fn init_logging(
+    tx: tokio::sync::broadcast::Sender<String>,
+) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
     let appdata = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());

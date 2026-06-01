@@ -226,6 +226,14 @@
   "msg.discord_closed": "Discord closed",
   "msg.discord_cache_cleared": "Cache cleared — {count} folder(s) removed",
 
+  "err.elevation_failed": "Elevation failed: {error}",
+  "err.strategy_not_found": "Strategy {strategy} not found",
+  "err.ipset_missing": "ipset-all.txt not found at {path}",
+  "err.no_strategies_to_test": "No strategies installed to test",
+  "err.strategy_test_failed": "Strategy test failed: {error}",
+  "err.test_running": "Strategy test is already running. Cancel it or wait for it to finish.",
+  "err.stop_bypass_before_test": "Stop the running bypass before testing strategies.",
+
   "admin.banner_title": "Administrator rights required",
   "admin.banner_desc": "Engaging the bypass, testing strategies and managing the Windows service all need administrator rights. Restart the app as administrator to enable them.",
   "admin.restart_btn": "Restart as administrator",

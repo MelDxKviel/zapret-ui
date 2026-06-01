@@ -13,6 +13,16 @@ pub fn service_install_dir() -> PathBuf {
     program_data.join("zapret-ui").join("zapret")
 }
 
+/// Machine-wide location for one-shot elevated helper result files. The helper
+/// locks this directory down to Administrators/System write + Users read before
+/// writing a result, so same-user processes cannot race a forged outcome in temp.
+pub fn elevation_result_dir() -> PathBuf {
+    let program_data = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+    program_data.join("zapret-ui").join("elev-results")
+}
+
 /// Helper to check if a directory has a valid installation.
 /// We check if `winws.exe` exists in `bin/winws.exe` or `winws.exe`.
 pub fn is_valid_install_dir(path: &Path) -> bool {

@@ -1,5 +1,5 @@
-use std::ptr;
 use std::ffi::c_void;
+use std::ptr;
 
 extern "system" {
     fn OpenProcessToken(
@@ -34,7 +34,9 @@ pub fn is_elevated() -> bool {
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
             return false;
         }
-        let mut elevation = TokenElevationStruct { token_is_elevated: 0 };
+        let mut elevation = TokenElevationStruct {
+            token_is_elevated: 0,
+        };
         let size = std::mem::size_of::<TokenElevationStruct>() as u32;
         let mut return_length = 0;
         let res = GetTokenInformation(

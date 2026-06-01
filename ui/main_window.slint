@@ -267,6 +267,7 @@ export component MainWindow inherits Window {
     callback stop_clicked();
     callback strategy_selected(string);
     callback install_clicked();
+    callback check_update_clicked();
     callback update_clicked();
     // App self-update (zapret-ui itself).
     callback app_update_clicked();
@@ -569,14 +570,15 @@ export component MainWindow inherits Window {
                     start_clicked => { root.pending_op = "start"; root.is_busy = true; root.start_clicked(root.chosen_item.id); }
                     stop_clicked => { root.pending_op = "stop"; root.is_busy = true; root.stop_clicked(); }
                     install_clicked => { root.install_clicked(); }
+                    check_update_clicked => { root.check_update_clicked(); }
                     update_clicked => { root.update_clicked(); }
                     open_folder_clicked => { root.open_folder_clicked(); }
                     pick_strategy_clicked => { root.current_page = "strategies"; }
                     refresh_clicked => { root.refresh_status_clicked(); }
-                    service_install_clicked => { root.service_install_clicked(root.chosen_item.id); }
+                    service_install_clicked => { root.pending_op = "start"; root.is_busy = true; root.service_install_clicked(root.chosen_item.id); }
                     service_start_clicked => { root.pending_op = "start"; root.is_busy = true; root.service_start_clicked(); }
                     service_stop_clicked => { root.pending_op = "stop"; root.is_busy = true; root.service_stop_clicked(); }
-                    service_remove_clicked => { root.service_remove_clicked(); }
+                    service_remove_clicked => { root.pending_op = "stop"; root.is_busy = true; root.service_remove_clicked(); }
                 }
             }
 

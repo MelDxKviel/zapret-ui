@@ -1,11 +1,11 @@
+use crate::contracts::{RunningMode, RuntimeStatus, Strategy, UiEvent};
+use crate::ports::Runner;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast};
-use tokio::io::{BufReader, AsyncBufReadExt};
-use tokio::time::{timeout, Duration};
-use crate::contracts::{Strategy, RuntimeStatus, RunningMode, UiEvent};
-use crate::ports::Runner;
 use sysinfo::System;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::{broadcast, Mutex};
+use tokio::time::{timeout, Duration};
 
 extern "system" {
     fn GenerateConsoleCtrlEvent(dwCtrlEvent: u32, dwProcessGroupId: u32) -> i32;
@@ -51,7 +51,10 @@ impl ProcessRunner {
         let p = self.get_winws_path();
         out.push(p.canonicalize().unwrap_or(p));
         let svc_dir = crate::zapret::paths::service_install_dir();
-        for cand in [svc_dir.join("bin").join("winws.exe"), svc_dir.join("winws.exe")] {
+        for cand in [
+            svc_dir.join("bin").join("winws.exe"),
+            svc_dir.join("winws.exe"),
+        ] {
             if cand.exists() {
                 out.push(cand.canonicalize().unwrap_or(cand));
             }
@@ -70,9 +73,9 @@ impl ProcessRunner {
                 let exe_c = exe.canonicalize().unwrap_or(exe.to_path_buf());
                 owned.contains(&exe_c)
             }
-            // Path unreadable (often a privileged service process): fall back to
-            // accepting it by name so a SYSTEM-run winws still shows as running.
-            None => true,
+            // If the path is unreadable, don't claim an arbitrary privileged
+            // winws.exe as ours. Service mode is detected through SCM ownership.
+            None => false,
         }
     }
 
@@ -81,8 +84,26 @@ impl ProcessRunner {
             service::ServiceAccess,
             service_manager::{ServiceManager, ServiceManagerAccess},
         };
-        if let Ok(manager) = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT) {
-            if let Ok(service) = manager.open_service(&self.service_name, ServiceAccess::QUERY_STATUS) {
+        if let Ok(manager) =
+            ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        {
+            if let Ok(service) = manager.open_service(
+                &self.service_name,
+                ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+            ) {
+                let owned_dirs = [
+                    self.install_dir.clone(),
+                    crate::zapret::paths::service_install_dir(),
+                ];
+                let owned = crate::zapret::service::service_belongs_to_dirs(
+                    &self.service_name,
+                    &service,
+                    &owned_dirs,
+                )
+                .unwrap_or(false);
+                if !owned {
+                    return false;
+                }
                 if let Ok(status) = service.query_status() {
                     return status.current_state == windows_service::service::ServiceState::Running;
                 }
@@ -112,7 +133,10 @@ impl Runner for ProcessRunner {
         crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
 
         // winws.exe is launched with bin/ as the working directory (matches the .bat: `cd /d %BIN%`).
-        let bin_dir = winws_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| self.install_dir.clone());
+        let bin_dir = winws_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| self.install_dir.clone());
 
         // Configure process command
         let mut cmd = tokio::process::Command::new(&winws_path);
@@ -129,7 +153,9 @@ impl Runner for ProcessRunner {
         cmd.stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn()?;
-        let pid = child.id().ok_or_else(|| anyhow::anyhow!("Failed to get process ID"))?;
+        let pid = child
+            .id()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get process ID"))?;
 
         // Spawn stdout log capturer
         if let Some(stdout) = child.stdout.take() {
@@ -290,7 +316,11 @@ impl Runner for ProcessRunner {
             }
         }
 
-        let detected_strategy = if mode == RunningMode::None { None } else { active_strategy_id };
+        let detected_strategy = if mode == RunningMode::None {
+            None
+        } else {
+            active_strategy_id
+        };
 
         // Real uptime of the bypass: read the winws process run-time from the OS so
         // it reflects the actual bypass session (survives app restarts / page nav).

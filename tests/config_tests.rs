@@ -7,11 +7,11 @@ pub mod config;
 #[path = "../src/state.rs"]
 pub mod state;
 
+use config::{AppConfig, Language, Theme};
+use contracts::{RunningMode, RuntimeStatus};
+use state::AppState;
 use std::fs;
 use tempfile::tempdir;
-use config::{AppConfig, Theme};
-use contracts::{RuntimeStatus, RunningMode};
-use state::AppState;
 
 #[test]
 fn test_config_default() {
@@ -23,6 +23,10 @@ fn test_config_default() {
     assert_eq!(config.theme, Theme::System);
     assert!(config.minimize_to_tray);
     assert!(!config.tray_notice_shown);
+    assert_eq!(config.language, Language::Ru);
+    assert!(config.favorites.is_empty());
+    assert!(config.notifications_enabled);
+    assert!(!config.autoengage);
 }
 
 #[test]
@@ -101,7 +105,7 @@ async fn test_state_get_and_set_status() {
         service_installed: false,
         uptime_secs: Some(42),
     };
-    
+
     state.set_status(new_status.clone()).await;
 
     // Verify status was updated in state

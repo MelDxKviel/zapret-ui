@@ -1,21 +1,28 @@
-use std::sync::Arc;
-use std::cell::RefCell;
-use tokio::sync::{mpsc, broadcast, RwLock};
-use crate::contracts::{BackendCmd, UiEvent, RunningMode, InstallStage, GameFilterMode, IpsetMode, split_alt};
-use crate::ports::{Installer, Runner, ServiceCtl, StrategyCatalog, StrategyTester, Maintenance, SelfUpdater};
 use crate::config::AppConfig;
+use crate::contracts::{
+    split_alt, BackendCmd, GameFilterMode, InstallStage, IpsetMode, RunningMode, UiEvent,
+};
+use crate::ports::{
+    Installer, Maintenance, Runner, SelfUpdater, ServiceCtl, StrategyCatalog, StrategyTester,
+};
 use crate::state::AppState;
 use crate::tray::SystemTray;
+use std::cell::RefCell;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 slint::include_modules!();
 
-mod winexec;
 mod ui_models;
+mod winexec;
+use ui_models::{is_favorite, rebuild_logs, rebuild_strategies, rebuild_test_results, to_item};
 use winexec::{
     open_external, relaunch_after_update, relaunch_elevated, relaunch_self_elevated,
     wait_for_elevated_result,
 };
-use ui_models::{is_favorite, rebuild_logs, rebuild_strategies, rebuild_test_results, to_item};
 
 // ── Log buffer (lives on the Slint UI thread; both the event listener's
 //    invoke_from_event_loop closures and the UI callbacks run there) ──
@@ -98,6 +105,26 @@ async fn current_install_dir(config: &Arc<RwLock<AppConfig>>) -> std::path::Path
     config.read().await.install_dir()
 }
 
+async fn tr_config(config: &Arc<RwLock<AppConfig>>, key: &str) -> String {
+    let lang = crate::i18n::code(config.read().await.language);
+    crate::i18n::tr(lang, key)
+}
+
+fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
+    matches!(
+        cmd,
+        BackendCmd::Install
+            | BackendCmd::Update
+            | BackendCmd::Start(_)
+            | BackendCmd::Stop
+            | BackendCmd::ServiceInstall(_)
+            | BackendCmd::ServiceRemove
+            | BackendCmd::ServiceStart
+            | BackendCmd::ServiceStop
+            | BackendCmd::TestStrategies
+    )
+}
+
 /// Relaunch elevated for a one-shot service task and wait for its result,
 /// surfacing the helper's actual error to the UI instead of silently relying on
 /// the next status poll. Passes the current install dir explicitly so the
@@ -107,16 +134,22 @@ async fn elevate_service_task(
     strategy: Option<&str>,
     config: &Arc<RwLock<AppConfig>>,
     event_tx: &broadcast::Sender<UiEvent>,
-) {
+) -> bool {
     let install_dir = current_install_dir(config).await;
     match relaunch_elevated(task, strategy, &install_dir) {
-        Ok(handle) => {
-            if let Err(msg) = wait_for_elevated_result(handle).await {
+        Ok(handle) => match wait_for_elevated_result(handle).await {
+            Ok(()) => true,
+            Err(msg) => {
                 let _ = event_tx.send(UiEvent::Error(msg));
+                false
             }
-        }
+        },
         Err(e) => {
-            let _ = event_tx.send(UiEvent::Error(format!("Elevation failed: {}", e)));
+            let msg = tr_config(config, "err.elevation_failed")
+                .await
+                .replace("{error}", &e.to_string());
+            let _ = event_tx.send(UiEvent::Error(msg));
+            false
         }
     }
 }
@@ -149,12 +182,40 @@ async fn elevate_or_report(
     config: &Arc<RwLock<AppConfig>>,
     event_tx: &broadcast::Sender<UiEvent>,
 ) -> bool {
-    if e.to_string().contains("NeedsElevation") {
-        elevate_service_task(elevate_task, strategy, config, event_tx).await;
-        true
+    let msg = format!("{:#}", e);
+    let needs_elevation = msg.contains("NeedsElevation")
+        || msg.contains("os error 5")
+        || msg.contains("Access is denied")
+        || msg.contains("Отказано в доступе");
+    if needs_elevation {
+        elevate_service_task(elevate_task, strategy, config, event_tx).await
     } else {
-        let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+        let _ = event_tx.send(UiEvent::Error(msg));
         false
+    }
+}
+
+async fn stop_bypass_before_install(
+    runner: &Arc<dyn Runner>,
+    service_ctl: &Arc<dyn ServiceCtl>,
+    config: &Arc<RwLock<AppConfig>>,
+    event_tx: &broadcast::Sender<UiEvent>,
+) -> bool {
+    if let Err(e) = runner.stop().await {
+        let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+        return false;
+    }
+
+    match service_ctl.status().await {
+        Ok(RunningMode::WindowsService) => match service_ctl.stop().await {
+            Ok(()) => true,
+            Err(e) => elevate_or_report(e, "service-stop", None, config, event_tx).await,
+        },
+        Ok(_) => true,
+        Err(e) => {
+            let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+            false
+        }
     }
 }
 
@@ -220,13 +281,15 @@ impl App {
         // ── i18n ──
         // Back the Slint `I18n.t(lang, key)` callback with the JSON catalogs, then
         // seed the active language from the saved config (Russian by default).
-        ui.global::<I18n>().on_t(|lang, key| crate::i18n::tr(lang.as_str(), key.as_str()).into());
+        ui.global::<I18n>()
+            .on_t(|lang, key| crate::i18n::tr(lang.as_str(), key.as_str()).into());
         let initial_lang = self
             .config
             .try_read()
             .map(|c| c.language)
             .unwrap_or_default();
-        ui.global::<I18n>().set_lang(crate::i18n::code(initial_lang).into());
+        ui.global::<I18n>()
+            .set_lang(crate::i18n::code(initial_lang).into());
         // Persist a language switch from the Settings page. The Slint side flips
         // `I18n.lang` itself (so the UI re-renders instantly); we just save it.
         {
@@ -391,6 +454,12 @@ impl App {
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_check_update_clicked(move || {
+                dispatch(&cmd_tx_c, BackendCmd::CheckUpdate);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
             ui.on_update_clicked(move || {
                 dispatch(&cmd_tx_c, BackendCmd::Update);
             });
@@ -530,7 +599,8 @@ impl App {
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_set_game_filter(move |slug| {
-                let _ = cmd_tx_c.try_send(BackendCmd::SetGameFilter(GameFilterMode::from_slug(&slug)));
+                let _ =
+                    cmd_tx_c.try_send(BackendCmd::SetGameFilter(GameFilterMode::from_slug(&slug)));
             });
         }
         {
@@ -618,11 +688,9 @@ impl App {
         }
         // "Run as administrator" banner button: relaunch the whole app elevated,
         // then exit this unelevated instance so the new one can take over.
-        ui.on_restart_as_admin(move || {
-            match relaunch_self_elevated() {
-                Ok(_) => std::process::exit(0),
-                Err(e) => tracing::error!("Failed to relaunch as administrator: {}", e),
-            }
+        ui.on_restart_as_admin(move || match relaunch_self_elevated() {
+            Ok(_) => std::process::exit(0),
+            Err(e) => tracing::error!("Failed to relaunch as administrator: {}", e),
         });
 
         // Copy arbitrary text to the system clipboard (used by the hosts window).
@@ -647,7 +715,10 @@ impl App {
             // tray; when off, actually exit the app (the tray menu's Quit still
             // works either way). Hiding the last window would normally quit the
             // event loop, so the app runs it via `run_event_loop_until_quit`.
-            let to_tray = ui_weak.upgrade().map(|ui| ui.get_minimize_to_tray()).unwrap_or(false);
+            let to_tray = ui_weak
+                .upgrade()
+                .map(|ui| ui.get_minimize_to_tray())
+                .unwrap_or(false);
             if to_tray {
                 if let Some(ui) = ui_weak.upgrade() {
                     let _ = ui.hide();
@@ -754,7 +825,9 @@ impl App {
                         match event {
                             UiEvent::Status(status) => {
                                 ui.set_status_installed(status.installed);
-                                ui.set_status_installed_version(status.installed_version.unwrap_or_default().into());
+                                ui.set_status_installed_version(
+                                    status.installed_version.unwrap_or_default().into(),
+                                );
                                 ui.set_status_running_mode(match status.running_mode {
                                     RunningMode::None => "None".into(),
                                     RunningMode::UserProcess => "UserProcess".into(),
@@ -774,7 +847,10 @@ impl App {
                                     .by_id(&active)
                                     .map(|s| s.display_name)
                                     .unwrap_or_else(|| active.clone());
-                                let desc = catalog.by_id(&active).map(|s| s.description).unwrap_or_default();
+                                let desc = catalog
+                                    .by_id(&active)
+                                    .map(|s| s.description)
+                                    .unwrap_or_default();
                                 let active_item = StrategyItem {
                                     id: active.as_str().into(),
                                     display_name: display.into(),
@@ -793,7 +869,11 @@ impl App {
                             }
                             UiEvent::DownloadProgress { bytes, total } => {
                                 let pct = if let Some(tot) = total {
-                                    if tot > 0 { bytes as f32 / tot as f32 } else { 0.0 }
+                                    if tot > 0 {
+                                        bytes as f32 / tot as f32
+                                    } else {
+                                        0.0
+                                    }
                                 } else {
                                     0.0
                                 };
@@ -852,7 +932,10 @@ impl App {
                                     }
                                 });
                                 if show {
-                                    let title = crate::i18n::tr(ui.global::<I18n>().get_lang().as_str(), "notify.error_title");
+                                    let title = crate::i18n::tr(
+                                        ui.global::<I18n>().get_lang().as_str(),
+                                        "notify.error_title",
+                                    );
                                     let body = err.clone();
                                     std::thread::spawn(move || crate::notify::show(&title, &body));
                                 }
@@ -867,14 +950,20 @@ impl App {
                                 ui.set_test_current_alt("".into());
                                 rebuild_test_results(&ui);
                             }
-                            UiEvent::TestProgress { index, total, strategy } => {
+                            UiEvent::TestProgress {
+                                index,
+                                total,
+                                strategy,
+                            } => {
                                 ui.set_test_running(true);
                                 ui.set_test_current(index as i32);
                                 ui.set_test_total(total as i32);
                                 // Variant label for the sidebar pill (ALT/SIMPLE FAKE),
                                 // falling back to the base name when there's no variant.
                                 let (pretty, alt) = split_alt(&strategy);
-                                ui.set_test_current_alt(if alt.is_empty() { pretty } else { alt }.into());
+                                ui.set_test_current_alt(
+                                    if alt.is_empty() { pretty } else { alt }.into(),
+                                );
                                 ui.set_test_current_strategy(strategy.into());
                             }
                             UiEvent::TestResult(result) => {
@@ -903,7 +992,9 @@ impl App {
                                 ui.set_game_filter(m.game_filter.slug().into());
                                 ui.set_ipset_mode(m.ipset_mode.slug().into());
                                 ui.set_ipset_lines(m.ipset_lines as i32);
-                                ui.set_ipset_age_days(m.ipset_age_days.map(|d| d as i32).unwrap_or(-1));
+                                ui.set_ipset_age_days(
+                                    m.ipset_age_days.map(|d| d as i32).unwrap_or(-1),
+                                );
                             }
                             UiEvent::MaintenanceResult { kind, ok, message } => {
                                 match kind.as_str() {
@@ -925,7 +1016,11 @@ impl App {
                                     _ => {}
                                 }
                             }
-                            UiEvent::HostsContent { content, hosts_path, hosts_dir } => {
+                            UiEvent::HostsContent {
+                                content,
+                                hosts_path,
+                                hosts_dir,
+                            } => {
                                 ui.set_hosts_content(content.into());
                                 ui.set_hosts_path(hosts_path.into());
                                 ui.set_hosts_dir(hosts_dir.into());
@@ -1035,10 +1130,7 @@ impl App {
         Ok(())
     }
 
-    fn run_backend_loop(
-        &self,
-        mut rx: mpsc::Receiver<BackendCmd>,
-    ) {
+    fn run_backend_loop(&self, mut rx: mpsc::Receiver<BackendCmd>) {
         let installer = self.installer.clone();
         let runner = self.runner.clone();
         let service_ctl = self.service_ctl.clone();
@@ -1051,16 +1143,29 @@ impl App {
         let state = self.state.clone();
 
         tokio::spawn(async move {
+            let test_running = Arc::new(AtomicBool::new(false));
             // Last-notified bypass running state, so start/stop toasts fire only on
             // a real transition (see `notify_bypass`). Seeded to "stopped".
             let mut notified_running: Option<bool> = Some(false);
             while let Some(cmd) = rx.recv().await {
+                if test_running.load(Ordering::SeqCst) && conflicts_with_running_test(&cmd) {
+                    let _ =
+                        event_tx.send(UiEvent::Error(tr_config(&config, "err.test_running").await));
+                    continue;
+                }
                 match cmd {
                     BackendCmd::Install | BackendCmd::Update => {
                         // Install and Update are the same backend operation —
                         // `install_or_update` handles both a fresh install and an
                         // upgrade — so they share one handler; only the button differs.
                         let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Resolving));
+                        if !stop_bypass_before_install(&runner, &service_ctl, &config, &event_tx)
+                            .await
+                        {
+                            let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            continue;
+                        }
                         let event_tx_c = event_tx.clone();
                         let progress_cb = Box::new(move |stage, bytes, total| {
                             let _ = event_tx_c.send(UiEvent::InstallProgress(stage));
@@ -1070,7 +1175,8 @@ impl App {
                         match installer.install_or_update(progress_cb).await {
                             Ok(_) => {
                                 let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                    .await;
                             }
                             Err(e) => {
                                 let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
@@ -1083,7 +1189,8 @@ impl App {
                                 // Always surface the resolved latest version so the
                                 // "latest" stat shows it even when we're up to date.
                                 let _ = event_tx.send(UiEvent::LatestVersion(latest.clone()));
-                                let current = installer.installed_version().await.unwrap_or_default();
+                                let current =
+                                    installer.installed_version().await.unwrap_or_default();
                                 // Use semver-aware comparison so equivalent / non-semver
                                 // strings and downgrades don't show a spurious update.
                                 if crate::zapret::updater::is_update_available(&current, &latest) {
@@ -1099,21 +1206,20 @@ impl App {
                             }
                         }
                     }
-                    BackendCmd::CheckSelfUpdate => {
-                        match self_updater.latest_version().await {
-                            Ok(latest) => {
-                                let current = self_updater.current_version();
-                                if crate::zapret::updater::is_update_available(&current, &latest) {
-                                    let _ = event_tx.send(UiEvent::AppUpdateAvailable { current, latest });
-                                } else {
-                                    let _ = event_tx.send(UiEvent::AppUpToDate { latest });
-                                }
-                            }
-                            Err(e) => {
-                                let _ = event_tx.send(UiEvent::AppUpdateError(format!("{:#}", e)));
+                    BackendCmd::CheckSelfUpdate => match self_updater.latest_version().await {
+                        Ok(latest) => {
+                            let current = self_updater.current_version();
+                            if crate::zapret::updater::is_update_available(&current, &latest) {
+                                let _ =
+                                    event_tx.send(UiEvent::AppUpdateAvailable { current, latest });
+                            } else {
+                                let _ = event_tx.send(UiEvent::AppUpToDate { latest });
                             }
                         }
-                    }
+                        Err(e) => {
+                            let _ = event_tx.send(UiEvent::AppUpdateError(format!("{:#}", e)));
+                        }
+                    },
                     BackendCmd::SelfUpdate => {
                         let event_tx_c = event_tx.clone();
                         let progress_cb = Box::new(move |bytes, total| {
@@ -1149,7 +1255,13 @@ impl App {
                                         cfg.last_strategy = Some(strategy_id.clone());
                                         let _ = cfg.save();
                                     }
-                                    notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
+                                    notify_bypass(
+                                        &config,
+                                        &mut notified_running,
+                                        true,
+                                        Some(&strategy_id),
+                                    )
+                                    .await;
                                     let mut status = runner.detect_running().await;
                                     status.running_mode = RunningMode::UserProcess;
                                     status.active_strategy = Some(strategy_id);
@@ -1162,17 +1274,55 @@ impl App {
                                 }
                             }
                         } else {
-                            let _ = event_tx.send(UiEvent::Error(format!("Strategy {} not found", strategy_id)));
+                            let msg = tr_config(&config, "err.strategy_not_found")
+                                .await
+                                .replace("{strategy}", &strategy_id);
+                            let _ = event_tx.send(UiEvent::Error(msg));
                         }
                     }
                     BackendCmd::Stop => {
-                        match runner.stop().await {
-                            Ok(_) => {
-                                notify_bypass(&config, &mut notified_running, false, None).await;
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                        let status = runner.detect_running().await;
+                        if status.running_mode == RunningMode::WindowsService {
+                            match service_ctl.stop().await {
+                                Ok(_) => {
+                                    notify_bypass(&config, &mut notified_running, false, None)
+                                        .await;
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                        .await;
+                                }
+                                Err(e) => {
+                                    if elevate_or_report(
+                                        e,
+                                        "service-stop",
+                                        None,
+                                        &config,
+                                        &event_tx,
+                                    )
+                                    .await
+                                    {
+                                        notify_bypass(&config, &mut notified_running, false, None)
+                                            .await;
+                                        refresh_and_broadcast(
+                                            &runner,
+                                            &service_ctl,
+                                            &state,
+                                            &event_tx,
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                        } else {
+                            match runner.stop().await {
+                                Ok(_) => {
+                                    notify_bypass(&config, &mut notified_running, false, None)
+                                        .await;
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                        .await;
+                                }
+                                Err(e) => {
+                                    let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                }
                             }
                         }
                     }
@@ -1186,34 +1336,64 @@ impl App {
                             // we're already elevated — so the LocalSystem service never
                             // runs winws.exe out of the user-writable install dir.
                             let install_dir = current_install_dir(&config).await;
-                            match crate::zapret::service::install_service_protected(&install_dir, &strategy_id).await {
+                            match crate::zapret::service::install_service_protected(
+                                &install_dir,
+                                &strategy_id,
+                            )
+                            .await
+                            {
                                 Ok(_) => {
-                                    notify_bypass(&config, &mut notified_running, true, Some(&strategy_id)).await;
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                    notify_bypass(
+                                        &config,
+                                        &mut notified_running,
+                                        true,
+                                        Some(&strategy_id),
+                                    )
+                                    .await;
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                        .await;
                                 }
                                 Err(e) => {
-                                    if elevate_or_report(e, "service-install", Some(&strategy_id), &config, &event_tx).await {
-                                        refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                    if elevate_or_report(
+                                        e,
+                                        "service-install",
+                                        Some(&strategy_id),
+                                        &config,
+                                        &event_tx,
+                                    )
+                                    .await
+                                    {
+                                        refresh_and_broadcast(
+                                            &runner,
+                                            &service_ctl,
+                                            &state,
+                                            &event_tx,
+                                        )
+                                        .await;
                                     }
                                 }
                             }
                         } else {
-                            let _ = event_tx.send(UiEvent::Error(format!("Strategy {} not found", strategy_id)));
+                            let msg = tr_config(&config, "err.strategy_not_found")
+                                .await
+                                .replace("{strategy}", &strategy_id);
+                            let _ = event_tx.send(UiEvent::Error(msg));
                         }
                     }
-                    BackendCmd::ServiceRemove => {
-                        match service_ctl.remove().await {
-                            Ok(_) => {
-                                notify_bypass(&config, &mut notified_running, false, None).await;
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
-                            }
-                            Err(e) => {
-                                if elevate_or_report(e, "service-remove", None, &config, &event_tx).await {
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
-                                }
+                    BackendCmd::ServiceRemove => match service_ctl.remove().await {
+                        Ok(_) => {
+                            notify_bypass(&config, &mut notified_running, false, None).await;
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                        }
+                        Err(e) => {
+                            if elevate_or_report(e, "service-remove", None, &config, &event_tx)
+                                .await
+                            {
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                    .await;
                             }
                         }
-                    }
+                    },
                     BackendCmd::ServiceStart => {
                         // Release the WinDivert driver from any user-process bypass so
                         // the service's winws.exe isn't blocked from starting.
@@ -1221,36 +1401,44 @@ impl App {
                         match service_ctl.start().await {
                             Ok(_) => {
                                 notify_bypass(&config, &mut notified_running, true, None).await;
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                    .await;
                             }
                             Err(e) => {
-                                if elevate_or_report(e, "service-start", None, &config, &event_tx).await {
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                if elevate_or_report(e, "service-start", None, &config, &event_tx)
+                                    .await
+                                {
+                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                        .await;
                                 }
                             }
                         }
                     }
-                    BackendCmd::ServiceStop => {
-                        match service_ctl.stop().await {
-                            Ok(_) => {
-                                notify_bypass(&config, &mut notified_running, false, None).await;
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
-                            }
-                            Err(e) => {
-                                if elevate_or_report(e, "service-stop", None, &config, &event_tx).await {
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
-                                }
+                    BackendCmd::ServiceStop => match service_ctl.stop().await {
+                        Ok(_) => {
+                            notify_bypass(&config, &mut notified_running, false, None).await;
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                        }
+                        Err(e) => {
+                            if elevate_or_report(e, "service-stop", None, &config, &event_tx).await
+                            {
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                    .await;
                             }
                         }
-                    }
+                    },
                     BackendCmd::RefreshStatus => {
                         let mut status = runner.detect_running().await;
                         status.service_installed = service_ctl.is_installed().await;
                         if status.running_mode == RunningMode::None {
-                            if let Ok(srv_mode) = service_ctl.status().await {
-                                if srv_mode != RunningMode::None {
+                            match service_ctl.status().await {
+                                Ok(srv_mode) if srv_mode != RunningMode::None => {
                                     status.running_mode = srv_mode;
                                 }
+                                Ok(_) => {}
+                                // Don't change status on an SCM error, but log why
+                                // (access denied, etc.) instead of swallowing it.
+                                Err(e) => tracing::warn!("Service status query failed: {:#}", e),
                             }
                         }
                         if !status.installed {
@@ -1271,7 +1459,9 @@ impl App {
                     }
                     BackendCmd::OpenInstallFolder => {
                         let install_dir = current_install_dir(&config).await;
-                        let _ = std::process::Command::new("explorer").arg(&install_dir).spawn();
+                        let _ = std::process::Command::new("explorer")
+                            .arg(&install_dir)
+                            .spawn();
                     }
                     BackendCmd::OpenIpsetFile => {
                         let install_dir = current_install_dir(&config).await;
@@ -1279,9 +1469,10 @@ impl App {
                         if path.exists() {
                             open_external(&path.display().to_string());
                         } else {
-                            let _ = event_tx.send(UiEvent::Error(format!(
-                                "ipset-all.txt not found at {}", path.display()
-                            )));
+                            let msg = tr_config(&config, "err.ipset_missing")
+                                .await
+                                .replace("{path}", &path.display().to_string());
+                            let _ = event_tx.send(UiEvent::Error(msg));
                         }
                     }
                     BackendCmd::OpenHostsFile => {
@@ -1290,8 +1481,13 @@ impl App {
                         let system_root = std::env::var("SystemRoot")
                             .unwrap_or_else(|_| r"C:\Windows".to_string());
                         let hosts_path = std::path::PathBuf::from(system_root)
-                            .join("System32").join("drivers").join("etc").join("hosts");
-                        let _ = std::process::Command::new("notepad.exe").arg(&hosts_path).spawn();
+                            .join("System32")
+                            .join("drivers")
+                            .join("etc")
+                            .join("hosts");
+                        let _ = std::process::Command::new("notepad.exe")
+                            .arg(&hosts_path)
+                            .spawn();
                     }
                     BackendCmd::CancelTest => {
                         tester.cancel();
@@ -1444,7 +1640,11 @@ impl App {
                                 let cleared = crate::i18n::tr(lang, "msg.discord_cache_cleared")
                                     .replace("{count}", &res.cleared.to_string());
                                 let msg = if res.discord_was_running {
-                                    format!("{} · {}", crate::i18n::tr(lang, "msg.discord_closed"), cleared)
+                                    format!(
+                                        "{} · {}",
+                                        crate::i18n::tr(lang, "msg.discord_closed"),
+                                        cleared
+                                    )
                                 } else {
                                     cleared
                                 };
@@ -1459,9 +1659,29 @@ impl App {
                         });
                     }
                     BackendCmd::TestStrategies => {
+                        if test_running
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_err()
+                        {
+                            let _ = event_tx
+                                .send(UiEvent::Error(tr_config(&config, "err.test_running").await));
+                            continue;
+                        }
+
                         let strategies = catalog.all();
                         if strategies.is_empty() {
-                            let _ = event_tx.send(UiEvent::Error("No strategies installed to test".to_string()));
+                            test_running.store(false, Ordering::SeqCst);
+                            let _ = event_tx.send(UiEvent::Error(
+                                tr_config(&config, "err.no_strategies_to_test").await,
+                            ));
+                            continue;
+                        }
+                        let status = runner.detect_running().await;
+                        if status.running_mode != RunningMode::None {
+                            test_running.store(false, Ordering::SeqCst);
+                            let _ = event_tx.send(UiEvent::Error(
+                                tr_config(&config, "err.stop_bypass_before_test").await,
+                            ));
                             continue;
                         }
                         let total = strategies.len() as u32;
@@ -1477,6 +1697,7 @@ impl App {
                         let state_c = state.clone();
                         let config_c = config.clone();
                         let event_tx_c = event_tx.clone();
+                        let test_running_c = test_running.clone();
                         tokio::spawn(async move {
                             let ev_result = event_tx_c.clone();
                             let on_each = Box::new(move |r| {
@@ -1503,16 +1724,25 @@ impl App {
                                         cfg.last_strategy = Some(best.clone());
                                         let _ = cfg.save();
                                     }
-                                    let _ = event_tx_c.send(UiEvent::TestComplete { best, results });
+                                    let _ =
+                                        event_tx_c.send(UiEvent::TestComplete { best, results });
                                 }
                                 Err(e) => {
-                                    let _ = event_tx_c.send(UiEvent::Error(format!("Strategy test failed: {}", e)));
-                                    let _ = event_tx_c.send(UiEvent::TestComplete { best: String::new(), results: Vec::new() });
+                                    let msg = tr_config(&config_c, "err.strategy_test_failed")
+                                        .await
+                                        .replace("{error}", &e.to_string());
+                                    let _ = event_tx_c.send(UiEvent::Error(msg));
+                                    let _ = event_tx_c.send(UiEvent::TestComplete {
+                                        best: String::new(),
+                                        results: Vec::new(),
+                                    });
                                 }
                             }
 
                             // Settle the status display after the test churns winws.
-                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c).await;
+                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c)
+                                .await;
+                            test_running_c.store(false, Ordering::SeqCst);
                         });
                     }
                 }

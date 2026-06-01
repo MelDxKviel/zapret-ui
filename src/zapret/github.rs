@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
+use anyhow::{Context, Result};
 use reqwest::header::USER_AGENT;
-use anyhow::{Result, Context};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct GithubRelease {
@@ -70,29 +70,63 @@ impl GithubClient {
         }
     }
 
+    async fn fetch_branch_commit(&self, branch: &str) -> Result<String> {
+        let url =
+            format!("https://github.com/Flowseal/zapret-discord-youtube/commits/{branch}.atom");
+        let resp = self
+            .client
+            .get(&url)
+            .header(USER_AGENT, "zapret-ui-updater")
+            .send()
+            .await
+            .context("Failed to fetch upstream commit feed")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("commit feed returned HTTP {}", resp.status());
+        }
+        let body = resp
+            .text()
+            .await
+            .context("Failed to read upstream commit feed")?;
+        parse_first_commit_sha(&body)
+            .ok_or_else(|| anyhow::anyhow!("Could not resolve the latest upstream commit SHA"))
+    }
+
     pub async fn get_latest_release(&self) -> Result<GithubRelease> {
         // NOTE: api.github.com is blocked by many RU ISPs/DPI (the exact thing zapret bypasses).
-        // We deliberately avoid it. Version comes from raw.githubusercontent.com and the download
-        // from codeload.github.com — both reachable when api.github.com is not.
+        // We deliberately avoid it. First resolve `main` to an immutable commit from the atom feed,
+        // then read version.txt and download the codeload archive for that exact commit.
         const BRANCH: &str = "main";
+        let commit_sha = match self.fetch_branch_commit(BRANCH).await {
+            Ok(sha) => sha,
+            Err(e) => {
+                if let Some(cached) = self.read_cache() {
+                    tracing::warn!("commit resolve failed ({e:#}), returning stale cache");
+                    return Ok(cached.release);
+                }
+                return Err(e)
+                    .context("Failed to resolve Flowseal/zapret-discord-youtube main commit");
+            }
+        };
         let version_url = format!(
-            "https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/{BRANCH}/.service/version.txt"
+            "https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/{commit_sha}/.service/version.txt"
         );
-        let zip_url = format!(
-            "https://codeload.github.com/Flowseal/zapret-discord-youtube/zip/refs/heads/{BRANCH}"
-        );
+        let zip_url =
+            format!("https://codeload.github.com/Flowseal/zapret-discord-youtube/zip/{commit_sha}");
 
         tracing::info!("Fetching zapret version from {}", version_url);
 
-        let version = match self.client
+        let version = match self
+            .client
             .get(&version_url)
             .header(USER_AGENT, "zapret-ui-updater")
             .send()
             .await
         {
-            Ok(resp) if resp.status().is_success() => {
-                resp.text().await.map(|t| t.trim().to_string()).unwrap_or_else(|_| BRANCH.to_string())
-            }
+            Ok(resp) if resp.status().is_success() => resp
+                .text()
+                .await
+                .map(|t| t.trim().to_string())
+                .unwrap_or_else(|_| commit_sha.chars().take(12).collect()),
             Ok(resp) => {
                 tracing::warn!("version.txt request returned {}", resp.status());
                 // Cache fallback before giving up
@@ -100,14 +134,16 @@ impl GithubClient {
                     tracing::warn!("Returning stale cached version");
                     return Ok(cached.release);
                 }
-                BRANCH.to_string()
+                commit_sha.chars().take(12).collect()
             }
             Err(e) => {
                 if let Some(cached) = self.read_cache() {
                     tracing::warn!("version fetch failed ({e}), returning stale cache");
                     return Ok(cached.release);
                 }
-                return Err(e).context("Failed to fetch zapret version (raw.githubusercontent.com unreachable)");
+                return Err(e).context(
+                    "Failed to fetch zapret version (raw.githubusercontent.com unreachable)",
+                );
             }
         };
 
@@ -121,8 +157,41 @@ impl GithubClient {
             }],
         };
 
-        tracing::info!("Resolved zapret release: {} -> {}", release.tag_name, zip_url);
+        tracing::info!(
+            "Resolved zapret release: {} -> {}",
+            release.tag_name,
+            zip_url
+        );
         self.write_cache(&release);
         Ok(release)
+    }
+}
+
+fn parse_first_commit_sha(body: &str) -> Option<String> {
+    for marker in ["/commit/", "Grit::Commit/"] {
+        let mut rest = body;
+        while let Some(idx) = rest.find(marker) {
+            let start = idx + marker.len();
+            let candidate: String = rest[start..].chars().take(40).collect();
+            if candidate.len() == 40 && candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Some(candidate);
+            }
+            rest = &rest[start..];
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_commit_sha_from_atom_link() {
+        let body = r#"<feed><entry><link href="https://github.com/Flowseal/zapret-discord-youtube/commit/0123456789abcdef0123456789abcdef01234567" /></entry></feed>"#;
+        assert_eq!(
+            parse_first_commit_sha(body).as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
     }
 }

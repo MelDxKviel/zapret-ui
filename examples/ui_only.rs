@@ -13,9 +13,15 @@ struct MockInstaller;
 
 #[async_trait::async_trait]
 impl Installer for MockInstaller {
-    async fn is_installed(&self) -> bool { true }
-    async fn installed_version(&self) -> Option<String> { Some("v1.0.0-mock".to_string()) }
-    async fn latest_version(&self) -> anyhow::Result<String> { Ok("v1.1.0-mock".to_string()) }
+    async fn is_installed(&self) -> bool {
+        true
+    }
+    async fn installed_version(&self) -> Option<String> {
+        Some("v1.0.0-mock".to_string())
+    }
+    async fn latest_version(&self) -> anyhow::Result<String> {
+        Ok("v1.1.0-mock".to_string())
+    }
     async fn install_or_update(&self, on_progress: ProgressCb) -> anyhow::Result<()> {
         on_progress(InstallStage::Resolving, 0, None);
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -62,7 +68,10 @@ struct MockServiceCtl;
 #[async_trait::async_trait]
 impl ServiceCtl for MockServiceCtl {
     async fn install(&self, strategy: &Strategy) -> anyhow::Result<()> {
-        tracing::info!("Mock installing service for strategy: {}", strategy.display_name);
+        tracing::info!(
+            "Mock installing service for strategy: {}",
+            strategy.display_name
+        );
         Ok(())
     }
     async fn remove(&self) -> anyhow::Result<()> {
@@ -126,7 +135,9 @@ fn main() -> anyhow::Result<()> {
         use image::ImageReader;
         use std::io::Cursor;
         const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.ico");
-        if let Ok(img) = ImageReader::with_format(Cursor::new(ICON_BYTES), image::ImageFormat::Ico).decode() {
+        if let Ok(img) =
+            ImageReader::with_format(Cursor::new(ICON_BYTES), image::ImageFormat::Ico).decode()
+        {
             let img = img.into_rgba8();
             let (w, h) = (img.width(), img.height());
             let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&img, w, h);
@@ -137,7 +148,8 @@ fn main() -> anyhow::Result<()> {
     // i18n: back the `I18n.t` callback with the JSON catalogs so text renders.
     // The Settings → Language control flips `I18n.lang` itself, so switching
     // works in the preview without a persistence backend.
-    ui.global::<I18n>().on_t(|lang, key| zapret_ui::i18n::tr(lang.as_str(), key.as_str()).into());
+    ui.global::<I18n>()
+        .on_t(|lang, key| zapret_ui::i18n::tr(lang.as_str(), key.as_str()).into());
     ui.global::<I18n>().set_lang("ru".into());
     ui.on_set_language(|code| println!("UI: Set language: {}", code));
 
@@ -162,7 +174,13 @@ fn main() -> anyhow::Result<()> {
                                 .contains(&q)
                     })
                     .collect();
-                list.sort_by_key(|s| if favs.iter().any(|f| f == &s.id) { 0 } else { 1 });
+                list.sort_by_key(|s| {
+                    if favs.iter().any(|f| f == &s.id) {
+                        0
+                    } else {
+                        1
+                    }
+                });
                 let items: Vec<StrategyItem> = list
                     .iter()
                     .map(|s| {
@@ -298,6 +316,9 @@ fn main() -> anyhow::Result<()> {
     ui.on_install_clicked(|| {
         println!("UI: Install clicked");
     });
+    ui.on_check_update_clicked(|| {
+        println!("UI: Check core update clicked");
+    });
     ui.on_update_clicked(|| {
         println!("UI: Update clicked");
     });
@@ -330,7 +351,14 @@ fn main() -> anyhow::Result<()> {
         ui.on_test_start_clicked(move || {
             println!("UI: Test strategies clicked");
             if let Some(ui) = ui_weak.upgrade() {
-                let mk = |id: &str, pretty: &str, alt: &str, ok: i32, total: i32, latency: i32, rank: i32, best: bool| TestResultItem {
+                let mk = |id: &str,
+                          pretty: &str,
+                          alt: &str,
+                          ok: i32,
+                          total: i32,
+                          latency: i32,
+                          rank: i32,
+                          best: bool| TestResultItem {
                     id: id.into(),
                     display_name: id.into(),
                     pretty: pretty.into(),
@@ -346,7 +374,16 @@ fn main() -> anyhow::Result<()> {
                     mk("general (ALT2)", "general", "ALT2", 12, 12, 184, 1, true),
                     mk("general", "general", "", 10, 12, 203, 2, false),
                     mk("general (ALT)", "general", "ALT", 7, 12, 311, 3, false),
-                    mk("general (SIMPLE FAKE)", "general", "SIMPLE FAKE", 0, 12, 0, 4, false),
+                    mk(
+                        "general (SIMPLE FAKE)",
+                        "general",
+                        "SIMPLE FAKE",
+                        0,
+                        12,
+                        0,
+                        4,
+                        false,
+                    ),
                 ];
                 ui.set_test_results(Rc::new(slint::VecModel::from(rows)).into());
                 ui.set_test_best_id("general (ALT2)".into());
@@ -431,7 +468,17 @@ fn main() -> anyhow::Result<()> {
 
     // Notifications toggle (mock): seed on and echo the callback.
     ui.set_notifications(true);
+    ui.set_autostart(false);
+    ui.set_autoupdate_check(true);
+    ui.set_minimize_to_tray(true);
+    ui.set_autoengage(false);
+    ui.set_theme("system".into());
     ui.on_set_notifications(|on| println!("UI: Set notifications: {}", on));
+    ui.on_set_autostart(|on| println!("UI: Set autostart: {}", on));
+    ui.on_set_autoupdate_check(|on| println!("UI: Set autoupdate check: {}", on));
+    ui.on_set_minimize_to_tray(|on| println!("UI: Set minimize to tray: {}", on));
+    ui.on_set_autoengage(|on| println!("UI: Set autoengage: {}", on));
+    ui.on_set_theme(|theme| println!("UI: Set theme: {}", theme));
 
     // Admin gating preview. Flip to `true` to preview the normal (elevated)
     // state with the banner hidden and the admin-only buttons enabled.
@@ -446,9 +493,24 @@ fn main() -> anyhow::Result<()> {
         message: msg.into(),
     };
     let log_lines = vec![
-        mk(1, "2026-05-23T16:14:34.808277Z", "INFO", "zapret-ui started in UI-only mode"),
-        mk(2, "2026-05-23T16:14:34.812000Z", "INFO", "Mock installer ready, version v1.0.0-mock"),
-        mk(3, "2026-05-23T16:14:34.815000Z", "INFO", "3 strategies loaded from catalog"),
+        mk(
+            1,
+            "2026-05-23T16:14:34.808277Z",
+            "INFO",
+            "zapret-ui started in UI-only mode",
+        ),
+        mk(
+            2,
+            "2026-05-23T16:14:34.812000Z",
+            "INFO",
+            "Mock installer ready, version v1.0.0-mock",
+        ),
+        mk(
+            3,
+            "2026-05-23T16:14:34.815000Z",
+            "INFO",
+            "3 strategies loaded from catalog",
+        ),
     ];
     // The LogsPage renders the selectable terminal from `log_text`, so seed it too
     // (not just `log_lines`) — otherwise the preview terminal stays empty.
@@ -483,16 +545,19 @@ fn main() -> anyhow::Result<()> {
             // Step a fake download to 100%, then clear the update state.
             for step in 1..=5 {
                 let ui_weak = ui_weak.clone();
-                slint::Timer::single_shot(std::time::Duration::from_millis(300 * step), move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let p = step as f32 / 5.0;
-                        ui.set_app_update_progress(p);
-                        if step == 5 {
-                            ui.set_app_update_downloading(false);
-                            ui.set_app_has_update(false);
+                slint::Timer::single_shot(
+                    std::time::Duration::from_millis(300 * step),
+                    move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            let p = step as f32 / 5.0;
+                            ui.set_app_update_progress(p);
+                            if step == 5 {
+                                ui.set_app_update_downloading(false);
+                                ui.set_app_has_update(false);
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }
         });
     }

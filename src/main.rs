@@ -3,24 +3,24 @@
 // visible while developing (`cargo run`).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-pub mod contracts;
-pub mod ports;
+pub mod app;
 pub mod config;
+pub mod contracts;
 pub mod i18n;
-pub mod state;
 pub mod log;
 pub mod notify;
-pub mod tray;
-pub mod single_instance;
-pub mod winicon;
-pub mod winenv;
-pub mod zapret;
+pub mod ports;
 pub mod selfupdate;
-pub mod app;
+pub mod single_instance;
+pub mod state;
+pub mod tray;
+pub mod winenv;
+pub mod winicon;
+pub mod zapret;
 
+use crate::contracts::UiEvent;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use crate::contracts::UiEvent;
 
 #[derive(Default)]
 struct ElevatedArgs {
@@ -65,7 +65,8 @@ async fn run_elevated_task(
 
     match task {
         "service-install" => {
-            let strat_id = strategy_id.ok_or_else(|| anyhow::anyhow!("Strategy ID required for installation"))?;
+            let strat_id = strategy_id
+                .ok_or_else(|| anyhow::anyhow!("Strategy ID required for installation"))?;
             // Stage into the protected machine-wide directory, lock its ACLs and
             // run the service from THERE — never from the user-writable %APPDATA%
             // dir (privilege-escalation fix). Shared with the in-app elevated path.
@@ -88,14 +89,81 @@ async fn run_elevated_task(
     Ok(())
 }
 
+fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let out = std::process::Command::new("icacls")
+        .arg(dir)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)F",
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "/grant:r",
+            "*S-1-5-32-545:(OI)(CI)RX",
+            "/T",
+            "/C",
+            "/Q",
+        ])
+        .output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to lock elevated result dir ACLs: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    }
+}
+
+fn valid_elevated_result_path(path: &std::path::Path, nonce: &str) -> bool {
+    let expected_dir = zapret::paths::elevation_result_dir();
+    let expected_file = format!("zapret-ui-elev-{nonce}.result");
+    path.parent() == Some(expected_dir.as_path())
+        && path.file_name().and_then(|n| n.to_str()) == Some(expected_file.as_str())
+}
+
 /// Write the one-shot task outcome to the nonce result file so the (unelevated)
 /// parent can report success/failure instead of guessing from a status poll.
 fn write_elevated_result(result_file: &std::path::Path, nonce: &str, outcome: &anyhow::Result<()>) {
+    if !valid_elevated_result_path(result_file, nonce) {
+        eprintln!(
+            "Refusing to write elevated result to unexpected path: {}",
+            result_file.display()
+        );
+        return;
+    }
+    let Some(parent) = result_file.parent() else {
+        return;
+    };
+    if let Err(e) = lock_elevation_result_dir(parent) {
+        eprintln!("Failed to prepare elevated result directory: {e:#}");
+        return;
+    }
+
     let body = match outcome {
         Ok(()) => format!("{nonce}\nOK"),
-        Err(e) => format!("{nonce}\nERR\n{e}"),
+        // `{e:#}` walks the whole anyhow chain so the parent sees the real cause
+        // (e.g. "StartService: Access is denied. (os error 5)"), not just the
+        // outermost context line.
+        Err(e) => format!("{nonce}\nERR\n{e:#}"),
     };
-    let _ = std::fs::write(result_file, body);
+    let tmp_file = result_file.with_extension("tmp");
+    let _ = std::fs::remove_file(result_file);
+    let _ = std::fs::remove_file(&tmp_file);
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_file)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            if file.write_all(body.as_bytes()).is_ok() && file.flush().is_ok() {
+                let _ = std::fs::rename(&tmp_file, result_file);
+            }
+        }
+        Err(e) => eprintln!("Failed to create elevated result file: {e}"),
+    }
 }
 
 #[tokio::main]
@@ -146,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
     let _instance = match instance {
         Some(inst) => inst,
         None => {
-            single_instance::focus_existing_window("Zapret UI");
+            single_instance::focus_existing_window("zapret-ui");
             std::process::exit(0);
         }
     };
@@ -181,15 +249,32 @@ async fn main() -> anyhow::Result<()> {
     let install_dir = config.install_dir();
 
     // Instantiate ports
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let github_client = zapret::github::GithubClient::new(client.clone(), None);
 
-    let installer = Arc::new(zapret::installer::ZapretInstaller::new(install_dir.clone(), github_client));
-    let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone(), event_tx.clone()));
+    let installer = Arc::new(zapret::installer::ZapretInstaller::new(
+        install_dir.clone(),
+        github_client,
+    ));
+    let runner = Arc::new(zapret::process::ProcessRunner::new(
+        install_dir.clone(),
+        event_tx.clone(),
+    ));
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
-    let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(install_dir.clone()));
-    let tester = Arc::new(zapret::tester::ConnectivityTester::new(runner.clone(), install_dir.clone()));
-    let maintenance = Arc::new(zapret::maintenance::ZapretMaintenance::new(install_dir.clone(), client.clone()));
+    let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(
+        install_dir.clone(),
+    ));
+    let tester = Arc::new(zapret::tester::ConnectivityTester::new(
+        runner.clone(),
+        install_dir.clone(),
+    ));
+    let maintenance = Arc::new(zapret::maintenance::ZapretMaintenance::new(
+        install_dir.clone(),
+        client.clone(),
+    ));
     let self_updater = Arc::new(selfupdate::GithubSelfUpdater::from_repo_url(
         client.clone(),
         env!("CARGO_PKG_REPOSITORY"),

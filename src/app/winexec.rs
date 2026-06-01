@@ -91,7 +91,11 @@ pub(super) fn relaunch_elevated(
     install_dir: &std::path::Path,
 ) -> anyhow::Result<ElevationHandle> {
     let current_exe = std::env::current_exe()?;
-    let exe_path_w: Vec<u16> = current_exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let exe_path_w: Vec<u16> = current_exe
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
 
     // Unique nonce so the parent can authenticate the result file the helper
     // writes (and so concurrent tasks don't collide).
@@ -102,7 +106,8 @@ pub(super) fn relaunch_elevated(
             .unwrap_or(0);
         format!("{}-{}", std::process::id(), nanos)
     };
-    let result_file = std::env::temp_dir().join(format!("zapret-ui-elev-{nonce}.result"));
+    let result_file =
+        crate::zapret::paths::elevation_result_dir().join(format!("zapret-ui-elev-{nonce}.result"));
 
     let mut args = vec![format!("--elevated-task={task}")];
     if let Some(strat) = strategy {
@@ -111,7 +116,11 @@ pub(super) fn relaunch_elevated(
     args.push(format!("--install-dir={}", install_dir.display()));
     args.push(format!("--result-file={}", result_file.display()));
     args.push(format!("--nonce={nonce}"));
-    let params = args.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ");
+    let params = args
+        .iter()
+        .map(|a| quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ");
     let params_w: Vec<u16> = OsStr::new(&params).encode_wide().chain(Some(0)).collect();
 
     let verb_w: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
@@ -126,7 +135,10 @@ pub(super) fn relaunch_elevated(
             1, // SW_SHOWNORMAL
         );
         if (result as usize) <= 32 {
-            return Err(anyhow::anyhow!("Failed to relaunch elevated: error code {}", result as usize));
+            return Err(anyhow::anyhow!(
+                "Failed to relaunch elevated: error code {}",
+                result as usize
+            ));
         }
     }
 
@@ -149,12 +161,19 @@ pub(super) async fn wait_for_elevated_result(handle: ElevationHandle) -> Result<
                     break Ok(());
                 } else {
                     let msg: String = lines.collect::<Vec<_>>().join("\n");
-                    break Err(if msg.is_empty() { status.to_string() } else { msg });
+                    break Err(if msg.is_empty() {
+                        status.to_string()
+                    } else {
+                        msg
+                    });
                 }
             }
         }
         if Instant::now() >= deadline {
-            break Err("Elevated operation did not report a result (timed out or was cancelled).".to_string());
+            break Err(
+                "Elevated operation did not report a result (timed out or was cancelled)."
+                    .to_string(),
+            );
         }
         sleep(Duration::from_millis(250)).await;
     };
@@ -168,8 +187,15 @@ pub(super) async fn wait_for_elevated_result(handle: ElevationHandle) -> Result<
 /// "run as administrator" banner.
 pub(super) fn relaunch_self_elevated() -> anyhow::Result<()> {
     let current_exe = std::env::current_exe()?;
-    let exe_path_w: Vec<u16> = current_exe.as_os_str().encode_wide().chain(Some(0)).collect();
-    let params_w: Vec<u16> = OsStr::new("--relaunch").encode_wide().chain(Some(0)).collect();
+    let exe_path_w: Vec<u16> = current_exe
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let params_w: Vec<u16> = OsStr::new("--relaunch")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
     let verb_w: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
 
     unsafe {
@@ -182,7 +208,10 @@ pub(super) fn relaunch_self_elevated() -> anyhow::Result<()> {
             1, // SW_SHOWNORMAL
         );
         if (result as usize) <= 32 {
-            return Err(anyhow::anyhow!("Failed to relaunch elevated: error code {}", result as usize));
+            return Err(anyhow::anyhow!(
+                "Failed to relaunch elevated: error code {}",
+                result as usize
+            ));
         }
     }
 

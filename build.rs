@@ -46,4 +46,3 @@ fn git_describe() -> Option<String> {
         Some(s)
     }
 }
-

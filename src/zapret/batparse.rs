@@ -4,8 +4,8 @@
 //! argument list using batch variables (%BIN%, %LISTS%, %~dp0, %GameFilterTCP%, ...).
 //! We replicate the substitution that service.bat performs so we can run winws.exe directly.
 
+use crate::contracts::{Category, GameFilterMode, Strategy};
 use std::path::Path;
-use crate::contracts::{Strategy, Category, GameFilterMode};
 
 /// Read the game-filter mode `service.bat` would compute from
 /// `utils\game_filter.enabled`. Missing file → disabled (the default).
@@ -34,8 +34,7 @@ pub fn ensure_user_lists(install_dir: &Path) -> anyhow::Result<()> {
     for (name, content) in defaults {
         let p = lists.join(name);
         if !p.exists() {
-            std::fs::write(&p, content)
-                .with_context(|| format!("writing user list {:?}", p))?;
+            std::fs::write(&p, content).with_context(|| format!("writing user list {:?}", p))?;
         }
     }
     Ok(())
@@ -49,10 +48,24 @@ fn extract_winws_command(content: &str) -> Option<String> {
     for raw in content.lines() {
         let line = raw.trim_end();
         if !capturing {
+            let trimmed = line.trim_start();
+            let lower_trimmed = trimmed.to_lowercase();
+            if lower_trimmed.starts_with("rem ") || lower_trimmed.starts_with("::") {
+                continue;
+            }
             if let Some(idx) = line.to_lowercase().find("winws.exe") {
                 // take the part after winws.exe (and a possible closing quote)
                 let after = &line[idx + "winws.exe".len()..];
                 let after = after.strip_prefix('"').unwrap_or(after);
+                let after_trimmed = after.trim();
+                // Guard/preflight lines such as `if exist "%BIN%winws.exe" ...`
+                // mention winws.exe but are not the launch command.
+                if lower_trimmed.starts_with("if ") && !after_trimmed.starts_with("--") {
+                    continue;
+                }
+                if after_trimmed.is_empty() && !line.ends_with('^') {
+                    continue;
+                }
                 joined.push_str(after.trim_end_matches('^').trim());
                 joined.push(' ');
                 capturing = true;
@@ -73,6 +86,21 @@ fn extract_winws_command(content: &str) -> Option<String> {
     } else {
         Some(joined)
     }
+}
+
+fn replace_ci(input: &str, needle: &str, replacement: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let input_lower = input.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    let mut pos = 0usize;
+    while let Some(found) = input_lower[pos..].find(&needle_lower) {
+        let start = pos + found;
+        out.push_str(&input[pos..start]);
+        out.push_str(replacement);
+        pos = start + needle.len();
+    }
+    out.push_str(&input[pos..]);
+    out
 }
 
 /// Tokenize a command string by whitespace, treating double-quoted spans as part of a token.
@@ -112,20 +140,24 @@ fn substitute(token: &str, install_dir: &Path, gf: GameFilterMode) -> String {
     let bin = format!("{}\\bin\\", install_dir.display());
     let lists = format!("{}\\lists\\", install_dir.display());
 
-    token
-        .replace("%BIN%", &bin)
-        .replace("%LISTS%", &lists)
-        .replace("%~dp0", &dp0)
-        // Order matters: the more specific TCP/UDP keys must be replaced before
-        // the generic %GameFilter% prefix that they share.
-        .replace("%GameFilterTCP%", gf.tcp_value())
-        .replace("%GameFilterUDP%", gf.udp_value())
-        .replace("%GameFilter%", gf.generic_value())
+    // Order matters: the more specific TCP/UDP keys must be replaced before the
+    // generic %GameFilter% prefix that they share. Batch variables are
+    // case-insensitive, so replacement must be too.
+    let token = replace_ci(token, "%GameFilterTCP%", gf.tcp_value());
+    let token = replace_ci(&token, "%GameFilterUDP%", gf.udp_value());
+    let token = replace_ci(&token, "%GameFilter%", gf.generic_value());
+    let token = replace_ci(&token, "%BIN%", &bin);
+    let token = replace_ci(&token, "%LISTS%", &lists);
+    replace_ci(&token, "%~dp0", &dp0)
 }
 
 /// Parse a .bat file's content into a ready-to-run winws argv (paths resolved),
 /// applying the given game-filter mode to the `%GameFilter*%` placeholders.
-pub fn parse_winws_args(content: &str, install_dir: &Path, gf: GameFilterMode) -> Option<Vec<String>> {
+pub fn parse_winws_args(
+    content: &str,
+    install_dir: &Path,
+    gf: GameFilterMode,
+) -> Option<Vec<String>> {
     let cmd = extract_winws_command(content)?;
     let args: Vec<String> = tokenize(&cmd)
         .into_iter()
@@ -142,7 +174,12 @@ pub fn parse_winws_args(content: &str, install_dir: &Path, gf: GameFilterMode) -
 pub fn referenced_lists(args: &[String]) -> Vec<String> {
     args.iter()
         .filter_map(|a| {
-            for key in ["--hostlist=", "--ipset=", "--hostlist-exclude=", "--ipset-exclude="] {
+            for key in [
+                "--hostlist=",
+                "--ipset=",
+                "--hostlist-exclude=",
+                "--ipset-exclude=",
+            ] {
                 if let Some(v) = a.strip_prefix(key) {
                     return Some(v.to_string());
                 }
@@ -191,7 +228,11 @@ pub fn describe(name: &str) -> String {
 
 /// Build a Strategy from a preset .bat file path, resolving `%GameFilter*%`
 /// with the given mode.
-pub fn strategy_from_bat(bat_path: &Path, install_dir: &Path, gf: GameFilterMode) -> Option<Strategy> {
+pub fn strategy_from_bat(
+    bat_path: &Path,
+    install_dir: &Path,
+    gf: GameFilterMode,
+) -> Option<Strategy> {
     let stem = bat_path.file_stem()?.to_string_lossy().to_string();
     if stem.eq_ignore_ascii_case("service") {
         return None;
@@ -229,7 +270,8 @@ mod tests {
     fn parses_real_general_bat() {
         let content = SAMPLE_BAT.to_string();
         let dir = PathBuf::from(r"C:\zap");
-        let args = parse_winws_args(&content, &dir, GameFilterMode::Disabled).expect("should parse");
+        let args =
+            parse_winws_args(&content, &dir, GameFilterMode::Disabled).expect("should parse");
         // No unresolved batch variables / stray quotes remain
         for a in &args {
             assert!(!a.contains('%'), "unresolved var in: {a}");
@@ -237,20 +279,41 @@ mod tests {
         }
         // First arg should be the --wf-tcp filter, game filter resolved to 12
         assert!(args[0].starts_with("--wf-tcp="), "first arg: {}", args[0]);
-        assert!(args[0].ends_with(",12"), "game filter not resolved: {}", args[0]);
+        assert!(
+            args[0].ends_with(",12"),
+            "game filter not resolved: {}",
+            args[0]
+        );
         // The --wf-udp filter's %GameFilterUDP% also resolves to the off marker.
-        assert!(args.iter().any(|a| a.starts_with("--wf-udp=") && a.ends_with(",12")),
-            "udp game filter not resolved; args={args:?}");
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("--wf-udp=") && a.ends_with(",12")),
+            "udp game filter not resolved; args={args:?}"
+        );
         // hostlist points at our absolute lists dir
-        assert!(args.iter().any(|a| a.contains(r"C:\zap\lists\list-general.txt")),
-            "no resolved list-general path; args={args:?}");
+        assert!(
+            args.iter()
+                .any(|a| a.contains(r"C:\zap\lists\list-general.txt")),
+            "no resolved list-general path; args={args:?}"
+        );
         // bin files resolved
-        assert!(args.iter().any(|a| a.contains(r"C:\zap\bin\quic_initial_www_google_com.bin")),
-            "no resolved bin path");
+        assert!(
+            args.iter()
+                .any(|a| a.contains(r"C:\zap\bin\quic_initial_www_google_com.bin")),
+            "no resolved bin path"
+        );
         // The start/min prefix must be gone
-        assert!(!args.iter().any(|a| a.eq_ignore_ascii_case("/min") || a.contains("zapret:")),
-            "start prefix leaked: {args:?}");
-        println!("parsed {} args; sample: {:?}", args.len(), &args[..args.len().min(6)]);
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case("/min") || a.contains("zapret:")),
+            "start prefix leaked: {args:?}"
+        );
+        println!(
+            "parsed {} args; sample: {:?}",
+            args.len(),
+            &args[..args.len().min(6)]
+        );
     }
 
     #[test]
@@ -258,12 +321,48 @@ mod tests {
         let dir = PathBuf::from(r"C:\zap");
         // TCP-only: --wf-tcp gets the range, --wf-udp stays off.
         let args = parse_winws_args(SAMPLE_BAT, &dir, GameFilterMode::Tcp).unwrap();
-        assert!(args[0].ends_with(",1024-65535"), "tcp not ranged: {}", args[0]);
-        assert!(args.iter().any(|a| a.starts_with("--wf-udp=") && a.ends_with(",12")),
-            "udp should stay off in TCP mode; args={args:?}");
+        assert!(
+            args[0].ends_with(",1024-65535"),
+            "tcp not ranged: {}",
+            args[0]
+        );
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("--wf-udp=") && a.ends_with(",12")),
+            "udp should stay off in TCP mode; args={args:?}"
+        );
         // All: both protocols get the range.
         let args = parse_winws_args(SAMPLE_BAT, &dir, GameFilterMode::All).unwrap();
         assert!(args[0].ends_with(",1024-65535"));
-        assert!(args.iter().any(|a| a.starts_with("--wf-udp=") && a.ends_with(",1024-65535")));
+        assert!(args
+            .iter()
+            .any(|a| a.starts_with("--wf-udp=") && a.ends_with(",1024-65535")));
+    }
+
+    #[test]
+    fn skips_preflight_winws_mentions() {
+        let content = concat!(
+            "@echo off\r\n",
+            "if not exist \"%BIN%winws.exe\" echo missing\r\n",
+            "start \"zapret\" /min \"%BIN%winws.exe\" --wf-tcp=80 --hostlist=\"%LISTS%list-general.txt\"\r\n",
+        );
+        let args =
+            parse_winws_args(content, &PathBuf::from(r"C:\zap"), GameFilterMode::Disabled).unwrap();
+        assert_eq!(args[0], "--wf-tcp=80");
+    }
+
+    #[test]
+    fn substitutes_batch_vars_case_insensitively() {
+        let content = "\"%bin%winws.exe\" --hostlist=\"%lists%list-general.txt\" --wf-tcp=%gamefiltertcp%\r\n";
+        let args =
+            parse_winws_args(content, &PathBuf::from(r"C:\zap"), GameFilterMode::Tcp).unwrap();
+        assert!(
+            args.iter().all(|a| !a.contains('%')),
+            "unresolved vars: {args:?}"
+        );
+        assert!(args
+            .iter()
+            .any(|a| a.contains(r"C:\zap\lists\list-general.txt")));
+        assert!(args.iter().any(|a| a == "--wf-tcp=1024-65535"));
     }
 }

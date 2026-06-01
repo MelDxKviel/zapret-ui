@@ -7,8 +7,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "zapret-ui";
-const PERSONALIZE_KEY: &str =
-    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+const PERSONALIZE_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
 /// Enable or disable launching this exe at user logon (HKCU Run key).
 pub fn set_autostart(enable: bool) {
@@ -22,8 +21,15 @@ pub fn set_autostart(enable: bool) {
         };
         std::process::Command::new("reg")
             .args([
-                "add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d",
-                &format!("\"{}\"", exe.display()), "/f",
+                "add",
+                RUN_KEY,
+                "/v",
+                RUN_VALUE,
+                "/t",
+                "REG_SZ",
+                "/d",
+                &format!("\"{}\"", exe.display()),
+                "/f",
             ])
             .creation_flags(CREATE_NO_WINDOW)
             .output()

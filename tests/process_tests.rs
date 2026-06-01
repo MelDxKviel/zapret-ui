@@ -7,17 +7,17 @@ pub mod ports;
 #[path = "../src/zapret/mod.rs"]
 pub mod zapret;
 
-use tokio::sync::broadcast;
-use crate::contracts::{Strategy, Category, RunningMode, UiEvent};
+use crate::contracts::{Category, RunningMode, Strategy, UiEvent};
 use crate::ports::{Runner, ServiceCtl};
+use crate::zapret::elevation::is_elevated;
 use crate::zapret::process::ProcessRunner;
 use crate::zapret::service::WindowsServiceCtl;
-use crate::zapret::elevation::is_elevated;
+use tokio::sync::broadcast;
 
 #[tokio::test]
 async fn test_process_runner_lifecycle() {
     let temp_dir = tempfile::tempdir().unwrap();
-    
+
     // Create version.txt
     std::fs::write(temp_dir.path().join("version.txt"), "1.2.3-test\n").unwrap();
 
@@ -29,10 +29,11 @@ async fn test_process_runner_lifecycle() {
 fn main() {
     println!("Hello from winws stub stdout!");
     eprintln!("Hello from winws stub stderr!");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(std::time::Duration::from_secs(5));
 }
-"#
-    ).unwrap();
+"#,
+    )
+    .unwrap();
 
     let stub_exe = temp_dir.path().join("winws.exe");
     let status = std::process::Command::new("rustc")
@@ -53,7 +54,10 @@ fn main() {
     // Test detect_running before start
     let initial_status = runner.detect_running().await;
     assert!(initial_status.installed);
-    assert_eq!(initial_status.installed_version, Some("1.2.3-test".to_string()));
+    assert_eq!(
+        initial_status.installed_version,
+        Some("1.2.3-test".to_string())
+    );
     assert_eq!(initial_status.running_mode, RunningMode::None);
     assert_eq!(initial_status.winws_pid, None);
 
@@ -68,7 +72,10 @@ fn main() {
     };
 
     // Start runner
-    let pid = runner.start(&strategy).await.expect("Failed to start process");
+    let pid = runner
+        .start(&strategy)
+        .await
+        .expect("Failed to start process");
     assert!(pid > 0);
 
     // Test detect_running after start
@@ -104,7 +111,7 @@ fn main() {
 #[tokio::test]
 async fn test_service_ctl_elevation_or_ops() {
     let temp_dir = tempfile::tempdir().unwrap();
-    
+
     // Compile dummy winws.exe
     let stub_src = temp_dir.path().join("stub.rs");
     std::fs::write(
@@ -113,8 +120,9 @@ async fn test_service_ctl_elevation_or_ops() {
 fn main() {
     std::thread::sleep(std::time::Duration::from_secs(10));
 }
-"#
-    ).unwrap();
+"#,
+    )
+    .unwrap();
 
     let stub_exe = temp_dir.path().join("winws.exe");
     let status = std::process::Command::new("rustc")
@@ -161,12 +169,18 @@ fn main() {
         // dispatcher, so `start` would normally time out / be flaky. Run this
         // manually (elevated, with a real service stub) when exercising the SCM.
         let _ = service_ctl.remove().await; // Clean up old test run if any
-        service_ctl.install(&strategy).await.expect("Failed to install service");
+        service_ctl
+            .install(&strategy)
+            .await
+            .expect("Failed to install service");
         service_ctl.start().await.expect("Failed to start service");
         let mode = service_ctl.status().await.expect("Failed to query status");
         assert_eq!(mode, RunningMode::WindowsService);
         service_ctl.stop().await.expect("Failed to stop service");
-        service_ctl.remove().await.expect("Failed to remove service");
+        service_ctl
+            .remove()
+            .await
+            .expect("Failed to remove service");
     } else {
         eprintln!("elevated: skipping SCM lifecycle (set ZAPRET_UI_RUN_SERVICE_TESTS to run)");
     }

@@ -412,6 +412,7 @@ export component HomePage inherits Rectangle {
     callback start_clicked();
     callback stop_clicked();
     callback install_clicked();
+    callback check_update_clicked();
     callback update_clicked();
     callback open_folder_clicked();
     callback pick_strategy_clicked();
@@ -962,7 +963,10 @@ export component HomePage inherits Rectangle {
                         sub: root.has-update ? root.status.installed_version + " → " + root.status.latest_version : "github.com / flowseal";
                         highlight: root.has-update;
                         enabled: !root.is_busy && !root.running;
-                        clicked => { root.update_clicked(); }
+                        clicked => {
+                            if (root.has-update) { root.update_clicked(); }
+                            else { root.check_update_clicked(); }
+                        }
                     }
                     ActionTile {
                         icon: @image-url("../../assets/icons/folder.svg");

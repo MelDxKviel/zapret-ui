@@ -75,10 +75,17 @@ fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
     // Level tag
     if let Some((first, tail)) = rest.split_once(char::is_whitespace) {
         let up = first.to_uppercase();
-        if matches!(up.as_str(), "INFO" | "WARN" | "WARNING" | "ERROR" | "ERR" | "DEBUG" | "TRACE") {
-            level = if up.starts_with("ERR") { "ERROR".to_string() }
-                else if up.starts_with("WARN") { "WARN".to_string() }
-                else { up };
+        if matches!(
+            up.as_str(),
+            "INFO" | "WARN" | "WARNING" | "ERROR" | "ERR" | "DEBUG" | "TRACE"
+        ) {
+            level = if up.starts_with("ERR") {
+                "ERROR".to_string()
+            } else if up.starts_with("WARN") {
+                "WARN".to_string()
+            } else {
+                up
+            };
             rest = tail.trim_start();
         }
     }
@@ -111,7 +118,11 @@ pub(super) fn rebuild_logs(ui: &MainWindow) {
     let (items, text) = LOG_BUF.with(|b| {
         let mut items: Vec<LogLineItem> = Vec::new();
         let mut text = String::new();
-        for raw in b.borrow().iter().filter(|raw| line_passes(raw, &grep, &level)) {
+        for raw in b
+            .borrow()
+            .iter()
+            .filter(|raw| line_passes(raw, &grep, &level))
+        {
             items.push(parse_log_line(items.len() + 1, raw));
             text.push_str(raw);
             text.push('\n');
@@ -131,8 +142,16 @@ pub(super) fn rebuild_test_results(ui: &MainWindow) {
     let mut sorted = TEST_RESULTS.with(|b| b.borrow().clone());
     sorted.sort_by(|a, b| {
         b.ok.cmp(&a.ok).then_with(|| {
-            let al = if a.avg_latency_ms == 0 { u32::MAX } else { a.avg_latency_ms };
-            let bl = if b.avg_latency_ms == 0 { u32::MAX } else { b.avg_latency_ms };
+            let al = if a.avg_latency_ms == 0 {
+                u32::MAX
+            } else {
+                a.avg_latency_ms
+            };
+            let bl = if b.avg_latency_ms == 0 {
+                u32::MAX
+            } else {
+                b.avg_latency_ms
+            };
             al.cmp(&bl)
         })
     });

@@ -119,13 +119,29 @@ impl ConnectivityTester {
 
         let mut ok = 0u32;
         let mut latency_sum = 0u64;
-        while let Some(res) = set.join_next().await {
-            if let Ok(Some(ms)) = res {
-                ok += 1;
-                latency_sum += ms as u64;
+        loop {
+            tokio::select! {
+                _ = wait_cancelled(&self.cancel) => {
+                    set.abort_all();
+                    while set.join_next().await.is_some() {}
+                    break;
+                }
+                res = set.join_next() => {
+                    let Some(res) = res else {
+                        break;
+                    };
+                    if let Ok(Some(ms)) = res {
+                        ok += 1;
+                        latency_sum += ms as u64;
+                    }
+                }
             }
         }
-        let avg = if ok > 0 { (latency_sum / ok as u64) as u32 } else { 0 };
+        let avg = if ok > 0 {
+            (latency_sum / ok as u64) as u32
+        } else {
+            0
+        };
         (ok, avg)
     }
 }
@@ -214,8 +230,16 @@ impl StrategyTester for ConnectivityTester {
         // Rank: most endpoints reachable first, ties broken by lower latency.
         results.sort_by(|a, b| {
             b.ok.cmp(&a.ok).then_with(|| {
-                let al = if a.avg_latency_ms == 0 { u32::MAX } else { a.avg_latency_ms };
-                let bl = if b.avg_latency_ms == 0 { u32::MAX } else { b.avg_latency_ms };
+                let al = if a.avg_latency_ms == 0 {
+                    u32::MAX
+                } else {
+                    a.avg_latency_ms
+                };
+                let bl = if b.avg_latency_ms == 0 {
+                    u32::MAX
+                } else {
+                    b.avg_latency_ms
+                };
                 al.cmp(&bl)
             })
         });
@@ -234,6 +258,12 @@ impl StrategyTester for ConnectivityTester {
 
     fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+async fn wait_cancelled(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

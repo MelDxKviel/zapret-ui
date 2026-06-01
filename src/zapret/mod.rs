@@ -1,11 +1,11 @@
 pub mod batparse;
 pub mod catalog;
-pub mod installer;
-pub mod updater;
+pub mod elevation;
 pub mod github;
+pub mod installer;
+pub mod maintenance;
 pub mod paths;
 pub mod process;
 pub mod service;
-pub mod elevation;
 pub mod tester;
-pub mod maintenance;
+pub mod updater;

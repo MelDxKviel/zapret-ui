@@ -226,6 +226,14 @@
   "msg.discord_closed": "Discord закрыт",
   "msg.discord_cache_cleared": "Кэш очищен — удалено папок: {count}",
 
+  "err.elevation_failed": "Не удалось запросить права администратора: {error}",
+  "err.strategy_not_found": "Стратегия {strategy} не найдена",
+  "err.ipset_missing": "ipset-all.txt не найден: {path}",
+  "err.no_strategies_to_test": "Нет установленных стратегий для теста",
+  "err.strategy_test_failed": "Тест стратегий завершился ошибкой: {error}",
+  "err.test_running": "Тест стратегий уже запущен. Отмените его или дождитесь завершения.",
+  "err.stop_bypass_before_test": "Остановите текущий обход перед тестом стратегий.",
+
   "admin.banner_title": "Требуются права администратора",
   "admin.banner_desc": "Запуск обхода, тест стратегий и управление службой Windows требуют прав администратора. Перезапустите приложение от имени администратора, чтобы включить их.",
   "admin.restart_btn": "Перезапустить от администратора",

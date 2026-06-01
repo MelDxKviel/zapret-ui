@@ -1,6 +1,6 @@
+use crate::contracts::RuntimeStatus;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::contracts::RuntimeStatus;
 
 /// Thread-safe store for the latest runtime status (see CLAUDE.md "Status flow").
 #[derive(Clone, Debug)]

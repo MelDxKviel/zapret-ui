@@ -1,15 +1,24 @@
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Strategy {
-    pub id: String,                  // ".bat" filename without extension, e.g. "general (ALT2)"
-    pub display_name: String,        // human-friendly name
+    pub id: String,           // ".bat" filename without extension, e.g. "general (ALT2)"
+    pub display_name: String, // human-friendly name
     pub category: Category,
     pub description: String,
-    pub winws_args: Vec<String>,     // ready-to-run argv for winws.exe (paths already resolved)
+    pub winws_args: Vec<String>, // ready-to-run argv for winws.exe (paths already resolved)
     pub requires_lists: Vec<String>, // hostlist files the strategy references
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Category { Discord, Youtube, Mixed, Mgts, Rostelecom, Mts, Beeline, Other }
+pub enum Category {
+    Discord,
+    Youtube,
+    Mixed,
+    Mgts,
+    Rostelecom,
+    Mts,
+    Beeline,
+    Other,
+}
 
 /// Split a strategy id like `general (ALT2)` into its pretty name (`general`)
 /// and ALT tag (`ALT2`). Returns an empty tag when there are no parentheses.
@@ -224,38 +233,70 @@ pub struct StrategyTestResult {
 #[derive(Clone, Debug)]
 pub enum UiEvent {
     Status(RuntimeStatus),
-    DownloadProgress { bytes: u64, total: Option<u64> },
+    DownloadProgress {
+        bytes: u64,
+        total: Option<u64>,
+    },
     InstallProgress(InstallStage),
     LogLine(String),
-    UpdateAvailable { current: String, latest: String, url: String },
+    UpdateAvailable {
+        current: String,
+        latest: String,
+        url: String,
+    },
     /// The latest upstream version, reported on every update check regardless of
     /// whether it's newer than what's installed — drives the "latest" stat.
     LatestVersion(String),
     Error(String),
     /// A strategy test run has begun; `total` strategies will be tested.
-    TestStarted { total: u32 },
+    TestStarted {
+        total: u32,
+    },
     /// Progress before testing strategy `index` (1-based) of `total`.
-    TestProgress { index: u32, total: u32, strategy: String },
+    TestProgress {
+        index: u32,
+        total: u32,
+        strategy: String,
+    },
     /// One strategy finished testing; its result is ready to display (in test
     /// order, not yet ranked).
     TestResult(StrategyTestResult),
     /// The whole test run finished. `results` is the final ranked list (best
     /// first) and `best` is the auto-selected strategy id (empty when the run
     /// was cancelled or no strategy passed any check).
-    TestComplete { best: String, results: Vec<StrategyTestResult> },
+    TestComplete {
+        best: String,
+        results: Vec<StrategyTestResult>,
+    },
     /// Current state of the zapret filter toggles (game filter + ipset).
     Maintenance(MaintenanceStatus),
     /// Outcome of a one-shot maintenance action, for inline UI feedback.
     /// `kind` is `"ipset"` or `"hosts"`.
-    MaintenanceResult { kind: String, ok: bool, message: String },
+    MaintenanceResult {
+        kind: String,
+        ok: bool,
+        message: String,
+    },
     /// The repo hosts file is out of date — open the review window with its content.
-    HostsContent { content: String, hosts_path: String, hosts_dir: String },
+    HostsContent {
+        content: String,
+        hosts_path: String,
+        hosts_dir: String,
+    },
     /// A newer release of zapret-ui itself is available.
-    AppUpdateAvailable { current: String, latest: String },
+    AppUpdateAvailable {
+        current: String,
+        latest: String,
+    },
     /// zapret-ui is already on the latest release (`latest` echoed for display).
-    AppUpToDate { latest: String },
+    AppUpToDate {
+        latest: String,
+    },
     /// Streaming progress while the new zapret-ui.exe downloads.
-    AppUpdateProgress { bytes: u64, total: Option<u64> },
+    AppUpdateProgress {
+        bytes: u64,
+        total: Option<u64>,
+    },
     /// A self-update check or download failed.
     AppUpdateError(String),
 }
@@ -276,7 +317,18 @@ pub struct RuntimeStatus {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RunningMode { #[default] None, UserProcess, WindowsService }
+pub enum RunningMode {
+    #[default]
+    None,
+    UserProcess,
+    WindowsService,
+}
 
 #[derive(Clone, Debug)]
-pub enum InstallStage { Resolving, Downloading, Extracting, Verifying, Done }
+pub enum InstallStage {
+    Resolving,
+    Downloading,
+    Extracting,
+    Verifying,
+    Done,
+}

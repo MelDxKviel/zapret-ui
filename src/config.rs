@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Theme {
@@ -141,38 +141,44 @@ impl AppConfig {
         }
 
         match std::fs::read_to_string(path) {
-            Ok(content) => {
-                match toml::from_str::<Self>(&content) {
-                    Ok(config) => config,
-                    Err(e) => {
-                        tracing::error!(
+            Ok(content) => match toml::from_str::<Self>(&content) {
+                Ok(config) => config,
+                Err(e) => {
+                    tracing::error!(
                             "Failed to parse config file: {}. Corrupted file will be backed up and replaced with defaults.",
                             e
                         );
-                        
-                        let mut backup_path = path.to_path_buf();
-                        backup_path.set_extension("toml.bak");
-                        
-                        if backup_path.exists() {
-                            let _ = std::fs::remove_file(&backup_path);
-                        }
-                        
-                        if let Err(err) = std::fs::rename(path, &backup_path) {
-                            tracing::error!("Failed to rename corrupted config to {:?}: {}", backup_path, err);
-                        } else {
-                            tracing::info!("Corrupted config backed up to {:?}", backup_path);
-                        }
 
-                        let default_config = Self::default();
-                        if let Err(err) = default_config.save_to_path(path) {
-                            tracing::error!("Failed to save default config after corruption: {}", err);
-                        }
-                        default_config
+                    let mut backup_path = path.to_path_buf();
+                    backup_path.set_extension("toml.bak");
+
+                    if backup_path.exists() {
+                        let _ = std::fs::remove_file(&backup_path);
                     }
+
+                    if let Err(err) = std::fs::rename(path, &backup_path) {
+                        tracing::error!(
+                            "Failed to rename corrupted config to {:?}: {}",
+                            backup_path,
+                            err
+                        );
+                    } else {
+                        tracing::info!("Corrupted config backed up to {:?}", backup_path);
+                    }
+
+                    let default_config = Self::default();
+                    if let Err(err) = default_config.save_to_path(path) {
+                        tracing::error!("Failed to save default config after corruption: {}", err);
+                    }
+                    default_config
                 }
-            }
+            },
             Err(e) => {
-                tracing::error!("Failed to read config file at {:?}: {}. Returning default config.", path, e);
+                tracing::error!(
+                    "Failed to read config file at {:?}: {}. Returning default config.",
+                    path,
+                    e
+                );
                 Self::default()
             }
         }
@@ -183,7 +189,10 @@ impl AppConfig {
         match Self::default_config_path() {
             Ok(path) => Self::load_from_path(&path),
             Err(e) => {
-                tracing::error!("Failed to get default config path: {}. Returning default config.", e);
+                tracing::error!(
+                    "Failed to get default config path: {}. Returning default config.",
+                    e
+                );
                 Self::default()
             }
         }
@@ -192,18 +201,20 @@ impl AppConfig {
     /// Saves the configuration to the specified path atomically.
     pub fn save_to_path(&self, path: &Path) -> anyhow::Result<()> {
         let content = toml::to_string_pretty(self)?;
-        
+
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let parent = path.parent().ok_or_else(|| anyhow::anyhow!("No parent directory for config path"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("No parent directory for config path"))?;
         let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
-        
+
         use std::io::Write;
         temp_file.write_all(content.as_bytes())?;
         temp_file.flush()?;
-        
+
         temp_file.persist(path)?;
         Ok(())
     }
