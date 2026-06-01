@@ -193,7 +193,7 @@ fn collect_file_digests(root: &Path) -> anyhow::Result<Vec<FileDigest>> {
 
     let mut out = Vec::new();
     walk(root, root, &mut out)?;
-    out.sort_by(|a, b| a.rel.to_lowercase().cmp(&b.rel.to_lowercase()));
+    out.sort_by_key(|d| d.rel.to_lowercase());
     Ok(out)
 }
 
@@ -611,7 +611,7 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<Protecte
 /// A "zapret" service that points somewhere else is left untouched, so we never
 /// tear down an unrelated service that merely shares the name. Caller must be
 /// elevated (it's only ever reached from `install_service_protected`).
-async fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) {
+fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) {
     let manager = match ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
     {
         Ok(m) => m,
@@ -646,7 +646,7 @@ async fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) {
             if let Err(e) = service.stop() {
                 tracing::warn!("remove_prior: stopping existing zapret service failed: {e}");
             }
-            wait_for_stopped(&service, std::time::Duration::from_secs(10)).await;
+            wait_for_stopped(&service, std::time::Duration::from_secs(10));
         }
     }
     if let Err(e) = service.delete() {
@@ -655,7 +655,7 @@ async fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) {
         tracing::info!("remove_prior: removed pre-existing zapret service");
     }
     drop(service);
-    wait_for_deletion(&manager, "zapret", std::time::Duration::from_secs(10)).await;
+    wait_for_deletion(&manager, "zapret", std::time::Duration::from_secs(10));
 }
 
 /// Resolve `strategy_id` into a runnable `Strategy` from the verified staged copy
@@ -753,8 +753,7 @@ pub async fn install_service_protected(
     remove_prior_zapret_service(&[
         user_install_dir.to_path_buf(),
         crate::zapret::paths::service_install_dir(),
-    ])
-    .await;
+    ]);
     let protected = prepare_protected_dir(user_install_dir)?;
     // Resolve the exact preset snapshot we just copied and verified. Reading from
     // the staged copy avoids a race where the user-writable .bat changes after
@@ -881,10 +880,7 @@ fn open_service_with_repair(
 }
 
 /// Poll a service's state until it reaches `Stopped` or the timeout elapses.
-async fn wait_for_stopped(
-    service: &windows_service::service::Service,
-    timeout: std::time::Duration,
-) {
+fn wait_for_stopped(service: &windows_service::service::Service, timeout: std::time::Duration) {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match service.query_status() {
@@ -894,12 +890,12 @@ async fn wait_for_stopped(
         if std::time::Instant::now() >= deadline {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
 }
 
 /// Poll the SCM until the named service is gone (post-`delete`) or timeout.
-async fn wait_for_deletion(manager: &ServiceManager, name: &str, timeout: std::time::Duration) {
+fn wait_for_deletion(manager: &ServiceManager, name: &str, timeout: std::time::Duration) {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if manager
@@ -911,7 +907,7 @@ async fn wait_for_deletion(manager: &ServiceManager, name: &str, timeout: std::t
         if std::time::Instant::now() >= deadline {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
 }
 
@@ -953,7 +949,7 @@ impl ServiceCtl for WindowsServiceCtl {
             if let Ok(status) = existing.query_status() {
                 if status.current_state != ServiceState::Stopped {
                     let _ = existing.stop();
-                    wait_for_stopped(&existing, std::time::Duration::from_secs(10)).await;
+                    wait_for_stopped(&existing, std::time::Duration::from_secs(10));
                 }
             }
             existing
@@ -965,8 +961,7 @@ impl ServiceCtl for WindowsServiceCtl {
                 &manager,
                 &self.service_name,
                 std::time::Duration::from_secs(10),
-            )
-            .await;
+            );
         }
 
         // Prepare the launch arguments.
@@ -1011,7 +1006,7 @@ impl ServiceCtl for WindowsServiceCtl {
                     );
                     if marked && attempt < 20 {
                         attempt += 1;
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        std::thread::sleep(std::time::Duration::from_millis(300));
                         continue;
                     }
                     return Err(svc_err("CreateService", e));
@@ -1049,7 +1044,7 @@ impl ServiceCtl for WindowsServiceCtl {
         if let Ok(status) = service.query_status() {
             if status.current_state != ServiceState::Stopped {
                 let _ = service.stop();
-                wait_for_stopped(&service, std::time::Duration::from_secs(10)).await;
+                wait_for_stopped(&service, std::time::Duration::from_secs(10));
             }
         }
 
@@ -1061,8 +1056,7 @@ impl ServiceCtl for WindowsServiceCtl {
             &manager,
             &self.service_name,
             std::time::Duration::from_secs(10),
-        )
-        .await;
+        );
         Ok(())
     }
 
@@ -1156,7 +1150,7 @@ impl ServiceCtl for WindowsServiceCtl {
             if std::time::Instant::now() >= deadline {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
         Ok(())
     }
@@ -1189,7 +1183,7 @@ impl ServiceCtl for WindowsServiceCtl {
             Err(e) => return Err(svc_err("ControlService(STOP)", e)),
         }
         // Wait for it to actually reach Stopped so the UI status is accurate.
-        wait_for_stopped(&service, std::time::Duration::from_secs(10)).await;
+        wait_for_stopped(&service, std::time::Duration::from_secs(10));
         Ok(())
     }
 

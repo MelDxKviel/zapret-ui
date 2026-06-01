@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # PR code runs here; don't leave a usable git credential around for it.
           persist-credentials: false
@@ -72,7 +72,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -120,7 +120,7 @@ jobs:
           Write-Host "SHA256: $hash"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: zapret-ui ${{ github.ref_name }}
           prerelease: ${{ steps.ver.outputs.prerelease }}
