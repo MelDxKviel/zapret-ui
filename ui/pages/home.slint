@@ -364,6 +364,11 @@ export component HomePage inherits Rectangle {
     property <bool> can-engage: root.installed && !root.is_busy && root.has_strategy && root.is_admin;
     // A start/stop is mid-flight: power button shows a spinner + label and locks.
     property <bool> transitioning: root.pending_op == "start" || root.pending_op == "stop";
+    // Onboarding CTAs: the power button doubles as "install the core" before
+    // anything is installed, then "pick a strategy" once it is — so a brand-new
+    // user is always pointed at the obvious next step.
+    property <bool> needs-install: !root.installed;
+    property <bool> needs-strategy: root.installed && !root.has_strategy;
 
     // Uptime is supplied by MainWindow (see `uptime` property above).
     property <int> up-h: floor(root.uptime / 3600);
@@ -592,16 +597,18 @@ export component HomePage inherits Rectangle {
                                     width: 200px;
                                     // Foreground (icon + label) colour, shared by both.
                                     property <color> fg: root.transitioning ? (root.pending_op == "stop" ? #ffffff : ThemePalette.accent-ink)
-                                        : !root.has_strategy ? ThemePalette.text
+                                        : root.needs-install ? ThemePalette.accent-ink
+                                        : root.needs-strategy ? ThemePalette.accent-ink
                                         : root.running ? #ffffff
                                         : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
                                     background: root.transitioning ? (root.pending_op == "stop" ? ThemePalette.danger : ThemePalette.accent)
-                                        : !root.has_strategy ? ThemePalette.surface-2
+                                        : root.needs-install ? (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent)
+                                        : root.needs-strategy ? (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent)
                                         : root.running ? (pbta.has-hover ? ThemePalette.danger-hover : ThemePalette.danger)
                                         : !root.can-engage ? ThemePalette.surface-2
                                         : (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent);
-                                    // Mid-transition the button mutes slightly so it reads as "working".
-                                    opacity: root.transitioning ? 0.78 : 1.0;
+                                    // Mid-transition (or mid-install) the button mutes slightly so it reads as "working".
+                                    opacity: (root.transitioning || (root.needs-install && root.is_busy)) ? 0.78 : 1.0;
                                     animate background, opacity { duration: 120ms; }
                                     Rectangle {
                                         x: 0; width: 1px;
@@ -615,7 +622,8 @@ export component HomePage inherits Rectangle {
                                             tint: pwr.fg;
                                         }
                                         if !root.transitioning : Icon {
-                                            source: !root.has_strategy ? @image-url("../../assets/icons/arrow-right.svg")
+                                            source: root.needs-install ? @image-url("../../assets/icons/download.svg")
+                                                : root.needs-strategy ? @image-url("../../assets/icons/arrow-right.svg")
                                                 : root.running ? @image-url("../../assets/icons/stop.svg")
                                                 : @image-url("../../assets/icons/play.svg");
                                             size: 18px;
@@ -623,7 +631,8 @@ export component HomePage inherits Rectangle {
                                         }
                                         Text {
                                             text: root.transitioning ? (root.pending_op == "stop" ? I18n.t(I18n.lang, "home.btn_stopping") : I18n.t(I18n.lang, "home.btn_starting"))
-                                                : !root.has_strategy ? I18n.t(I18n.lang, "home.btn_pick")
+                                                : root.needs-install ? I18n.t(I18n.lang, "home.btn_install")
+                                                : root.needs-strategy ? I18n.t(I18n.lang, "home.btn_pick")
                                                 : root.running ? I18n.t(I18n.lang, "home.btn_stop")
                                                 : I18n.t(I18n.lang, "home.btn_engage");
                                             font-family: ThemePalette.font-sans;
@@ -635,10 +644,14 @@ export component HomePage inherits Rectangle {
                                         }
                                     }
                                     pbta := TouchArea {
-                                        enabled: !root.transitioning && (!root.has_strategy || root.running || root.can-engage);
+                                        enabled: !root.transitioning && (root.needs-install ? !root.is_busy
+                                            : root.needs-strategy ? true
+                                            : root.running ? true
+                                            : root.can-engage);
                                         mouse-cursor: self.enabled ? MouseCursor.pointer : MouseCursor.default;
                                         clicked => {
-                                            if (!root.has_strategy) { root.pick_strategy_clicked(); }
+                                            if (root.needs-install) { root.install_clicked(); }
+                                            else if (root.needs-strategy) { root.pick_strategy_clicked(); }
                                             else if (root.running) { root.stop_clicked(); }
                                             else { root.start_clicked(); }
                                         }

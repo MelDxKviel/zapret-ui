@@ -6,7 +6,7 @@
 //! checksum and swaps it in for the running binary using the Windows
 //! rename-self trick.
 //!
-//! Like [`crate::zapret::github`], we deliberately avoid `api.github.com`
+//! Like [`crate::zapret::winbundle`], we deliberately avoid `api.github.com`
 //! (blocked by the DPI this tool bypasses). The latest tag is read from the
 //! repository's `releases.atom` feed on `github.com`, and the asset is fetched
 //! from the `github.com/.../releases/download/<tag>/...` URL (which redirects to

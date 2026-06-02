@@ -638,6 +638,7 @@ export component MainWindow inherits Window {
                     log_lines: root.log_lines;
                     log_text: root.log_text;
                     open_file_clicked => { root.open_log_file_clicked(); }
+                    copy_clicked => { root.copy_to_clipboard(root.log_text); }
                     clear_clicked => { root.logs_clear_clicked(); }
                     query_changed(g, l) => { root.logs_query_changed(g, l); }
                 }

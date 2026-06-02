@@ -1,0 +1,43 @@
+name: 💡 Предложить улучшение
+description: Идея новой функции или улучшения
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Спасибо за идею! Опишите её, пожалуйста, подробнее.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Перед отправкой
+      options:
+        - label: Я поискал среди [существующих issue](https://github.com/MelDxKviel/zapret-ui/issues) и не нашёл похожего предложения
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему решает предложение?
+      description: «Мне неудобно, когда…» — опишите ситуацию, а не сразу решение.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+      description: Как, по-вашему, это должно работать?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Какие ещё варианты вы рассматривали?
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Дополнительный контекст
+      description: Скриншоты, примеры, ссылки — всё, что поможет понять идею.
+    validations:
+      required: false
