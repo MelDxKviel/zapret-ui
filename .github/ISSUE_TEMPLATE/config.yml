@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Вопросы и обсуждения
+    url: https://github.com/MelDxKviel/zapret-ui/discussions
+    about: Вопросы по использованию, помощь с подбором стратегии и общее обсуждение — сюда, а не в issue.
+  - name: 🔧 Не помогает ни одна стратегия (проблема с ядром обхода)
+    url: https://github.com/Flowseal/zapret-discord-youtube/issues
+    about: zapret-ui — лишь оболочка. Если ни один пресет не работает у вашего провайдера, проблема обычно в самом zapret — сообщайте в апстрим.
+  - name: 🔒 Сообщить об уязвимости
+    url: https://github.com/MelDxKviel/zapret-ui/security/advisories/new
+    about: Уязвимости НЕ публикуйте в публичных issue — используйте приватные Security Advisories.

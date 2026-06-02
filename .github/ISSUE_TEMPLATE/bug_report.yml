@@ -1,0 +1,100 @@
+name: 🐞 Сообщить об ошибке
+description: Что-то работает не так, как ожидалось
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что нашли время сообщить об ошибке! Заполните форму как можно
+        подробнее — это заметно ускорит разбор.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Перед отправкой
+      options:
+        - label: Я использую последнюю версию из [Releases](https://github.com/MelDxKviel/zapret-ui/releases/latest)
+          required: true
+        - label: Я поискал среди [существующих issue](https://github.com/MelDxKviel/zapret-ui/issues) и не нашёл дубликата
+          required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Версия zapret-ui
+      description: Указана на вкладке «О программе» (About).
+      placeholder: v1.2.3
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Версия Windows
+      description: Например, Windows 11 24H2 (сборка 26100).
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: isp
+    attributes:
+      label: Провайдер (ISP)
+      description: Разным операторам помогают разные стратегии — это важная деталь.
+      placeholder: Ростелеком / МТС / Билайн / ...
+    validations:
+      required: false
+  - type: dropdown
+    id: service
+    attributes:
+      label: Какой сервис не работает?
+      multiple: true
+      options:
+        - Discord
+        - YouTube
+        - Другое (опишите ниже)
+    validations:
+      required: false
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Режим запуска
+      options:
+        - Процесс (START)
+        - Служба Windows (Run as service)
+        - Не дошёл до запуска (ошибка раньше)
+    validations:
+      required: true
+  - type: input
+    id: strategy
+    attributes:
+      label: Какую стратегию использовали?
+      description: Название пресета на вкладке Strategies.
+      placeholder: general (ALT)
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Что произошло?
+      description: Опишите проблему — что ожидали и что получили на самом деле.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги для воспроизведения
+      placeholder: |
+        1. Открыл вкладку ...
+        2. Нажал ...
+        3. ...
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи
+      description: |
+        Вкладка «Логи» в приложении или файл
+        %APPDATA%\zapret-ui\logs\app.log. Текст будет отформатирован как код —
+        обрамлять в ``` не нужно.
+      render: text
+    validations:
+      required: false
