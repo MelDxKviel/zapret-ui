@@ -148,8 +148,6 @@
   "settings.notifications_label": "Уведомления Windows",
   "settings.notifications_hint": "Показывать всплывающее уведомление при запуске и остановке обхода.",
   "settings.group_updates": "Обновления и пути",
-  "settings.autoupdate_label": "Проверять обновления при запуске",
-  "settings.autoupdate_hint": "При запуске сравнивает приложение и ядро zapret с последними релизами на GitHub.",
   "settings.installdir_label": "Папка установки zapret",
   "settings.installdir_hint": "Где хранятся ядро zapret2 и списки хостов. Управляется приложением — откройте для просмотра.",
   "settings.group_dpi": "Тонкая настройка DPI",

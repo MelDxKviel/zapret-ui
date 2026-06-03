@@ -79,7 +79,6 @@ component SettingsRow inherits Rectangle {
 
 export component SettingsPage inherits Rectangle {
     in-out property <bool> autostart;
-    in-out property <bool> autoupdate_check;
     in-out property <bool> minimize_to_tray;
     in-out property <bool> notifications;
     in-out property <bool> autoengage;
@@ -117,7 +116,6 @@ export component SettingsPage inherits Rectangle {
     callback language_changed(string);
     callback notifications_changed(bool);
     callback autostart_changed(bool);
-    callback autoupdate_changed(bool);
     callback tray_changed(bool);
     callback autoengage_changed(bool);
     callback update_hostlists_clicked();
@@ -258,14 +256,6 @@ export component SettingsPage inherits Rectangle {
                                     ? ThemePalette.danger
                                     : ThemePalette.text-3;
                             }
-                        }
-                    }
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.autoupdate_label");
-                        hint: I18n.t(I18n.lang, "settings.autoupdate_hint");
-                        AppSwitch {
-                            checked <=> root.autoupdate_check;
-                            toggled(v) => { root.autoupdate_changed(v); }
                         }
                     }
                     SettingsRow {

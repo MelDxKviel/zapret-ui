@@ -588,7 +588,6 @@ impl App {
         // config on launch (and the install-dir row shows the real path, #24).
         if let Ok(c) = self.config.try_read() {
             ui.set_autostart(c.autostart);
-            ui.set_autoupdate_check(c.autoupdate_check);
             ui.set_minimize_to_tray(c.minimize_to_tray);
             ui.set_autoengage(c.autoengage);
             ui.set_theme(c.theme.slug().into());
@@ -871,12 +870,6 @@ impl App {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_set_autostart(move |on| {
                 let _ = cmd_tx_c.try_send(BackendCmd::SetAutostart(on));
-            });
-        }
-        {
-            let cmd_tx_c = self.cmd_tx.clone();
-            ui.on_set_autoupdate_check(move |on| {
-                let _ = cmd_tx_c.try_send(BackendCmd::SetAutoupdateCheck(on));
             });
         }
         {
@@ -1215,8 +1208,6 @@ impl App {
                                 ui.set_app_update_checked(true);
                                 ui.set_app_update_ok(true);
                                 ui.set_app_update_msg("".into());
-                                // A fresh detection un-dismisses the home banner.
-                                ui.set_app_update_dismissed(false);
                             }
                             UiEvent::AppUpToDate { latest } => {
                                 ui.set_app_has_update(false);
@@ -1266,16 +1257,15 @@ impl App {
 
         // Trigger initial refresh; only check for updates if the user wants it.
         let _ = self.cmd_tx.try_send(BackendCmd::RefreshStatus);
-        let (autoupdate, autoengage, last_strategy) = self
+        // No automatic update checks on launch: the zapret core is installed and
+        // updated only by explicit user action (the Install/Update card on Home),
+        // and zapret-ui's own self-update is manual-only (the Settings → Updates
+        // button). So nothing is pulled in the background here.
+        let (autoengage, last_strategy) = self
             .config
             .try_read()
-            .map(|c| (c.autoupdate_check, c.autoengage, c.last_strategy.clone()))
-            .unwrap_or((true, false, None));
-        if autoupdate {
-            let _ = self.cmd_tx.try_send(BackendCmd::CheckUpdate);
-            // Also check whether zapret-ui itself has a newer release.
-            let _ = self.cmd_tx.try_send(BackendCmd::CheckSelfUpdate);
-        }
+            .map(|c| (c.autoengage, c.last_strategy.clone()))
+            .unwrap_or((false, None));
         // Auto-start the last-used strategy on launch when enabled.
         if autoengage {
             if let Some(id) = last_strategy {
@@ -1646,13 +1636,6 @@ impl App {
                         cfg.autostart = on;
                         if let Err(e) = cfg.save() {
                             tracing::warn!("Failed to persist autostart setting: {}", e);
-                        }
-                    }
-                    BackendCmd::SetAutoupdateCheck(on) => {
-                        let mut cfg = config.write().await;
-                        cfg.autoupdate_check = on;
-                        if let Err(e) = cfg.save() {
-                            tracing::warn!("Failed to persist autoupdate setting: {}", e);
                         }
                     }
                     BackendCmd::SetMinimizeToTray(on) => {

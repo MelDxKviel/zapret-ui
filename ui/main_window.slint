@@ -11,7 +11,6 @@ import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { AdminBanner } from "components/admin_banner.slint";
-import { UpdateBanner } from "components/update_banner.slint";
 import { HomePage } from "pages/home.slint";
 import { StrategiesPage } from "pages/strategies.slint";
 import { TesterPage } from "pages/tester.slint";
@@ -145,8 +144,6 @@ export component MainWindow inherits Window {
     // ── App self-update (zapret-ui itself; set from Rust) ──
     in-out property <bool> app_has_update: false;
     in-out property <string> app_latest_version: "";
-    // UI-local: the user dismissed the home banner (the X). Reset on a new check.
-    in-out property <bool> app_update_dismissed: false;
     in-out property <bool> app_update_checking: false;
     in-out property <bool> app_update_downloading: false;
     in-out property <float> app_update_progress: 0.0;
@@ -188,7 +185,6 @@ export component MainWindow inherits Window {
 
     // ── Settings (UI-local; persisted by Rust where wired) ──
     in-out property <bool> autostart: false;
-    in-out property <bool> autoupdate_check: true;
     in-out property <bool> minimize_to_tray: false;
     in-out property <bool> autoengage: false;
     in-out property <bool> compact: false;
@@ -269,7 +265,6 @@ export component MainWindow inherits Window {
     callback copy_to_clipboard(string);
     callback set_notifications(bool);
     callback set_autostart(bool);
-    callback set_autoupdate_check(bool);
     callback set_minimize_to_tray(bool);
     callback set_autoengage(bool);
     callback set_theme(string);
@@ -503,15 +498,6 @@ export component MainWindow inherits Window {
                     restart_clicked => { root.restart_as_admin(); }
                 }
 
-                // App self-update bar on the dashboard (dismissible via the X).
-                if root.current_page == "home" && root.app_has_update && !root.app_update_dismissed : UpdateBanner {
-                    latest: root.app_latest_version;
-                    downloading: root.app_update_downloading;
-                    progress: root.app_update_progress;
-                    update_clicked => { root.app_update_clicked(); }
-                    dismiss_clicked => { root.app_update_dismissed = true; }
-                }
-
                 // page stack
                 Rectangle {
                     vertical-stretch: 1;
@@ -592,7 +578,6 @@ export component MainWindow inherits Window {
                     width: 100%;
                     height: 100%;
                     autostart <=> root.autostart;
-                    autoupdate_check <=> root.autoupdate_check;
                     minimize_to_tray <=> root.minimize_to_tray;
                     notifications <=> root.notifications;
                     autoengage <=> root.autoengage;
@@ -624,7 +609,6 @@ export component MainWindow inherits Window {
                     language_changed(v) => { root.set_language(v); }
                     notifications_changed(v) => { root.set_notifications(v); }
                     autostart_changed(v) => { root.set_autostart(v); }
-                    autoupdate_changed(v) => { root.set_autoupdate_check(v); }
                     tray_changed(v) => { root.set_minimize_to_tray(v); }
                     autoengage_changed(v) => { root.set_autoengage(v); }
                     theme_changed(v) => { root.set_theme(v); }

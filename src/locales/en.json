@@ -148,8 +148,6 @@
   "settings.notifications_label": "Windows notifications",
   "settings.notifications_hint": "Show a toast when the bypass starts or stops.",
   "settings.group_updates": "Updates & paths",
-  "settings.autoupdate_label": "Check for updates on launch",
-  "settings.autoupdate_hint": "At startup, compares the app and the zapret core to the latest releases on GitHub.",
   "settings.installdir_label": "Zapret installation folder",
   "settings.installdir_hint": "Where the zapret2 core and host lists live. Managed by the app — open to inspect.",
   "settings.group_dpi": "DPI tuning",

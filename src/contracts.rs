@@ -117,8 +117,6 @@ pub enum BackendCmd {
     SetNotifications(bool),
     /// Persist + apply "launch at Windows logon" (writes the HKCU Run key).
     SetAutostart(bool),
-    /// Persist "check for zapret updates on startup".
-    SetAutoupdateCheck(bool),
     /// Persist "minimize to tray on window close".
     SetMinimizeToTray(bool),
     /// The window was just hidden to the tray. Shows the one-time "still running
