@@ -123,6 +123,9 @@
   "simple.chip_core": "ядро",
   "simple.foot_update": "Проверить обновления",
   "simple.foot_advanced": "Расширенные настройки",
+  "simple.upd_checking": "Проверяем обновления…",
+  "simple.upd_available": "Доступно обновление",
+  "simple.upd_none": "Обновлений нет",
 
   "strategies.title": "Стратегии",
   "strategies.subtitle": "Выберите стратегию обхода. Запустите «Тест стратегий», для выбора лучшей",

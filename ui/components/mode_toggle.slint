@@ -1,6 +1,8 @@
 import { ThemePalette } from "../tokens.slint";
 
 // One pill in the mode toggle. Active = filled accent chip with accent ink.
+// The label is a direct child (Slint centres un-positioned children), so it
+// stays centred regardless of the pill width — no layout slack to drift into.
 component ToggleBtn inherits Rectangle {
     in property <string> label;
     in property <bool> active;
@@ -8,26 +10,22 @@ component ToggleBtn inherits Rectangle {
 
     horizontal-stretch: 0;
     height: 30px;
-    width: lay.preferred-width;
+    width: t.preferred-width + 40px;
     border-radius: ThemePalette.r-8;
     background: root.active ? ThemePalette.accent
         : (ta.has-hover ? ThemePalette.surface-hover : transparent);
     animate background { duration: 120ms; }
 
-    lay := HorizontalLayout {
-        padding-left: 20px;
-        padding-right: 20px;
-        Text {
-            text: root.label;
-            vertical-alignment: center;
-            horizontal-alignment: center;
-            font-family: ThemePalette.font-sans;
-            font-size: ThemePalette.fs-13;
-            font-weight: 600;
-            color: root.active ? ThemePalette.accent-ink
-                : (ta.has-hover ? ThemePalette.text : ThemePalette.text-3);
-            animate color { duration: 120ms; }
-        }
+    t := Text {
+        text: root.label;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: ThemePalette.font-sans;
+        font-size: ThemePalette.fs-13;
+        font-weight: 600;
+        color: root.active ? ThemePalette.accent-ink
+            : (ta.has-hover ? ThemePalette.text : ThemePalette.text-3);
+        animate color { duration: 120ms; }
     }
 
     ta := TouchArea {
@@ -37,8 +35,11 @@ component ToggleBtn inherits Rectangle {
 }
 
 // ── Simple / Advanced dashboard mode switch (matches the design's .mode-toggle).
+//    `mode` is a one-way input: the parent owns the state and updates it on
+//    `changed`, so any other control that flips the mode (e.g. the "advanced
+//    settings →" link) keeps this toggle in sync.
 export component ModeToggle inherits Rectangle {
-    in-out property <string> mode: "simple";   // simple | advanced
+    in property <string> mode: "simple";   // simple | advanced
     in property <string> simple-label;
     in property <string> advanced-label;
     callback changed(string);
@@ -46,7 +47,7 @@ export component ModeToggle inherits Rectangle {
     horizontal-stretch: 0;
     vertical-stretch: 0;
     height: 38px;
-    width: row.preferred-width + 6px;
+    width: row.preferred-width;
     border-radius: ThemePalette.r-10;
     border-width: 1px;
     border-color: ThemePalette.border;
@@ -58,12 +59,12 @@ export component ModeToggle inherits Rectangle {
         ToggleBtn {
             label: root.simple-label;
             active: root.mode == "simple";
-            clicked => { root.mode = "simple"; root.changed("simple"); }
+            clicked => { root.changed("simple"); }
         }
         ToggleBtn {
             label: root.advanced-label;
             active: root.mode == "advanced";
-            clicked => { root.mode = "advanced"; root.changed("advanced"); }
+            clicked => { root.changed("advanced"); }
         }
     }
 }

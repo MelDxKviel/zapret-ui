@@ -22,7 +22,10 @@ export component Segmented inherits Rectangle {
 
     horizontal-stretch: 0;
     height: root.seg-height + 4px;
-    width: track.preferred-width + 4px;
+    // Exactly the track's preferred width: any extra here becomes layout slack
+    // the HorizontalLayout distributes into the segments, drifting their labels
+    // off-centre.
+    width: track.preferred-width;
     border-radius: ThemePalette.r-8;
     border-width: 1px;
     border-color: ThemePalette.border;

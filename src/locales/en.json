@@ -123,6 +123,9 @@
   "simple.chip_core": "core",
   "simple.foot_update": "Check for updates",
   "simple.foot_advanced": "Advanced settings",
+  "simple.upd_checking": "Checking for updates…",
+  "simple.upd_available": "Update available",
+  "simple.upd_none": "No updates",
 
   "strategies.title": "Strategies",
   "strategies.subtitle": "Pick a desync preset. If the default doesn't unblock your ISP, try ALT1 → ALT2 → ALT3…",
