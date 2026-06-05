@@ -107,6 +107,12 @@ pub struct AppConfig {
     /// `#[serde(default)]` keeps older configs loadable (defaulting to Simple).
     #[serde(default)]
     pub ui_mode: UiMode,
+    /// Simple-mode memory: the strategy a full auto-engage scan last proved
+    /// working. When set, the dial fast-starts it (and verifies in the
+    /// background) instead of re-scanning; a failed background verify clears it,
+    /// so the next engage runs a full scan. `None` until the first scan succeeds.
+    #[serde(default)]
+    pub simple_last_good: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -135,6 +141,7 @@ impl Default for AppConfig {
             notifications_enabled: true,
             autoengage: false,
             ui_mode: UiMode::default(),
+            simple_last_good: None,
         }
     }
 }

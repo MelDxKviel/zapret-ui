@@ -1375,19 +1375,101 @@ impl App {
                         }
                     }
                     BackendCmd::AutoEngage => {
+                        // Already running? Nothing to do — settle the status (the
+                        // dial is already "active").
+                        let status = runner.detect_running().await;
+                        if status.running_mode != RunningMode::None {
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            continue;
+                        }
+
+                        // ── FAST PATH ──
+                        // A remembered, previously-verified strategy: start it
+                        // immediately (no probing up front, so the dial turns on at
+                        // once) and verify it quietly in the background. If that
+                        // background check fails, we forget the remembered strategy
+                        // so the NEXT engage runs a full scan.
+                        let last_good = { config.read().await.simple_last_good.clone() };
+                        let mut fast_started = false;
+                        if let Some(id) = last_good {
+                            match catalog.by_id(&id) {
+                                Some(strategy) => match runner.start(&strategy).await {
+                                    Ok(pid) => {
+                                        {
+                                            let mut cfg = config.write().await;
+                                            cfg.last_strategy = Some(id.clone());
+                                            let _ = cfg.save();
+                                        }
+                                        notify_bypass(&config, &notified_running, true, Some(&id))
+                                            .await;
+                                        let mut status = runner.detect_running().await;
+                                        status.running_mode = RunningMode::UserProcess;
+                                        status.active_strategy = Some(id.clone());
+                                        status.winws_pid = Some(pid);
+                                        state.set_status(status.clone()).await;
+                                        let _ = event_tx.send(UiEvent::Status(status));
+                                        fast_started = true;
+
+                                        // Background verify (invisible to the user).
+                                        let tester_c = tester.clone();
+                                        let runner_c = runner.clone();
+                                        let config_c = config.clone();
+                                        let id_c = id.clone();
+                                        tokio::spawn(async move {
+                                            match tester_c.verify().await {
+                                                Ok(true) => tracing::info!(
+                                                    "Simple-mode fast strategy verified: {id_c}"
+                                                ),
+                                                Ok(false) => {
+                                                    // Only forget it if it's still the
+                                                    // strategy we started (the user may
+                                                    // have stopped/changed it meanwhile).
+                                                    let s = runner_c.detect_running().await;
+                                                    if s.running_mode != RunningMode::None
+                                                        && s.active_strategy.as_deref()
+                                                            == Some(id_c.as_str())
+                                                    {
+                                                        let mut cfg = config_c.write().await;
+                                                        cfg.simple_last_good = None;
+                                                        let _ = cfg.save();
+                                                        tracing::info!(
+                                                            "Simple-mode strategy {id_c} failed background verify; next engage will full-scan"
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => tracing::warn!(
+                                                    "Background verify error: {e:#}"
+                                                ),
+                                            }
+                                        });
+                                    }
+                                    Err(e) => {
+                                        // Couldn't start the remembered one — forget it
+                                        // and fall through to a full scan.
+                                        tracing::warn!("Fast-engage start failed for {id}: {e:#}");
+                                        let mut cfg = config.write().await;
+                                        cfg.simple_last_good = None;
+                                        let _ = cfg.save();
+                                    }
+                                },
+                                None => {
+                                    // Remembered strategy no longer installed — forget it.
+                                    let mut cfg = config.write().await;
+                                    cfg.simple_last_good = None;
+                                    let _ = cfg.save();
+                                }
+                            }
+                        }
+                        if fast_started {
+                            continue;
+                        }
+
+                        // ── FULL SCAN PATH ──
                         if auto_engaging
                             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                             .is_err()
                         {
-                            // Already engaging — ignore the duplicate click.
-                            continue;
-                        }
-                        // Already running? Nothing to do — settle the status (the
-                        // dial is already "active") and release the flag.
-                        let status = runner.detect_running().await;
-                        if status.running_mode != RunningMode::None {
-                            auto_engaging.store(false, Ordering::SeqCst);
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            // A scan is already running — ignore the duplicate.
                             continue;
                         }
                         // Build the candidate order from the saved last-good +
@@ -1429,6 +1511,9 @@ impl App {
                                     {
                                         let mut cfg = config_c.write().await;
                                         cfg.last_strategy = Some(id.clone());
+                                        // A full scan just proved this one works —
+                                        // remember it so the next engage fast-starts it.
+                                        cfg.simple_last_good = Some(id.clone());
                                         let _ = cfg.save();
                                     }
                                     notify_bypass(&config_c, &notified_c, true, Some(&id)).await;

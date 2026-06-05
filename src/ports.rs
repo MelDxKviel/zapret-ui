@@ -83,6 +83,12 @@ pub trait StrategyTester: Send + Sync {
         on_progress: TestProgressCb,
     ) -> anyhow::Result<AutoEngageOutcome>;
 
+    /// Probe the *currently running* strategy (no start/stop) after a short
+    /// settle wait, returning whether it still restores connectivity. Used by
+    /// simple-mode fast-engage to verify the remembered strategy in the
+    /// background while the user already sees the bypass as on.
+    async fn verify(&self) -> anyhow::Result<bool>;
+
     /// Request cancellation of an in-flight `test_all`.
     fn cancel(&self);
 }

@@ -103,14 +103,18 @@ export component SimpleModePage inherits Rectangle {
 
     property <bool> running: root.status.running_mode != "None";
     property <bool> installed: root.status.installed;
-    property <bool> transitioning: root.pending_op == "start" || root.pending_op == "stop";
+    // Only the *start* transition shows the connecting dial; stopping keeps the
+    // dial "active" until the bypass actually goes down, so shutdown never shows
+    // the "picking a strategy" copy.
+    property <bool> transitioning: root.pending_op == "start";
     // The bypass core is downloading/installing (busy, but not yet installed).
     property <bool> installing: root.is_busy && !root.installed;
 
     // Full state machine (drives copy + the click action).
-    //   error_admin | connecting | active | off_install | error_fail | off
+    //   error_admin | stopping | connecting | active | off_install | error_fail | off
     property <string> state:
         !root.is_admin ? "error_admin"
+        : root.pending_op == "stop" ? "stopping"
         : root.transitioning ? "connecting"
         : root.installing ? "connecting"
         : root.running ? "active"
@@ -118,9 +122,10 @@ export component SimpleModePage inherits Rectangle {
         : root.simple_failed ? "error_fail"
         : "off";
 
-    // Collapse to the dial's four visuals.
+    // Collapse to the dial's visuals.
     property <string> dial-state:
         (root.state == "error_admin" || root.state == "error_fail") ? "error"
+        : root.state == "stopping" ? "stopping"
         : root.state == "connecting" ? "connecting"
         : root.state == "active" ? "active"
         : "off";
@@ -134,6 +139,7 @@ export component SimpleModePage inherits Rectangle {
     // ── copy ──
     property <string> tag:
         root.dial-state == "error" ? I18n.t(I18n.lang, "simple.tag_error")
+        : root.dial-state == "stopping" ? I18n.t(I18n.lang, "simple.tag_stopping")
         : root.dial-state == "connecting" ? I18n.t(I18n.lang, "simple.tag_connecting")
         : root.dial-state == "active" ? I18n.t(I18n.lang, "simple.tag_active")
         : I18n.t(I18n.lang, "simple.tag_off");
@@ -141,6 +147,7 @@ export component SimpleModePage inherits Rectangle {
     property <string> title:
         root.state == "error_admin" ? I18n.t(I18n.lang, "simple.title_noadmin")
         : root.state == "error_fail" ? I18n.t(I18n.lang, "simple.title_error")
+        : root.state == "stopping" ? I18n.t(I18n.lang, "simple.title_stopping")
         : root.state == "connecting" ? (root.installing ? I18n.t(I18n.lang, "simple.title_installing") : I18n.t(I18n.lang, "simple.title_connecting"))
         : root.state == "active" ? I18n.t(I18n.lang, "simple.title_active")
         : root.state == "off_install" ? I18n.t(I18n.lang, "simple.title_install")
@@ -149,6 +156,7 @@ export component SimpleModePage inherits Rectangle {
     property <string> sub:
         root.state == "error_admin" ? I18n.t(I18n.lang, "simple.sub_noadmin")
         : root.state == "error_fail" ? I18n.t(I18n.lang, "simple.sub_error")
+        : root.state == "stopping" ? I18n.t(I18n.lang, "simple.sub_stopping")
         : root.state == "connecting" ? (root.installing
             ? I18n.t(I18n.lang, "simple.sub_installing")
             : I18n.t(I18n.lang, "simple.sub_connecting") + (root.engage_total > 0 ? " (\{root.engage_index}/\{root.engage_total})" : ""))
@@ -186,6 +194,7 @@ export component SimpleModePage inherits Rectangle {
                             tag: root.tag;
                             clicked => {
                                 if (root.state == "error_admin") { root.restart_admin(); }
+                                else if (root.state == "stopping") { /* already winding down */ }
                                 else if (root.state == "connecting") { root.cancel_clicked(); }
                                 else if (root.state == "active") { root.stop_clicked(); }
                                 else if (root.state == "off_install") { root.install_clicked(); }

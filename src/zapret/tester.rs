@@ -353,6 +353,24 @@ impl StrategyTester for ConnectivityTester {
         Ok(AutoEngageOutcome::NoneWorking)
     }
 
+    async fn verify(&self) -> anyhow::Result<bool> {
+        // The bypass is already running the strategy under test — we don't touch
+        // the runner, just let it settle, then probe the same endpoints.
+        self.cancel.store(false, Ordering::SeqCst);
+        let targets = self.load_targets();
+        tokio::time::sleep(INIT_WAIT).await;
+        let (ok, avg) = self.probe(&targets).await;
+        let need = ((targets.len() as u32 * AUTO_ENGAGE_MIN_PCT) / 100).max(1);
+        tracing::info!(
+            "Background verify: {}/{} reachable (need {}), avg {} ms",
+            ok,
+            targets.len(),
+            need,
+            avg
+        );
+        Ok(ok >= need)
+    }
+
     fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
     }

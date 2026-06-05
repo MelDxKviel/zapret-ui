@@ -9,13 +9,14 @@ import { ThemePalette } from "../tokens.slint";
 //    Behaviour (what a click means) lives in the parent — this only renders +
 //    reports `clicked`.
 export component PowerDial inherits Rectangle {
-    in property <string> state: "off";   // off | connecting | active | error
+    in property <string> state: "off";   // off | connecting | active | error | stopping
     in property <string> tag: "";        // localized state badge inside the core
     callback clicked();
 
     property <bool> is-active: root.state == "active";
     property <bool> is-connecting: root.state == "connecting";
     property <bool> is-error: root.state == "error";
+    property <bool> is-stopping: root.state == "stopping";
 
     property <length> dia: 228px;
     width: root.dia;
@@ -67,16 +68,19 @@ export component PowerDial inherits Rectangle {
         animate opacity { duration: 350ms; }
     }
 
-    // ── spinning arc (connecting) ──
-    if root.is-connecting : Image {
+    // ── spinning arc (connecting = lime, stopping = muted, reversed) ──
+    if root.is-connecting || root.is-stopping : Image {
         source: @image-url("../../assets/icons/dial-arc.svg");
         width: 212px;
         height: 212px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        colorize: ThemePalette.accent;
+        colorize: root.is-stopping ? ThemePalette.text-3 : ThemePalette.accent;
         // Per-frame binding (re-evaluates every tick) → smooth continuous spin.
-        transform-rotation: (mod(animation-tick(), 1050ms) / 1050ms) * 360deg;
+        // Stopping spins counter-clockwise so it reads as "winding down".
+        transform-rotation: root.is-stopping
+            ? -(mod(animation-tick(), 1050ms) / 1050ms) * 360deg
+            : (mod(animation-tick(), 1050ms) / 1050ms) * 360deg;
     }
 
     // ── flat pressable core ──
@@ -116,6 +120,7 @@ export component PowerDial inherits Rectangle {
                 letter-spacing: 1.8px;
                 color: root.is-error ? ThemePalette.danger
                     : (root.is-active || root.is-connecting) ? ThemePalette.accent
+                    : root.is-stopping ? ThemePalette.text-3
                     : ThemePalette.text-4;
                 animate color { duration: 300ms; }
             }

@@ -420,7 +420,10 @@ export component MainWindow inherits Window {
                         active: root.current_page == "home";
                         clicked => { root.current_page = "home"; }
                     }
-                    NavItem {
+                    // Strategy selection + testing are advanced-only: in simple
+                    // mode the dial auto-picks, so exposing a separate manual pick
+                    // here just causes "selected one, ran another" confusion.
+                    if root.ui_mode == "advanced" : NavItem {
                         label: I18n.t(I18n.lang, "nav.strategies");
                         icon: @image-url("../assets/icons/strategies.svg");
                         active: root.current_page == "strategies";
@@ -428,7 +431,7 @@ export component MainWindow inherits Window {
                         attention: root.status_installed && !root.has_strategy;
                         clicked => { root.current_page = "strategies"; }
                     }
-                    NavItem {
+                    if root.ui_mode == "advanced" : NavItem {
                         label: I18n.t(I18n.lang, "nav.tester");
                         icon: @image-url("../assets/icons/rocket.svg");
                         active: root.current_page == "tester";
@@ -593,7 +596,15 @@ export component MainWindow inherits Window {
                             mode: root.ui_mode;
                             simple-label: I18n.t(I18n.lang, "mode.simple");
                             advanced-label: I18n.t(I18n.lang, "mode.advanced");
-                            changed(m) => { root.ui_mode = m; root.set_ui_mode(m); }
+                            changed(m) => {
+                                root.ui_mode = m;
+                                root.set_ui_mode(m);
+                                // Strategies/Tester are hidden in simple mode — if
+                                // somehow parked there, fall back to the dashboard.
+                                if (m == "simple" && (root.current_page == "strategies" || root.current_page == "tester")) {
+                                    root.current_page = "home";
+                                }
+                            }
                         }
                     }
 
