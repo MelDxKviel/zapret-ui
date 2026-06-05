@@ -1,6 +1,6 @@
 use crate::contracts::{
-    Category, DiscordCacheResult, GameFilterMode, HostsCheck, InstallStage, IpsetMode,
-    MaintenanceStatus, RunningMode, RuntimeStatus, Strategy, StrategyTestResult,
+    AutoEngageOutcome, Category, DiscordCacheResult, GameFilterMode, HostsCheck, InstallStage,
+    IpsetMode, MaintenanceStatus, RunningMode, RuntimeStatus, Strategy, StrategyTestResult,
 };
 
 pub type ProgressCb = Box<dyn Fn(InstallStage, u64, Option<u64>) + Send + Sync>;
@@ -71,6 +71,17 @@ pub trait StrategyTester: Send + Sync {
         on_each: TestResultCb,
         on_progress: TestProgressCb,
     ) -> anyhow::Result<Vec<StrategyTestResult>>;
+
+    /// Simple-mode auto-engage: try `candidates` in order, starting each and
+    /// probing the target endpoints, and **leave the first one that restores
+    /// connectivity running**. `on_progress` fires before each candidate is
+    /// tried. Honours the same cancel flag as [`Self::cancel`]. On success the
+    /// winning strategy's winws is still running when this returns.
+    async fn auto_engage(
+        &self,
+        candidates: Vec<Strategy>,
+        on_progress: TestProgressCb,
+    ) -> anyhow::Result<AutoEngageOutcome>;
 
     /// Request cancellation of an in-flight `test_all`.
     fn cancel(&self);

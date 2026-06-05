@@ -13,7 +13,9 @@ import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
 import { AdminBanner } from "components/admin_banner.slint";
 import { UpdateBanner } from "components/update_banner.slint";
+import { ModeToggle } from "components/mode_toggle.slint";
 import { HomePage } from "pages/home.slint";
+import { SimpleModePage } from "pages/simple.slint";
 import { StrategiesPage } from "pages/strategies.slint";
 import { TesterPage } from "pages/tester.slint";
 import { SettingsPage } from "pages/settings.slint";
@@ -201,6 +203,16 @@ export component MainWindow inherits Window {
     in-out property <StrategyItem> selected_item;
     in-out property <StrategyItem> active_item;
 
+    // ── Dashboard mode (simple one-button dial vs. full dashboard) ──
+    in-out property <string> ui_mode: "simple";   // "simple" | "advanced"
+    // The last simple-mode auto-engage run failed to find a working strategy
+    // (distinct from a user cancel) — flips the dial to its red error state.
+    in-out property <bool> simple_failed: false;
+    // Progress of the in-flight auto-engage run ("trying 2 of 8"), shown under
+    // the connecting dial. Reset when a run starts.
+    in-out property <int> engage_index: 0;
+    in-out property <int> engage_total: 0;
+
     // ── Settings (UI-local; persisted by Rust where wired) ──
     in-out property <bool> autostart: false;
     in-out property <bool> autoupdate_check: true;
@@ -255,7 +267,11 @@ export component MainWindow inherits Window {
     // from the OS-reported `status_uptime` on every poll, ticked locally each second.
     in-out property <int> uptime: 0;
     changed status_uptime => { root.uptime = root.status_uptime; }
-    changed running => { if (!root.running) { root.uptime = 0; } }
+    changed running => {
+        if (!root.running) { root.uptime = 0; }
+        // The bypass is up — clear any stale simple-mode error.
+        if (root.running) { root.simple_failed = false; }
+    }
     Timer {
         interval: 1s;
         running: root.running;
@@ -265,6 +281,11 @@ export component MainWindow inherits Window {
     // ── Callbacks to Rust ──
     callback start_clicked(string);
     callback stop_clicked();
+    // Simple-mode dial: auto-pick a working strategy / cancel that run.
+    callback auto_engage_clicked();
+    callback cancel_engage_clicked();
+    // Persist the dashboard mode ("simple" | "advanced").
+    callback set_ui_mode(string);
     callback strategy_selected(string);
     callback install_clicked();
     callback check_update_clicked();
@@ -543,10 +564,55 @@ export component MainWindow inherits Window {
                     clip: true;
 
             if root.current_page == "home" : Fade {
-                HomePage {
-                    width: 100%;
-                    height: 100%;
-                    status: root.status;
+                VerticalLayout {
+                    // mode toggle — centred above the dashboard in both sub-modes
+                    HorizontalLayout {
+                        vertical-stretch: 0;
+                        alignment: center;
+                        padding-top: 18px;
+                        padding-bottom: 6px;
+                        ModeToggle {
+                            mode: root.ui_mode;
+                            simple-label: I18n.t(I18n.lang, "mode.simple");
+                            advanced-label: I18n.t(I18n.lang, "mode.advanced");
+                            changed(m) => { root.ui_mode = m; root.set_ui_mode(m); }
+                        }
+                    }
+
+                    // ── simple mode: the one-button power dial ──
+                    if root.ui_mode == "simple" : SimpleModePage {
+                        vertical-stretch: 1;
+                        status: root.status;
+                        chosen_item: root.chosen_item;
+                        is_admin: root.is_admin;
+                        is_busy: root.is_busy;
+                        pending_op: root.pending_op;
+                        simple_failed: root.simple_failed;
+                        engage_index: root.engage_index;
+                        engage_total: root.engage_total;
+                        uptime: root.uptime;
+                        // Kick off auto-pick: lock the UI + mark the connecting
+                        // transition the instant it's clicked.
+                        engage_clicked => {
+                            root.simple_failed = false;
+                            root.engage_index = 0;
+                            root.engage_total = 0;
+                            root.pending_op = "start";
+                            root.is_busy = true;
+                            root.auto_engage_clicked();
+                        }
+                        stop_clicked => { root.pending_op = "stop"; root.is_busy = true; root.stop_clicked(); }
+                        cancel_clicked => { root.cancel_engage_clicked(); }
+                        install_clicked => { root.is_busy = true; root.install_clicked(); }
+                        restart_admin => { root.restart_as_admin(); }
+                        check_update_clicked => { root.check_update_clicked(); }
+                        open_advanced => { root.ui_mode = "advanced"; root.set_ui_mode("advanced"); }
+                    }
+
+                    // ── advanced mode: the full dashboard ──
+                    if root.ui_mode == "advanced" : HomePage {
+                        vertical-stretch: 1;
+                        status: root.status;
                     chosen_item: root.chosen_item;
                     has_strategy: root.has_strategy;
                     is_busy: root.is_busy;
@@ -579,6 +645,7 @@ export component MainWindow inherits Window {
                     service_start_clicked => { root.pending_op = "start"; root.is_busy = true; root.service_start_clicked(); }
                     service_stop_clicked => { root.pending_op = "stop"; root.is_busy = true; root.service_stop_clicked(); }
                     service_remove_clicked => { root.pending_op = "stop"; root.is_busy = true; root.service_remove_clicked(); }
+                    }
                 }
             }
 

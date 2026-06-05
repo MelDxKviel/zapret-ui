@@ -313,6 +313,53 @@ fn main() -> anyhow::Result<()> {
             });
         });
     }
+    // Simple-mode dial (mock): the default dashboard mode. Simulate the
+    // auto-engage flow (connecting → active) so the dial states are previewable.
+    ui.set_ui_mode("simple".into());
+    ui.on_set_ui_mode(|m| println!("UI: Set ui mode: {}", m));
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_auto_engage_clicked(move || {
+            println!("UI: Auto-engage clicked");
+            for step in 1..=3 {
+                let ui_weak = ui_weak.clone();
+                slint::Timer::single_shot(
+                    std::time::Duration::from_millis(600 * step),
+                    move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_engage_index(step as i32);
+                            ui.set_engage_total(3);
+                            if step == 3 {
+                                ui.set_active_item(StrategyItem {
+                                    id: "general (ALT2)".into(),
+                                    display_name: "general (ALT2)".into(),
+                                    category: "".into(),
+                                    description: "".into(),
+                                    pretty: "general".into(),
+                                    alt: "ALT2".into(),
+                                    favorite: false,
+                                });
+                                ui.set_status_running_mode("UserProcess".into());
+                                ui.set_status_active_strategy("general (ALT2)".into());
+                                ui.set_status_winws_pid(4242);
+                                ui.set_is_busy(false);
+                            }
+                        }
+                    },
+                );
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_cancel_engage_clicked(move || {
+            println!("UI: Cancel engage clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_status_running_mode("None".into());
+                ui.set_is_busy(false);
+            }
+        });
+    }
     ui.on_install_clicked(|| {
         println!("UI: Install clicked");
     });
@@ -480,9 +527,10 @@ fn main() -> anyhow::Result<()> {
     ui.on_set_autoengage(|on| println!("UI: Set autoengage: {}", on));
     ui.on_set_theme(|theme| println!("UI: Set theme: {}", theme));
 
-    // Admin gating preview. Flip to `true` to preview the normal (elevated)
-    // state with the banner hidden and the admin-only buttons enabled.
-    ui.set_is_admin(false);
+    // Admin gating preview. Elevated by default so the simple-mode dial shows
+    // its happy path (off → connecting → active); flip to `false` to preview the
+    // admin banner and the dial's "needs administrator" error state.
+    ui.set_is_admin(true);
     ui.on_restart_as_admin(|| println!("UI: Restart as administrator clicked"));
 
     // Mock log lines

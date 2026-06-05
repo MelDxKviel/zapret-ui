@@ -1,6 +1,7 @@
 use crate::config::AppConfig;
 use crate::contracts::{
-    split_alt, BackendCmd, GameFilterMode, InstallStage, IpsetMode, RunningMode, UiEvent,
+    split_alt, AutoEngageOutcome, BackendCmd, GameFilterMode, InstallStage, IpsetMode, RunningMode,
+    UiEvent,
 };
 use crate::ports::{
     Installer, Maintenance, Runner, SelfUpdater, ServiceCtl, StrategyCatalog, StrategyTester,
@@ -69,14 +70,17 @@ fn app_window_icon() -> Option<slint::Image> {
 /// instead of spamming identical notifications.
 async fn notify_bypass(
     config: &Arc<RwLock<AppConfig>>,
-    last: &mut Option<bool>,
+    last: &Arc<tokio::sync::Mutex<Option<bool>>>,
     started: bool,
     strategy: Option<&str>,
 ) {
-    if *last == Some(started) {
-        return;
+    {
+        let mut last = last.lock().await;
+        if *last == Some(started) {
+            return;
+        }
+        *last = Some(started);
     }
-    *last = Some(started);
 
     let (enabled, lang) = {
         let c = config.read().await;
@@ -116,6 +120,7 @@ fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
         BackendCmd::Install
             | BackendCmd::Update
             | BackendCmd::Start(_)
+            | BackendCmd::AutoEngage
             | BackendCmd::Stop
             | BackendCmd::ServiceInstall(_)
             | BackendCmd::ServiceRemove
@@ -123,6 +128,37 @@ fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
             | BackendCmd::ServiceStop
             | BackendCmd::TestStrategies
     )
+}
+
+/// Candidate strategies for auto-engage, ordered so the most likely winner is
+/// tried first: the last-known-good strategy, then starred favorites, then the
+/// remaining catalog order. De-duplicated, preserving first occurrence.
+fn ordered_candidates(
+    catalog: &Arc<dyn StrategyCatalog>,
+    last_strategy: Option<&str>,
+    favorites: &[String],
+) -> Vec<crate::contracts::Strategy> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut push = |out: &mut Vec<crate::contracts::Strategy>, s: crate::contracts::Strategy| {
+        if seen.insert(s.id.clone()) {
+            out.push(s);
+        }
+    };
+    if let Some(id) = last_strategy {
+        if let Some(s) = catalog.by_id(id) {
+            push(&mut out, s);
+        }
+    }
+    for fav in favorites {
+        if let Some(s) = catalog.by_id(fav) {
+            push(&mut out, s);
+        }
+    }
+    for s in catalog.all() {
+        push(&mut out, s);
+    }
+    out
 }
 
 /// Relaunch elevated for a one-shot service task and wait for its result,
@@ -307,6 +343,23 @@ impl App {
             });
         }
 
+        // Persist the dashboard mode (simple dial vs. advanced) when the user
+        // flips the toggle. The Slint side switches the view itself; we just save.
+        {
+            let config = self.config.clone();
+            ui.on_set_ui_mode(move |slug| {
+                let config = config.clone();
+                let mode = crate::config::UiMode::from_slug(&slug);
+                tokio::spawn(async move {
+                    let mut cfg = config.write().await;
+                    cfg.ui_mode = mode;
+                    if let Err(e) = cfg.save() {
+                        tracing::warn!("Failed to persist UI mode: {}", e);
+                    }
+                });
+            });
+        }
+
         // Seed favorites + the last-used strategy from the saved config, so a
         // restart restores the user's selection instead of asking them to pick
         // again. (Both fall back to empty/default if the config can't be read.)
@@ -345,6 +398,7 @@ impl App {
             ui.set_minimize_to_tray(c.minimize_to_tray);
             ui.set_autoengage(c.autoengage);
             ui.set_theme(c.theme.slug().into());
+            ui.set_ui_mode(c.ui_mode.slug().into());
             ui.set_install_dir(c.install_dir().display().to_string().into());
         }
 
@@ -444,6 +498,19 @@ impl App {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_stop_clicked(move || {
                 dispatch(&cmd_tx_c, BackendCmd::Stop);
+            });
+        }
+        // Simple-mode dial: auto-pick a working strategy and turn the bypass on.
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_auto_engage_clicked(move || {
+                dispatch(&cmd_tx_c, BackendCmd::AutoEngage);
+            });
+        }
+        {
+            let cmd_tx_c = self.cmd_tx.clone();
+            ui.on_cancel_engage_clicked(move || {
+                dispatch(&cmd_tx_c, BackendCmd::CancelAutoEngage);
             });
         }
         {
@@ -988,6 +1055,17 @@ impl App {
                                     }
                                 }
                             }
+                            UiEvent::AutoEngageProgress { index, total } => {
+                                ui.set_engage_index(index as i32);
+                                ui.set_engage_total(total as i32);
+                            }
+                            UiEvent::AutoEngageFailed => {
+                                // Distinct from a user cancel: flip the dial to its
+                                // red error state and release the busy lock.
+                                ui.set_simple_failed(true);
+                                ui.set_pending_op("".into());
+                                ui.set_is_busy(false);
+                            }
                             UiEvent::Maintenance(m) => {
                                 ui.set_game_filter(m.game_filter.slug().into());
                                 ui.set_ipset_mode(m.ipset_mode.slug().into());
@@ -1144,11 +1222,27 @@ impl App {
 
         tokio::spawn(async move {
             let test_running = Arc::new(AtomicBool::new(false));
+            // Simple-mode auto-engage in flight. Like `test_running`, this both
+            // rejects conflicting commands and suppresses the periodic status
+            // refresh (which would otherwise briefly flip the dial to "active" as
+            // a candidate is probed). Shared into the spawned auto-engage task.
+            let auto_engaging = Arc::new(AtomicBool::new(false));
             // Last-notified bypass running state, so start/stop toasts fire only on
-            // a real transition (see `notify_bypass`). Seeded to "stopped".
-            let mut notified_running: Option<bool> = Some(false);
+            // a real transition (see `notify_bypass`). Seeded to "stopped". An
+            // `Arc<Mutex>` so the spawned auto-engage task can update it too.
+            let notified_running = Arc::new(tokio::sync::Mutex::new(Some(false)));
             while let Some(cmd) = rx.recv().await {
-                if test_running.load(Ordering::SeqCst) && conflicts_with_running_test(&cmd) {
+                // While a simple-mode auto-engage is probing candidates, skip the
+                // periodic status refresh: catching a candidate's winws mid-run
+                // would briefly flip the dial to "active" and back.
+                if auto_engaging.load(Ordering::SeqCst)
+                    && matches!(cmd, BackendCmd::RefreshStatus)
+                {
+                    continue;
+                }
+                if (test_running.load(Ordering::SeqCst) || auto_engaging.load(Ordering::SeqCst))
+                    && conflicts_with_running_test(&cmd)
+                {
                     let _ =
                         event_tx.send(UiEvent::Error(tr_config(&config, "err.test_running").await));
                     continue;
@@ -1257,7 +1351,7 @@ impl App {
                                     }
                                     notify_bypass(
                                         &config,
-                                        &mut notified_running,
+                                        &notified_running,
                                         true,
                                         Some(&strategy_id),
                                     )
@@ -1280,12 +1374,102 @@ impl App {
                             let _ = event_tx.send(UiEvent::Error(msg));
                         }
                     }
+                    BackendCmd::AutoEngage => {
+                        if auto_engaging
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_err()
+                        {
+                            // Already engaging — ignore the duplicate click.
+                            continue;
+                        }
+                        // Already running? Nothing to do — settle the status (the
+                        // dial is already "active") and release the flag.
+                        let status = runner.detect_running().await;
+                        if status.running_mode != RunningMode::None {
+                            auto_engaging.store(false, Ordering::SeqCst);
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            continue;
+                        }
+                        // Build the candidate order from the saved last-good +
+                        // favorites (the dial handles install on a separate press,
+                        // so an empty catalog here just means nothing is installed).
+                        let (last, favs) = {
+                            let c = config.read().await;
+                            (c.last_strategy.clone(), c.favorites.clone())
+                        };
+                        let candidates = ordered_candidates(&catalog, last.as_deref(), &favs);
+                        if candidates.is_empty() {
+                            auto_engaging.store(false, Ordering::SeqCst);
+                            let _ = event_tx.send(UiEvent::Error(
+                                tr_config(&config, "err.no_strategies_to_test").await,
+                            ));
+                            let _ = event_tx.send(UiEvent::AutoEngageFailed);
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            continue;
+                        }
+
+                        // Run on its own task so the loop keeps servicing commands
+                        // (crucially CancelAutoEngage, which flips the cancel flag).
+                        let tester_c = tester.clone();
+                        let runner_c = runner.clone();
+                        let service_ctl_c = service_ctl.clone();
+                        let state_c = state.clone();
+                        let config_c = config.clone();
+                        let event_tx_c = event_tx.clone();
+                        let auto_engaging_c = auto_engaging.clone();
+                        let notified_c = notified_running.clone();
+                        tokio::spawn(async move {
+                            let ev_progress = event_tx_c.clone();
+                            let on_progress = Box::new(move |index, total, _id: &str| {
+                                let _ = ev_progress
+                                    .send(UiEvent::AutoEngageProgress { index, total });
+                            });
+                            match tester_c.auto_engage(candidates, on_progress).await {
+                                Ok(AutoEngageOutcome::Engaged(id)) => {
+                                    {
+                                        let mut cfg = config_c.write().await;
+                                        cfg.last_strategy = Some(id.clone());
+                                        let _ = cfg.save();
+                                    }
+                                    notify_bypass(&config_c, &notified_c, true, Some(&id)).await;
+                                }
+                                Ok(AutoEngageOutcome::NoneWorking) => {
+                                    let _ = event_tx_c.send(UiEvent::Error(
+                                        tr_config(&config_c, "err.auto_engage_failed").await,
+                                    ));
+                                    let _ = event_tx_c.send(UiEvent::AutoEngageFailed);
+                                }
+                                Ok(AutoEngageOutcome::Cancelled) => {
+                                    // No error — the dial returns to "off" on refresh.
+                                }
+                                Err(e) => {
+                                    let _ = event_tx_c.send(UiEvent::Error(format!("{:#}", e)));
+                                    let _ = event_tx_c.send(UiEvent::AutoEngageFailed);
+                                }
+                            }
+                            // Release the flag before the final refresh so the next
+                            // periodic poll is no longer suppressed.
+                            auto_engaging_c.store(false, Ordering::SeqCst);
+                            refresh_and_broadcast(
+                                &runner_c,
+                                &service_ctl_c,
+                                &state_c,
+                                &event_tx_c,
+                            )
+                            .await;
+                        });
+                    }
+                    BackendCmd::CancelAutoEngage => {
+                        // Same cancel flag as the tester; the in-flight auto_engage
+                        // notices it, stops winws, and resolves to Cancelled.
+                        tester.cancel();
+                    }
                     BackendCmd::Stop => {
                         let status = runner.detect_running().await;
                         if status.running_mode == RunningMode::WindowsService {
                             match service_ctl.stop().await {
                                 Ok(_) => {
-                                    notify_bypass(&config, &mut notified_running, false, None)
+                                    notify_bypass(&config, &notified_running, false, None)
                                         .await;
                                     refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                         .await;
@@ -1300,7 +1484,7 @@ impl App {
                                     )
                                     .await
                                     {
-                                        notify_bypass(&config, &mut notified_running, false, None)
+                                        notify_bypass(&config, &notified_running, false, None)
                                             .await;
                                         refresh_and_broadcast(
                                             &runner,
@@ -1315,7 +1499,7 @@ impl App {
                         } else {
                             match runner.stop().await {
                                 Ok(_) => {
-                                    notify_bypass(&config, &mut notified_running, false, None)
+                                    notify_bypass(&config, &notified_running, false, None)
                                         .await;
                                     refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                         .await;
@@ -1345,7 +1529,7 @@ impl App {
                                 Ok(_) => {
                                     notify_bypass(
                                         &config,
-                                        &mut notified_running,
+                                        &notified_running,
                                         true,
                                         Some(&strategy_id),
                                     )
@@ -1382,7 +1566,7 @@ impl App {
                     }
                     BackendCmd::ServiceRemove => match service_ctl.remove().await {
                         Ok(_) => {
-                            notify_bypass(&config, &mut notified_running, false, None).await;
+                            notify_bypass(&config, &notified_running, false, None).await;
                             refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                         }
                         Err(e) => {
@@ -1400,7 +1584,7 @@ impl App {
                         let _ = runner.stop().await;
                         match service_ctl.start().await {
                             Ok(_) => {
-                                notify_bypass(&config, &mut notified_running, true, None).await;
+                                notify_bypass(&config, &notified_running, true, None).await;
                                 refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                     .await;
                             }
@@ -1416,7 +1600,7 @@ impl App {
                     }
                     BackendCmd::ServiceStop => match service_ctl.stop().await {
                         Ok(_) => {
-                            notify_bypass(&config, &mut notified_running, false, None).await;
+                            notify_bypass(&config, &notified_running, false, None).await;
                             refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
                         }
                         Err(e) => {

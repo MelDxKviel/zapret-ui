@@ -169,6 +169,12 @@ pub enum BackendCmd {
     /// Download the latest zapret-ui.exe, swap it in and relaunch.
     SelfUpdate,
     Start(String /* strategy_id */),
+    /// Simple-mode "just turn it on": try the available strategies in order
+    /// (last-known-good first) and leave the first one that restores
+    /// connectivity running — the user picks nothing.
+    AutoEngage,
+    /// Cancel an in-flight [`BackendCmd::AutoEngage`] (tap the dial again).
+    CancelAutoEngage,
     Stop,
     ServiceInstall(String /* strategy_id */),
     ServiceRemove,
@@ -213,6 +219,18 @@ pub enum BackendCmd {
     SetAutoengage(bool),
     /// Persist the UI theme ("dark" | "light" | "system").
     SetTheme(String),
+}
+
+/// Result of a simple-mode auto-engage run (try strategies in order, keep the
+/// first that works). On `Engaged` the chosen strategy's winws is left running.
+#[derive(Clone, Debug)]
+pub enum AutoEngageOutcome {
+    /// A working strategy was found and is now running (its id is returned).
+    Engaged(String),
+    /// Every candidate was tried and none restored connectivity.
+    NoneWorking,
+    /// The user cancelled before a working strategy was found.
+    Cancelled,
 }
 
 /// Outcome of testing a single strategy against the target endpoints.
@@ -268,6 +286,15 @@ pub enum UiEvent {
         best: String,
         results: Vec<StrategyTestResult>,
     },
+    /// Progress of a simple-mode auto-engage run: trying candidate `index` of
+    /// `total`. Drives the "(2/8)" hint under the connecting dial.
+    AutoEngageProgress {
+        index: u32,
+        total: u32,
+    },
+    /// A simple-mode auto-engage run finished without finding a working strategy
+    /// (distinct from a user cancel) — flips the dial to its error state.
+    AutoEngageFailed,
     /// Current state of the zapret filter toggles (game filter + ipset).
     Maintenance(MaintenanceStatus),
     /// Outcome of a one-shot maintenance action, for inline UI feedback.

@@ -17,3 +17,6 @@ desktop.ini
 
 # Claude local state
 .claude/
+
+design/
+mcps/

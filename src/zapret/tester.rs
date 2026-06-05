@@ -18,13 +18,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::contracts::{Strategy, StrategyTestResult};
+use crate::contracts::{AutoEngageOutcome, Strategy, StrategyTestResult};
 use crate::ports::{Runner, StrategyTester, TestProgressCb, TestResultCb};
 
 /// How long to let winws settle before probing (matches the upstream 5s wait).
 const INIT_WAIT: Duration = Duration::from_secs(4);
 /// Per-endpoint request timeout.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Auto-engage acceptance threshold: a candidate is considered "good enough" to
+/// keep when at least this percentage of the target endpoints became reachable.
+/// Without any bypass only a couple of the targets respond, so a simple majority
+/// reliably distinguishes a working strategy from a non-working one.
+const AUTO_ENGAGE_MIN_PCT: u32 = 50;
 
 /// Built-in endpoints used when `utils/targets.txt` is absent. Kept in sync
 /// with the upstream defaults (HTTPS targets only).
@@ -254,6 +259,98 @@ impl StrategyTester for ConnectivityTester {
         }
 
         Ok(results)
+    }
+
+    async fn auto_engage(
+        &self,
+        candidates: Vec<Strategy>,
+        on_progress: TestProgressCb,
+    ) -> anyhow::Result<AutoEngageOutcome> {
+        self.cancel.store(false, Ordering::SeqCst);
+
+        let targets = self.load_targets();
+        let total = candidates.len() as u32;
+        // Minimum reachable endpoints to accept a candidate (floored majority).
+        let need = ((targets.len() as u32 * AUTO_ENGAGE_MIN_PCT) / 100).max(1);
+        tracing::info!(
+            "Auto-engage starting: {} candidate(s), need ≥{}/{} endpoints",
+            total,
+            need,
+            targets.len()
+        );
+
+        // Best-scoring candidate so far — a fallback when nothing meets the
+        // threshold but something is at least partially reachable.
+        let mut best: Option<(u32, usize)> = None;
+
+        for (i, strategy) in candidates.iter().enumerate() {
+            if self.cancel.load(Ordering::SeqCst) {
+                let _ = self.runner.stop().await;
+                return Ok(AutoEngageOutcome::Cancelled);
+            }
+            let index = i as u32 + 1;
+            on_progress(index, total, &strategy.id);
+            tracing::info!("[{index}/{total}] auto-engage trying: {}", strategy.id);
+
+            let _ = self.runner.stop().await;
+            if let Err(e) = self.runner.start(strategy).await {
+                tracing::warn!("[{index}/{total}] failed to start {}: {e}", strategy.id);
+                continue;
+            }
+            // Let the desync engine settle (honouring cancellation).
+            if !wait_cancellable(INIT_WAIT, &self.cancel).await {
+                let _ = self.runner.stop().await;
+                return Ok(AutoEngageOutcome::Cancelled);
+            }
+            let (ok, avg) = self.probe(&targets).await;
+            if self.cancel.load(Ordering::SeqCst) {
+                let _ = self.runner.stop().await;
+                return Ok(AutoEngageOutcome::Cancelled);
+            }
+            tracing::info!(
+                "[{index}/{total}] {} → {}/{} reachable, avg {} ms",
+                strategy.id,
+                ok,
+                targets.len(),
+                avg
+            );
+
+            if ok >= need {
+                // Good enough — leave winws running with this strategy.
+                tracing::info!(
+                    "Auto-engage selected: {} ({}/{})",
+                    strategy.id,
+                    ok,
+                    targets.len()
+                );
+                return Ok(AutoEngageOutcome::Engaged(strategy.id.clone()));
+            }
+            if best.is_none_or(|(bok, _)| ok > bok) {
+                best = Some((ok, i));
+            }
+            let _ = self.runner.stop().await;
+        }
+
+        // Nothing crossed the threshold. If a candidate had partial reachability,
+        // fall back to the best one (better than leaving the user with nothing).
+        if let Some((bok, idx)) = best {
+            if bok > 0 {
+                let strategy = &candidates[idx];
+                let _ = self.runner.stop().await;
+                if self.runner.start(strategy).await.is_ok() {
+                    tracing::info!(
+                        "Auto-engage fell back to best candidate: {} ({}/{})",
+                        strategy.id,
+                        bok,
+                        targets.len()
+                    );
+                    return Ok(AutoEngageOutcome::Engaged(strategy.id.clone()));
+                }
+            }
+        }
+
+        let _ = self.runner.stop().await;
+        Ok(AutoEngageOutcome::NoneWorking)
     }
 
     fn cancel(&self) {

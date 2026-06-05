@@ -1,0 +1,69 @@
+import { ThemePalette } from "../tokens.slint";
+
+// One pill in the mode toggle. Active = filled accent chip with accent ink.
+component ToggleBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    horizontal-stretch: 0;
+    height: 30px;
+    width: lay.preferred-width;
+    border-radius: ThemePalette.r-8;
+    background: root.active ? ThemePalette.accent
+        : (ta.has-hover ? ThemePalette.surface-hover : transparent);
+    animate background { duration: 120ms; }
+
+    lay := HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            font-family: ThemePalette.font-sans;
+            font-size: ThemePalette.fs-13;
+            font-weight: 600;
+            color: root.active ? ThemePalette.accent-ink
+                : (ta.has-hover ? ThemePalette.text : ThemePalette.text-3);
+            animate color { duration: 120ms; }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── Simple / Advanced dashboard mode switch (matches the design's .mode-toggle).
+export component ModeToggle inherits Rectangle {
+    in-out property <string> mode: "simple";   // simple | advanced
+    in property <string> simple-label;
+    in property <string> advanced-label;
+    callback changed(string);
+
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    height: 38px;
+    width: row.preferred-width + 6px;
+    border-radius: ThemePalette.r-10;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    background: ThemePalette.surface;
+
+    row := HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        ToggleBtn {
+            label: root.simple-label;
+            active: root.mode == "simple";
+            clicked => { root.mode = "simple"; root.changed("simple"); }
+        }
+        ToggleBtn {
+            label: root.advanced-label;
+            active: root.mode == "advanced";
+            clicked => { root.mode = "advanced"; root.changed("advanced"); }
+        }
+    }
+}

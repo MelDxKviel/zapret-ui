@@ -1,0 +1,245 @@
+import { ThemePalette, AppStatus, StrategyItem } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
+import { PowerDial } from "../components/power_dial.slint";
+
+// One live-detail chip (strategy / time / core) shown only while active.
+component Chip inherits Rectangle {
+    in property <string> k;
+    in property <string> v;
+    in property <bool> dot: false;
+    horizontal-stretch: 0;
+    height: 32px;
+    width: clay.preferred-width;
+    border-radius: ThemePalette.r-full;
+    background: ThemePalette.surface;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    clay := HorizontalLayout {
+        padding-left: 13px;
+        padding-right: 13px;
+        spacing: 8px;
+        alignment: center;
+        if root.dot : VerticalLayout {
+            alignment: center;
+            Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: ThemePalette.accent; }
+        }
+        Text {
+            text: root.k;
+            vertical-alignment: center;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-10;
+            color: ThemePalette.text-4;
+            letter-spacing: 0.6px;
+        }
+        Text {
+            text: root.v;
+            vertical-alignment: center;
+            font-family: ThemePalette.font-sans;
+            font-size: ThemePalette.fs-12;
+            font-weight: 600;
+            color: ThemePalette.text;
+        }
+    }
+}
+
+// Low-emphasis text link in the footer.
+component LinkBtn inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    horizontal-stretch: 0;
+    height: 28px;
+    width: l.preferred-width;
+    border-radius: ThemePalette.r-6;
+    background: ta.has-hover ? ThemePalette.surface : transparent;
+    animate background { duration: 120ms; }
+    l := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            font-family: ThemePalette.font-sans;
+            font-size: ThemePalette.fs-12;
+            color: ta.has-hover ? ThemePalette.text : ThemePalette.text-3;
+            animate color { duration: 120ms; }
+        }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// ── The simple-mode stage: one power dial that auto-picks a working strategy.
+export component SimpleModePage inherits Rectangle {
+    in property <AppStatus> status;
+    in property <StrategyItem> chosen_item;
+    in property <bool> is_admin;
+    in property <bool> is_busy;
+    in property <string> pending_op;      // "start" | "stop" | ""
+    in property <bool> simple_failed;
+    in property <int> engage_index;
+    in property <int> engage_total;
+    in property <int> uptime;
+
+    callback engage_clicked();
+    callback stop_clicked();
+    callback cancel_clicked();
+    callback install_clicked();
+    callback restart_admin();
+    callback check_update_clicked();
+    callback open_advanced();
+
+    background: transparent;
+
+    property <bool> running: root.status.running_mode != "None";
+    property <bool> installed: root.status.installed;
+    property <bool> transitioning: root.pending_op == "start" || root.pending_op == "stop";
+    // The bypass core is downloading/installing (busy, but not yet installed).
+    property <bool> installing: root.is_busy && !root.installed;
+
+    // Full state machine (drives copy + the click action).
+    //   error_admin | connecting | active | off_install | error_fail | off
+    property <string> state:
+        !root.is_admin ? "error_admin"
+        : root.transitioning ? "connecting"
+        : root.installing ? "connecting"
+        : root.running ? "active"
+        : !root.installed ? "off_install"
+        : root.simple_failed ? "error_fail"
+        : "off";
+
+    // Collapse to the dial's four visuals.
+    property <string> dial-state:
+        (root.state == "error_admin" || root.state == "error_fail") ? "error"
+        : root.state == "connecting" ? "connecting"
+        : root.state == "active" ? "active"
+        : "off";
+
+    // ── uptime (chip) ──
+    property <int> up-h: floor(root.uptime / 3600);
+    property <int> up-m: floor((root.uptime - root.up-h * 3600) / 60);
+    property <int> up-s: root.uptime - root.up-h * 3600 - root.up-m * 60;
+    pure function pad2(n: int) -> string { return n < 10 ? "0\{n}" : "\{n}"; }
+
+    // ── copy ──
+    property <string> tag:
+        root.dial-state == "error" ? I18n.t(I18n.lang, "simple.tag_error")
+        : root.dial-state == "connecting" ? I18n.t(I18n.lang, "simple.tag_connecting")
+        : root.dial-state == "active" ? I18n.t(I18n.lang, "simple.tag_active")
+        : I18n.t(I18n.lang, "simple.tag_off");
+
+    property <string> title:
+        root.state == "error_admin" ? I18n.t(I18n.lang, "simple.title_noadmin")
+        : root.state == "error_fail" ? I18n.t(I18n.lang, "simple.title_error")
+        : root.state == "connecting" ? (root.installing ? I18n.t(I18n.lang, "simple.title_installing") : I18n.t(I18n.lang, "simple.title_connecting"))
+        : root.state == "active" ? I18n.t(I18n.lang, "simple.title_active")
+        : root.state == "off_install" ? I18n.t(I18n.lang, "simple.title_install")
+        : I18n.t(I18n.lang, "simple.title_off");
+
+    property <string> sub:
+        root.state == "error_admin" ? I18n.t(I18n.lang, "simple.sub_noadmin")
+        : root.state == "error_fail" ? I18n.t(I18n.lang, "simple.sub_error")
+        : root.state == "connecting" ? (root.installing
+            ? I18n.t(I18n.lang, "simple.sub_installing")
+            : I18n.t(I18n.lang, "simple.sub_connecting") + (root.engage_total > 0 ? " (\{root.engage_index}/\{root.engage_total})" : ""))
+        : root.state == "active" ? I18n.t(I18n.lang, "simple.sub_active")
+        : root.state == "off_install" ? I18n.t(I18n.lang, "simple.sub_install")
+        : I18n.t(I18n.lang, "simple.sub_off");
+
+    VerticalLayout {
+        // ── stage (vertically centred) ──
+        Rectangle {
+            vertical-stretch: 1;
+            HorizontalLayout {
+                alignment: center;
+                VerticalLayout {
+                    width: 480px;
+                    alignment: center;
+                    spacing: 28px;
+
+                    // dial
+                    HorizontalLayout {
+                        alignment: center;
+                        PowerDial {
+                            state: root.dial-state;
+                            tag: root.tag;
+                            clicked => {
+                                if (root.state == "error_admin") { root.restart_admin(); }
+                                else if (root.state == "connecting") { root.cancel_clicked(); }
+                                else if (root.state == "active") { root.stop_clicked(); }
+                                else if (root.state == "off_install") { root.install_clicked(); }
+                                else { root.engage_clicked(); }
+                            }
+                        }
+                    }
+
+                    // headline + sub
+                    VerticalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: root.title;
+                            horizontal-alignment: center;
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-28;
+                            font-weight: 600;
+                            color: ThemePalette.text;
+                        }
+                        Text {
+                            text: root.sub;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-14;
+                            color: ThemePalette.text-2;
+                        }
+                    }
+
+                    // live chips — active only
+                    if root.state == "active" : HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        Chip {
+                            dot: true;
+                            k: I18n.t(I18n.lang, "simple.chip_strategy");
+                            v: root.chosen_item.alt != ""
+                                ? root.chosen_item.pretty + " (" + root.chosen_item.alt + ")"
+                                : (root.chosen_item.pretty != "" ? root.chosen_item.pretty : "—");
+                        }
+                        Chip {
+                            k: I18n.t(I18n.lang, "simple.chip_time");
+                            v: root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s);
+                        }
+                        Chip {
+                            k: I18n.t(I18n.lang, "simple.chip_core");
+                            v: root.status.installed_version != "" ? root.status.installed_version : "—";
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── low-priority footer ──
+        HorizontalLayout {
+            alignment: center;
+            spacing: 14px;
+            padding-top: 8px;
+            padding-bottom: 22px;
+            VerticalLayout {
+                alignment: center;
+                LinkBtn {
+                    label: I18n.t(I18n.lang, "simple.foot_update");
+                    clicked => { root.check_update_clicked(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle { width: 3px; height: 3px; border-radius: 1.5px; background: ThemePalette.text-4; }
+            }
+            VerticalLayout {
+                alignment: center;
+                LinkBtn {
+                    label: I18n.t(I18n.lang, "simple.foot_advanced") + " →";
+                    clicked => { root.open_advanced(); }
+                }
+            }
+        }
+    }
+}

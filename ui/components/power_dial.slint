@@ -1,0 +1,129 @@
+import { ThemePalette } from "../tokens.slint";
+
+// ── The one simple-mode control: a big round power button that is, at once, the
+//    status indicator and the action. Four visual states drive ring + glyph:
+//      off        → grey ring, muted glyph
+//      connecting → spinning lime arc, lime glyph
+//      active     → closed lime ring + soft glow, lime glyph
+//      error      → red ring, red glyph
+//    Behaviour (what a click means) lives in the parent — this only renders +
+//    reports `clicked`.
+export component PowerDial inherits Rectangle {
+    in property <string> state: "off";   // off | connecting | active | error
+    in property <string> tag: "";        // localized state badge inside the core
+    callback clicked();
+
+    property <bool> is-active: root.state == "active";
+    property <bool> is-connecting: root.state == "connecting";
+    property <bool> is-error: root.state == "error";
+
+    property <length> dia: 228px;
+    width: root.dia;
+    height: root.dia;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    // Shared glyph / tag colour by state.
+    property <color> mark-color:
+        root.is-error ? ThemePalette.danger
+        : (root.is-active || root.is-connecting) ? ThemePalette.accent
+        : ThemePalette.text-3;
+
+    // ── soft glow halo (active only) ──
+    Rectangle {
+        width: 248px;
+        height: 248px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: ThemePalette.accent-soft;
+        opacity: root.is-active ? 1.0 : 0.0;
+        animate opacity { duration: 500ms; }
+    }
+
+    // ── ring track (always) ──
+    Rectangle {
+        width: 212px;
+        height: 212px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        border-width: 3px;
+        border-color: ThemePalette.border;
+        background: transparent;
+    }
+
+    // ── closed coloured ring (active / error) ──
+    Rectangle {
+        width: 212px;
+        height: 212px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        border-width: 3px;
+        border-color: root.is-error ? ThemePalette.danger : ThemePalette.accent;
+        background: transparent;
+        opacity: (root.is-active || root.is-error) ? 1.0 : 0.0;
+        animate opacity { duration: 350ms; }
+    }
+
+    // ── spinning arc (connecting) ──
+    if root.is-connecting : Image {
+        source: @image-url("../../assets/icons/dial-arc.svg");
+        width: 212px;
+        height: 212px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: ThemePalette.accent;
+        // Per-frame binding (re-evaluates every tick) → smooth continuous spin.
+        transform-rotation: (mod(animation-tick(), 1050ms) / 1050ms) * 360deg;
+    }
+
+    // ── flat pressable core ──
+    core := Rectangle {
+        width: 184px;
+        height: 184px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: root.is-active
+            ? @radial-gradient(circle, ThemePalette.accent-soft 0%, ThemePalette.bg-2 86%)
+            : @radial-gradient(circle, ThemePalette.surface-2 0%, ThemePalette.bg-2 88%);
+        border-width: 1px;
+        border-color: root.is-active ? ThemePalette.accent-line
+            : root.is-error ? ThemePalette.danger-line
+            : (cta.has-hover ? ThemePalette.border-strong : ThemePalette.border);
+        animate background, border-color { duration: 300ms; }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 12px;
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: @image-url("../../assets/icons/power.svg");
+                    width: 52px;
+                    height: 52px;
+                    colorize: root.mark-color;
+                    animate colorize { duration: 300ms; }
+                }
+            }
+            Text {
+                text: root.tag;
+                horizontal-alignment: center;
+                font-family: ThemePalette.font-mono;
+                font-size: 10px;
+                letter-spacing: 1.8px;
+                color: root.is-error ? ThemePalette.danger
+                    : (root.is-active || root.is-connecting) ? ThemePalette.accent
+                    : ThemePalette.text-4;
+                animate color { duration: 300ms; }
+            }
+        }
+    }
+
+    cta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
