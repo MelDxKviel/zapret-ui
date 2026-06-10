@@ -1,10 +1,10 @@
-use crate::contracts::{RunningMode, RuntimeStatus, Strategy, UiEvent};
+use crate::contracts::{RunningMode, RuntimeStatus, Strategy};
 use crate::ports::Runner;
 use std::path::PathBuf;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 extern "system" {
@@ -13,17 +13,15 @@ extern "system" {
 
 pub struct ProcessRunner {
     install_dir: PathBuf,
-    event_tx: broadcast::Sender<UiEvent>,
     active_child: Arc<Mutex<Option<tokio::process::Child>>>,
     active_strategy_id: Arc<Mutex<Option<String>>>,
     service_name: String,
 }
 
 impl ProcessRunner {
-    pub fn new(install_dir: PathBuf, event_tx: broadcast::Sender<UiEvent>) -> Self {
+    pub fn new(install_dir: PathBuf) -> Self {
         Self {
             install_dir,
-            event_tx,
             active_child: Arc::new(Mutex::new(None)),
             active_strategy_id: Arc::new(Mutex::new(None)),
             service_name: "zapret".to_string(),
@@ -157,9 +155,11 @@ impl Runner for ProcessRunner {
             .id()
             .ok_or_else(|| anyhow::anyhow!("Failed to get process ID"))?;
 
-        // Spawn stdout log capturer
+        // winws output goes through `tracing` (target "winws") rather than a raw
+        // UiEvent::LogLine: that stamps every line with a local timestamp +
+        // level, persists it to app.log and still reaches the in-app Logs page
+        // via the UiWriter broadcast.
         if let Some(stdout) = child.stdout.take() {
-            let event_tx = self.event_tx.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut buf = Vec::new();
@@ -168,16 +168,16 @@ impl Runner for ProcessRunner {
                         break;
                     }
                     let line = String::from_utf8_lossy(&buf);
-                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
-                    let _ = event_tx.send(UiEvent::LogLine(trimmed));
+                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+                    if !trimmed.is_empty() {
+                        tracing::info!(target: "winws", "{}", trimmed);
+                    }
                     buf.clear();
                 }
             });
         }
 
-        // Spawn stderr log capturer
         if let Some(stderr) = child.stderr.take() {
-            let event_tx = self.event_tx.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut buf = Vec::new();
@@ -186,8 +186,10 @@ impl Runner for ProcessRunner {
                         break;
                     }
                     let line = String::from_utf8_lossy(&buf);
-                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
-                    let _ = event_tx.send(UiEvent::LogLine(trimmed));
+                    let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+                    if !trimmed.is_empty() {
+                        tracing::warn!(target: "winws", "{}", trimmed);
+                    }
                     buf.clear();
                 }
             });

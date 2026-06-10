@@ -100,11 +100,12 @@ export component LogsPage inherits Rectangle {
                             padding-right: 12px;
                             spacing: 10px;
 
-                            // streaming stat
+                            // streaming stat — elides first when the toolbar
+                            // gets tight, so the filter and autoscroll controls
+                            // never fall off the card edge.
                             HorizontalLayout {
                                 horizontal-stretch: 0;
                                 spacing: 6px;
-                                alignment: start;
                                 VerticalLayout {
                                     alignment: center;
                                     Rectangle {
@@ -118,6 +119,8 @@ export component LogsPage inherits Rectangle {
                                     font-size: ThemePalette.fs-11;
                                     color: ThemePalette.text-3;
                                     vertical-alignment: center;
+                                    min-width: 0px;
+                                    overflow: elide;
                                 }
                             }
 
@@ -125,7 +128,7 @@ export component LogsPage inherits Rectangle {
                             // with the window instead of a fixed pinned-right box.
                             AppInput {
                                 horizontal-stretch: 1;
-                                min-width: 160px;
+                                min-width: 110px;
                                 field-height: 28px;
                                 font-size: ThemePalette.fs-12;
                                 icon: @image-url("../../assets/icons/search.svg");
@@ -137,7 +140,7 @@ export component LogsPage inherits Rectangle {
                             // level filter
                             Segmented {
                                 seg-height: 22px;
-                                seg-pad: 8px;
+                                seg-pad: 6px;
                                 seg-fs: ThemePalette.fs-11;
                                 selected: root.level;
                                 options: [

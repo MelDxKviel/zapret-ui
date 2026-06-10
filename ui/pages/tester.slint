@@ -45,16 +45,21 @@ component ResultRow inherits Rectangle {
             }
         }
 
-        // name + alt
+        // name + alt — fixed *preferred* width keeps the bar column aligned
+        // across rows, but the cell may shrink (name and chip elide) on narrow
+        // windows instead of pushing the action button out of the card.
         VerticalLayout {
             horizontal-stretch: 0;
-            width: 200px;
+            min-width: 150px;
+            preferred-width: 200px;
+            max-width: 200px;
             alignment: center;
             spacing: 3px;
             HorizontalLayout {
                 spacing: 6px;
-                alignment: start;
                 Text {
+                    horizontal-stretch: 0;
+                    min-width: 40px;
                     text: root.item.pretty;
                     font-family: ThemePalette.font-mono;
                     font-size: ThemePalette.fs-13;
@@ -65,31 +70,44 @@ component ResultRow inherits Rectangle {
                 }
                 if root.item.alt != "" : Rectangle {
                     horizontal-stretch: 0;
-                    width: chip.preferred-width + 10px;
+                    max-width: 110px;
                     height: 17px;
                     border-radius: ThemePalette.r-4;
                     background: ThemePalette.surface-2;
-                    chip := Text {
-                        text: root.item.alt;
-                        font-family: ThemePalette.font-mono;
-                        font-size: ThemePalette.fs-10;
-                        color: ThemePalette.text-3;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    HorizontalLayout {
+                        padding-left: 5px;
+                        padding-right: 5px;
+                        Text {
+                            text: root.item.alt;
+                            font-family: ThemePalette.font-mono;
+                            font-size: ThemePalette.fs-10;
+                            color: ThemePalette.text-3;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
                     }
                 }
+                // Soak up leftover width so name + chip stay hugged together.
+                Rectangle { horizontal-stretch: 1; min-width: 0px; }
             }
             if root.item.is_best : Text {
                 text: I18n.t(I18n.lang, "tester.best_label");
                 font-family: ThemePalette.font-mono;
                 font-size: ThemePalette.fs-10;
                 color: ThemePalette.accent;
+                overflow: elide;
             }
         }
 
-        // score bar
+        // score bar — the min fits the full stats line ("12/12 доступно ·
+        // 1569 мс"); the layout drains the stretchy column to its minimum
+        // before touching the others, so a smaller min would elide the stats
+        // long before the name column gives up its slack.
         VerticalLayout {
             horizontal-stretch: 1;
+            min-width: 150px;
+            preferred-width: 240px;
             alignment: center;
             spacing: 5px;
             Rectangle {
@@ -109,11 +127,13 @@ component ResultRow inherits Rectangle {
                 }
             }
             Text {
-                text: "\{root.item.ok} / \{root.item.total}" + I18n.t(I18n.lang, "tester.reachable")
-                    + (root.item.latency > 0 ? "  ·  \{root.item.latency}" + I18n.t(I18n.lang, "tester.ms_avg") : "");
+                text: "\{root.item.ok}/\{root.item.total}" + I18n.t(I18n.lang, "tester.reachable")
+                    + (root.item.latency > 0 ? " · \{root.item.latency}" + I18n.t(I18n.lang, "tester.ms_avg") : "");
                 font-family: ThemePalette.font-mono;
                 font-size: ThemePalette.fs-10;
                 color: ThemePalette.text-3;
+                min-width: 0px;
+                overflow: elide;
             }
         }
 

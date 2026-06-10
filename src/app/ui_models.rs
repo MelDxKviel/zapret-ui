@@ -54,20 +54,26 @@ pub(super) fn rebuild_strategies(ui: &MainWindow, catalog: &Arc<dyn StrategyCata
     ui.set_strategies(Rc::new(slint::VecModel::from(items)).into());
 }
 
-/// Split a raw log line into (timestamp, level, message) for coloured display.
+/// Split a raw log line into (timestamp, level, message) for display.
+///
+/// Tracing lines look like `2026-06-10T14:23:45.123+03:00  INFO winws: …`.
+/// For display the timestamp is reduced to `HH:MM:SS` (it is already local
+/// time — see `log::init_logging`; the full date stays in app.log) and the
+/// `zapret_ui::…::module:` target is shortened to its last segment.
 fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
     let mut rest = raw.trim_end();
     let mut timestamp = String::new();
     let mut level = String::new();
 
-    // Leading ISO-8601 timestamp, e.g. 2026-05-23T16:14:34.808277Z
+    // Leading ISO-8601 timestamp: `2026-06-10T14:23:45.123+03:00` (local) or
+    // the legacy UTC `2026-05-23T16:14:34.808277Z` form.
     if let Some((first, tail)) = rest.split_once(char::is_whitespace) {
-        let looks_ts = first.len() >= 20
+        let looks_ts = first.len() >= 19
             && first.as_bytes()[0].is_ascii_digit()
             && first.contains('T')
-            && first.ends_with('Z');
+            && (first.ends_with('Z') || first.contains('+') || first.matches('-').count() > 2);
         if looks_ts {
-            timestamp = first.to_string();
+            timestamp = first.get(11..19).unwrap_or(first).to_string();
             rest = tail.trim_start();
         }
     }
@@ -90,11 +96,21 @@ fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
         }
     }
 
+    // `zapret_ui::zapret::tester: …` → `tester: …`. Only for lines that came
+    // from tracing (a level was parsed), so plain text is never mangled.
+    let message = match rest.split_once(' ') {
+        Some((head, tail)) if !level.is_empty() && head.ends_with(':') && head.contains("::") => {
+            let short = head.trim_end_matches(':').rsplit("::").next().unwrap_or(head);
+            format!("{short}: {}", tail.trim_start())
+        }
+        _ => rest.to_string(),
+    };
+
     LogLineItem {
         line_no: no as i32,
         timestamp: timestamp.into(),
         level: level.into(),
-        message: rest.to_string().into(),
+        message: message.into(),
     }
 }
 
@@ -114,6 +130,8 @@ fn line_passes(raw: &str, grep: &str, level: &str) -> bool {
 
 /// Re-parse + re-filter the whole buffer into the Slint `log_lines` model.
 pub(super) fn rebuild_logs(ui: &MainWindow) {
+    use std::fmt::Write as _;
+
     let (grep, level) = LOG_FILTER.with(|f| f.borrow().clone());
     let (items, text) = LOG_BUF.with(|b| {
         let mut items: Vec<LogLineItem> = Vec::new();
@@ -123,9 +141,20 @@ pub(super) fn rebuild_logs(ui: &MainWindow) {
             .iter()
             .filter(|raw| line_passes(raw, &grep, &level))
         {
-            items.push(parse_log_line(items.len() + 1, raw));
-            text.push_str(raw);
+            // The terminal mirror shows the prettified form (`HH:MM:SS LEVEL
+            // source: message`), not the raw line with its full ISO timestamp
+            // and module path.
+            let item = parse_log_line(items.len() + 1, raw);
+            if !item.timestamp.is_empty() {
+                text.push_str(item.timestamp.as_str());
+                text.push(' ');
+            }
+            if !item.level.is_empty() {
+                let _ = write!(text, "{:<5} ", item.level.as_str());
+            }
+            text.push_str(item.message.as_str());
             text.push('\n');
+            items.push(item);
         }
         (items, text)
     });

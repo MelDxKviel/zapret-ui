@@ -540,31 +540,35 @@ fn main() -> anyhow::Result<()> {
         level: lvl.into(),
         message: msg.into(),
     };
+    // Mirrors what `rebuild_logs` produces: short local time, padded level,
+    // shortened tracing target (`app:`) or `winws:` for core output.
     let log_lines = vec![
-        mk(
-            1,
-            "2026-05-23T16:14:34.808277Z",
-            "INFO",
-            "zapret-ui started in UI-only mode",
-        ),
+        mk(1, "16:14:34", "INFO", "app: zapret-ui started in UI-only mode"),
         mk(
             2,
-            "2026-05-23T16:14:34.812000Z",
+            "16:14:34",
             "INFO",
-            "Mock installer ready, version v1.0.0-mock",
+            "installer: Mock installer ready, version v1.0.0-mock",
+        ),
+        mk(3, "16:14:34", "INFO", "catalog: 3 strategies loaded from catalog"),
+        mk(
+            4,
+            "16:14:35",
+            "INFO",
+            "winws: Loaded 94 hosts from lists\\list-general.txt",
         ),
         mk(
-            3,
-            "2026-05-23T16:14:34.815000Z",
-            "INFO",
-            "3 strategies loaded from catalog",
+            5,
+            "16:14:35",
+            "WARN",
+            "winws: windivert: hostlist list-exclude-user.txt is empty",
         ),
     ];
     // The LogsPage renders the selectable terminal from `log_text`, so seed it too
     // (not just `log_lines`) — otherwise the preview terminal stays empty.
     let log_text: String = log_lines
         .iter()
-        .map(|l| format!("{} {} {}", l.timestamp, l.level, l.message))
+        .map(|l| format!("{} {:<5} {}", l.timestamp, l.level, l.message))
         .collect::<Vec<_>>()
         .join("\n");
     ui.set_log_lines(Rc::new(slint::VecModel::from(log_lines)).into());
@@ -624,6 +628,24 @@ fn main() -> anyhow::Result<()> {
                 }
             });
         });
+    }
+
+    // Preview hooks for screenshot-driven UI iteration: jump straight to a page
+    // and/or force a window size, e.g.
+    //   ZAPRET_UI_PREVIEW_PAGE=tester ZAPRET_UI_PREVIEW_SIZE=940x900 cargo run --example ui_only
+    // The tester page also gets its mock results filled in so the ranked list renders.
+    if let Ok(page) = std::env::var("ZAPRET_UI_PREVIEW_PAGE") {
+        if page == "tester" {
+            ui.invoke_test_start_clicked();
+        }
+        ui.set_current_page(page.into());
+    }
+    if let Ok(size) = std::env::var("ZAPRET_UI_PREVIEW_SIZE") {
+        if let Some((w, h)) = size.split_once('x') {
+            if let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>()) {
+                ui.window().set_size(slint::LogicalSize::new(w, h));
+            }
+        }
     }
 
     ui.run()?;

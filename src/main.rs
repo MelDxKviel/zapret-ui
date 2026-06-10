@@ -261,7 +261,6 @@ async fn main() -> anyhow::Result<()> {
     ));
     let runner = Arc::new(zapret::process::ProcessRunner::new(
         install_dir.clone(),
-        event_tx.clone(),
     ));
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
     let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(

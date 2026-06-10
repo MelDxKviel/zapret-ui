@@ -50,11 +50,28 @@ pub fn init_logging(
         tx,
     };
 
-    let subscriber = Registry::default()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(fmt::layer().with_writer(ui_writer).with_ansi(false));
-
-    tracing::subscriber::set_global_default(subscriber)?;
+    // Timestamps in local wall-clock time: the Logs page slices HH:MM:SS
+    // straight out of the line, so it must not be UTC. If the local offset
+    // can't be determined, fall back to the default UTC timer.
+    match fmt::time::OffsetTime::local_rfc_3339() {
+        Ok(timer) => {
+            let subscriber = Registry::default()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(
+                    fmt::layer()
+                        .with_writer(ui_writer)
+                        .with_ansi(false)
+                        .with_timer(timer),
+                );
+            tracing::subscriber::set_global_default(subscriber)?;
+        }
+        Err(_) => {
+            let subscriber = Registry::default()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(fmt::layer().with_writer(ui_writer).with_ansi(false));
+            tracing::subscriber::set_global_default(subscriber)?;
+        }
+    }
 
     Ok(guard)
 }

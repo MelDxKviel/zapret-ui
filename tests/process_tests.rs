@@ -7,12 +7,37 @@ pub mod ports;
 #[path = "../src/zapret/mod.rs"]
 pub mod zapret;
 
-use crate::contracts::{Category, RunningMode, Strategy, UiEvent};
+use crate::contracts::{Category, RunningMode, Strategy};
 use crate::ports::{Runner, ServiceCtl};
 use crate::zapret::elevation::is_elevated;
 use crate::zapret::process::ProcessRunner;
 use crate::zapret::service::WindowsServiceCtl;
-use tokio::sync::broadcast;
+
+/// `MakeWriter` that forwards every formatted tracing line into a channel, so
+/// the test can assert on what `ProcessRunner` logs (winws stdout/stderr go
+/// through `tracing` with target "winws", not through a UiEvent).
+#[derive(Clone)]
+struct ChanWriter(tokio::sync::mpsc::UnboundedSender<String>);
+
+impl std::io::Write for ChanWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let line = String::from_utf8_lossy(buf).trim_end().to_string();
+        if !line.is_empty() {
+            let _ = self.0.send(line);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ChanWriter {
+    type Writer = ChanWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
 
 #[tokio::test]
 async fn test_process_runner_lifecycle() {
@@ -44,11 +69,15 @@ fn main() {
         .expect("Failed to run rustc to compile stub");
     assert!(status.success(), "Stub compilation failed");
 
-    // Initialize broadcast channel for UI events
-    let (event_tx, mut event_rx) = broadcast::channel(16);
+    // Capture tracing output (winws stdout/stderr is logged there).
+    let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let _ = tracing_subscriber::fmt()
+        .with_writer(ChanWriter(log_tx))
+        .with_ansi(false)
+        .try_init();
 
     // Use a unique service name to avoid colliding with running service on developer's machine
-    let runner = ProcessRunner::new(temp_dir.path().to_path_buf(), event_tx)
+    let runner = ProcessRunner::new(temp_dir.path().to_path_buf())
         .with_service_name("zapret-test-service".to_string());
 
     // Test detect_running before start
@@ -84,20 +113,21 @@ fn main() {
     assert_eq!(running_status.running_mode, RunningMode::UserProcess);
     assert_eq!(running_status.winws_pid, Some(pid));
 
-    // Capture logs from the broadcast channel. Each `recv` is bounded by a
-    // timeout so a missing event can never hang the test indefinitely.
-    let mut logs = Vec::new();
-    while logs.len() < 2 {
-        match tokio::time::timeout(std::time::Duration::from_secs(3), event_rx.recv()).await {
-            Ok(Ok(UiEvent::LogLine(line))) => logs.push(line),
-            Ok(Ok(_)) => {}
+    // Capture the stub's output from the tracing channel. Each `recv` is
+    // bounded by a timeout so a missing line can never hang the test.
+    let stdout_line = |l: &String| l.contains("winws") && l.contains("Hello from winws stub stdout!");
+    let stderr_line = |l: &String| l.contains("winws") && l.contains("Hello from winws stub stderr!");
+    let mut logs: Vec<String> = Vec::new();
+    while !(logs.iter().any(stdout_line) && logs.iter().any(stderr_line)) {
+        match tokio::time::timeout(std::time::Duration::from_secs(3), log_rx.recv()).await {
+            Ok(Some(line)) => logs.push(line),
             // Channel closed or timed out — stop waiting.
-            Ok(Err(_)) | Err(_) => break,
+            _ => break,
         }
     }
 
-    assert!(logs.contains(&"Hello from winws stub stdout!".to_string()));
-    assert!(logs.contains(&"Hello from winws stub stderr!".to_string()));
+    assert!(logs.iter().any(stdout_line), "stdout line missing: {logs:?}");
+    assert!(logs.iter().any(stderr_line), "stderr line missing: {logs:?}");
 
     // Stop runner
     runner.stop().await.expect("Failed to stop process");
