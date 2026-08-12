@@ -973,6 +973,12 @@ impl App {
                                 ui.set_has_update(true);
                                 ui.set_latest_version(latest.into());
                             }
+                            UiEvent::UpToDate { latest } => {
+                                ui.set_has_update(false);
+                                if !latest.is_empty() {
+                                    ui.set_latest_version(latest.into());
+                                }
+                            }
                             UiEvent::LatestVersion(latest) => {
                                 ui.set_latest_version(latest.into());
                             }
@@ -1273,6 +1279,12 @@ impl App {
                         match installer.install_or_update(progress_cb).await {
                             Ok(_) => {
                                 let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
+                                // We just installed whatever latest is — always
+                                // drop the "update available" arrow, even if
+                                // version.txt is missing so the read is empty.
+                                let installed =
+                                    installer.installed_version().await.unwrap_or_default();
+                                let _ = event_tx.send(UiEvent::UpToDate { latest: installed });
                                 refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                     .await;
                             }
@@ -1297,6 +1309,11 @@ impl App {
                                         latest,
                                         url: "https://github.com/Flowseal/zapret-discord-youtube/releases/latest".to_string(),
                                     });
+                                } else {
+                                    // Up to date: clear any stale "update available"
+                                    // notification (e.g. left over after the user just
+                                    // updated the core). Without this the flag is sticky.
+                                    let _ = event_tx.send(UiEvent::UpToDate { latest });
                                 }
                             }
                             Err(e) => {

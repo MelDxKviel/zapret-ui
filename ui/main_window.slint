@@ -269,7 +269,7 @@ export component MainWindow inherits Window {
         installed: root.status_installed,
         installed_version: root.status_installed_version,
         latest_version: root.latest_version,
-        update_available: root.has_update,
+        update_available: root.has_update && root.latest_version != "" && root.status_installed_version != root.latest_version,
         running_mode: root.status_running_mode,
         active_strategy: root.status_active_strategy,
         winws_pid: root.status_winws_pid,

@@ -265,6 +265,12 @@ pub enum UiEvent {
     /// The latest upstream version, reported on every update check regardless of
     /// whether it's newer than what's installed — drives the "latest" stat.
     LatestVersion(String),
+    /// The installed zapret core is already current (`latest` echoed for display).
+    /// Clears any stale "update available" notification — the counterpart to
+    /// `UpdateAvailable`, mirroring `AppUpToDate` for the app self-update.
+    UpToDate {
+        latest: String,
+    },
     Error(String),
     /// A strategy test run has begun; `total` strategies will be tested.
     TestStarted {
