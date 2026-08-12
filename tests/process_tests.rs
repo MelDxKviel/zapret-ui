@@ -78,7 +78,8 @@ fn main() {
 
     // Use a unique service name to avoid colliding with running service on developer's machine
     let runner = ProcessRunner::new(temp_dir.path().to_path_buf())
-        .with_service_name("zapret-test-service".to_string());
+        .with_service_name("zapret-test-service".to_string())
+        .with_tcp_preflight(false);
 
     // Test detect_running before start
     let initial_status = runner.detect_running().await;

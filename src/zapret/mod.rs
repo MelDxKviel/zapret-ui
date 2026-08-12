@@ -7,5 +7,6 @@ pub mod maintenance;
 pub mod paths;
 pub mod process;
 pub mod service;
+pub mod tcp;
 pub mod tester;
 pub mod updater;

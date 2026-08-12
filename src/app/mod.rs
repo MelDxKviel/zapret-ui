@@ -875,7 +875,9 @@ impl App {
                     _ => {}
                 }
 
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                // Tray events are human-speed input; a 200 ms poll keeps clicks
+                // responsive while cutting this background thread's wakeups 4x.
+                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         });
 
@@ -1155,7 +1157,9 @@ impl App {
             tokio::spawn(async move {
                 loop {
                     let _ = cmd_tx_c.try_send(BackendCmd::RefreshStatus);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    // Commands already push immediate status updates. This poll is
+                    // only a safety net for external process/service changes.
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                 }
             });
         }

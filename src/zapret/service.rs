@@ -742,6 +742,10 @@ pub async fn install_service_protected(
     strategy_id: &str,
 ) -> anyhow::Result<()> {
     check_elevation()?;
+    // Fail before tearing down a working prior service if the machine-wide
+    // prerequisite cannot be applied. The later install/start calls are cheap
+    // no-ops after this succeeds because the preflight is process-cached.
+    crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
     // Tear down any prior "zapret" service of ours first. This matters for two
     // reasons, both of which otherwise make a reinstall silently fail:
     //   1. A service still running out of the protected dir locks its winws.exe,
@@ -915,6 +919,9 @@ fn wait_for_deletion(manager: &ServiceManager, name: &str, timeout: std::time::D
 impl ServiceCtl for WindowsServiceCtl {
     async fn install(&self, strategy: &Strategy) -> anyhow::Result<()> {
         check_elevation()?;
+        // Mirrors service.bat's `:tcp_enable`, which upstream runs before
+        // creating the zapret service.
+        crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
 
         let winws_path = self.get_winws_path();
         if !winws_path.exists() {
@@ -1062,6 +1069,7 @@ impl ServiceCtl for WindowsServiceCtl {
 
     async fn start(&self) -> anyhow::Result<()> {
         check_elevation()?;
+        crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
 
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
             .map_err(|e| svc_err("OpenSCManager(start)", e))?;

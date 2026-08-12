@@ -2,6 +2,7 @@ use crate::contracts::{RunningMode, RuntimeStatus, Strategy};
 use crate::ports::Runner;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use sysinfo::System;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -15,6 +16,9 @@ pub struct ProcessRunner {
     install_dir: PathBuf,
     active_child: Arc<Mutex<Option<tokio::process::Child>>>,
     active_strategy_id: Arc<Mutex<Option<String>>>,
+    active_started_at: Arc<Mutex<Option<Instant>>>,
+    process_snapshot: Arc<Mutex<System>>,
+    tcp_preflight: bool,
     service_name: String,
 }
 
@@ -24,12 +28,22 @@ impl ProcessRunner {
             install_dir,
             active_child: Arc::new(Mutex::new(None)),
             active_strategy_id: Arc::new(Mutex::new(None)),
+            active_started_at: Arc::new(Mutex::new(None)),
+            process_snapshot: Arc::new(Mutex::new(System::new())),
+            tcp_preflight: true,
             service_name: "zapret".to_string(),
         }
     }
 
     pub fn with_service_name(mut self, name: String) -> Self {
         self.service_name = name;
+        self
+    }
+
+    /// Disable the machine-wide TCP prerequisite for isolated process tests.
+    /// Production runners keep it enabled by default.
+    pub fn with_tcp_preflight(mut self, enabled: bool) -> Self {
+        self.tcp_preflight = enabled;
         self
     }
 
@@ -114,6 +128,13 @@ impl ProcessRunner {
 #[async_trait::async_trait]
 impl Runner for ProcessRunner {
     async fn start(&self, strategy: &Strategy) -> anyhow::Result<u32> {
+        // Upstream's general*.bat calls `service.bat status_zapret` before every
+        // launch. That routine enables TCP timestamps; starting winws directly
+        // without reproducing it can leave otherwise-valid strategies broken.
+        if self.tcp_preflight {
+            crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+        }
+
         let mut active_child = self.active_child.lock().await;
         // If already running, stop it first
         if active_child.is_some() {
@@ -197,6 +218,7 @@ impl Runner for ProcessRunner {
 
         *active_child = Some(child);
         *self.active_strategy_id.lock().await = Some(strategy.id.to_string());
+        *self.active_started_at.lock().await = Some(Instant::now());
 
         Ok(pid)
     }
@@ -204,6 +226,7 @@ impl Runner for ProcessRunner {
     async fn stop(&self) -> anyhow::Result<()> {
         let active_child_opt = self.active_child.lock().await.take();
         *self.active_strategy_id.lock().await = None;
+        *self.active_started_at.lock().await = None;
 
         if let Some(mut child) = active_child_opt {
             let pid = child.id();
@@ -277,7 +300,8 @@ impl Runner for ProcessRunner {
 
         let mut mode = RunningMode::None;
         let mut winws_pid = None;
-        let active_strategy_id = self.active_strategy_id.lock().await.clone();
+        let mut uptime_secs = None;
+        let mut spawned_child_exited = false;
 
         // 1. Most reliable: the process we spawned ourselves. Trust our handle.
         {
@@ -288,13 +312,24 @@ impl Runner for ProcessRunner {
                         // Still running.
                         mode = RunningMode::UserProcess;
                         winws_pid = child.id();
+                        uptime_secs = self
+                            .active_started_at
+                            .lock()
+                            .await
+                            .as_ref()
+                            .map(|started| started.elapsed().as_secs());
                     }
                     _ => {
                         // Exited or errored: drop the dead handle.
                         *guard = None;
+                        spawned_child_exited = true;
                     }
                 }
             }
+        }
+        if spawned_child_exited {
+            *self.active_strategy_id.lock().await = None;
+            *self.active_started_at.lock().await = None;
         }
 
         // 2. Windows service.
@@ -302,48 +337,42 @@ impl Runner for ProcessRunner {
             mode = RunningMode::WindowsService;
         }
 
-        // 3. Fallback: a winws.exe that belongs to *our* install (started by the
-        //    .bat / a previous session). Match by path so an unrelated winws.exe
-        //    elsewhere doesn't get reported as our running bypass.
-        if mode == RunningMode::None {
+        // 3. Take at most one process snapshot when we need fallback detection or
+        //    OS-derived uptime. While our own child is alive, the monotonic start
+        //    time above avoids enumerating every Windows process on each poll.
+        if mode == RunningMode::None || uptime_secs.is_none() {
             let owned = self.owned_winws_paths();
-            let mut sys = System::new();
+            let mut sys = self.process_snapshot.lock().await;
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            let mut first_owned = None;
+            let mut exact_pid = None;
             for (pid, process) in sys.processes() {
                 if Self::is_owned_winws(process, &owned) {
-                    winws_pid = Some(pid.as_u32());
-                    mode = RunningMode::UserProcess;
-                    break;
+                    let observed = (pid.as_u32(), process.run_time());
+                    first_owned.get_or_insert(observed);
+                    if Some(pid.as_u32()) == winws_pid {
+                        exact_pid = Some(observed);
+                        break;
+                    }
                 }
+            }
+            let observed = exact_pid.or(first_owned);
+            if mode == RunningMode::None {
+                if let Some((pid, run_time)) = observed {
+                    winws_pid = Some(pid);
+                    mode = RunningMode::UserProcess;
+                    uptime_secs = Some(run_time);
+                }
+            } else if uptime_secs.is_none() {
+                uptime_secs = observed.map(|(_, run_time)| run_time);
             }
         }
 
+        let active_strategy_id = self.active_strategy_id.lock().await.clone();
         let detected_strategy = if mode == RunningMode::None {
             None
         } else {
             active_strategy_id
-        };
-
-        // Real uptime of the bypass: read the winws process run-time from the OS so
-        // it reflects the actual bypass session (survives app restarts / page nav).
-        let uptime_secs = if mode == RunningMode::None {
-            None
-        } else {
-            let owned = self.owned_winws_paths();
-            let mut sys = System::new();
-            sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-            let mut found = None;
-            for (pid, process) in sys.processes() {
-                if Self::is_owned_winws(process, &owned) {
-                    // Prefer the exact pid we identified; fall back to any owned winws.
-                    if Some(pid.as_u32()) == winws_pid {
-                        found = Some(process.run_time());
-                        break;
-                    }
-                    found.get_or_insert(process.run_time());
-                }
-            }
-            found
         };
 
         RuntimeStatus {
