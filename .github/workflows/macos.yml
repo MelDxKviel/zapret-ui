@@ -26,6 +26,8 @@ jobs:
       - name: Install pinned Rust
         run: rustup show
       - uses: swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Verify native Apple Silicon runner
         run: test "$(uname -m)" = arm64
       - name: Lint

@@ -929,11 +929,11 @@ impl App {
                                 ui.set_status_uptime(status.uptime_secs.unwrap_or(0) as i32);
 
                                 // Resolve the running strategy to a display item.
-                                let (pretty, alt) = split_alt(&active);
                                 let display = catalog
                                     .by_id(&active)
                                     .map(|s| s.display_name)
                                     .unwrap_or_else(|| active.clone());
+                                let (pretty, alt) = split_alt(&display);
                                 let desc = catalog
                                     .by_id(&active)
                                     .map(|s| s.description)

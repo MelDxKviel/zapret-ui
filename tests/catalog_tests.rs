@@ -4,12 +4,13 @@ pub mod contracts;
 #[path = "../src/ports.rs"]
 pub mod ports;
 
-pub mod zapret {
-    #[path = "../../src/zapret/batparse.rs"]
-    pub mod batparse;
+#[path = "../src/zapret/batparse.rs"]
+pub mod batparse;
+#[path = "../src/zapret/catalog.rs"]
+pub mod catalog;
 
-    #[path = "../../src/zapret/catalog.rs"]
-    pub mod catalog;
+pub mod zapret {
+    pub use crate::{batparse, catalog};
 }
 
 use ports::StrategyCatalog;
