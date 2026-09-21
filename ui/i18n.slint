@@ -11,6 +11,7 @@
 //  config ("ru" by default) and updated by the Settings → Language control.
 // ──────────────────────────────────────────────────────────────────────────
 export global I18n {
+    in-out property <bool> macos: false;
     // Active language code: "ru" | "en".
     in-out property <string> lang: "ru";
     // Translate a key for the given language. `lang` is threaded through purely

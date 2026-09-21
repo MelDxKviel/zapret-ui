@@ -55,6 +55,15 @@ pub struct ConnectivityTester {
 }
 
 impl ConnectivityTester {
+    async fn stop_for_test(&self) -> anyhow::Result<()> {
+        let result = self.runner.stop().await;
+        if cfg!(target_os = "macos") {
+            result
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn new(runner: Arc<dyn Runner>, install_dir: PathBuf) -> Self {
         Self {
             runner,
@@ -182,8 +191,13 @@ impl StrategyTester for ConnectivityTester {
             tracing::info!("[{index}/{total}] testing strategy: {}", strategy.id);
 
             // Clean slate, then start this preset.
-            let _ = self.runner.stop().await;
+            self.stop_for_test().await?;
             if let Err(e) = self.runner.start(strategy).await {
+                if e.downcast_ref::<crate::contracts::AuthorizationCancelled>()
+                    .is_some()
+                {
+                    return Err(e);
+                }
                 tracing::warn!("[{index}/{total}] failed to start {}: {e}", strategy.id);
                 let result = StrategyTestResult {
                     id: strategy.id.clone(),
@@ -201,13 +215,13 @@ impl StrategyTester for ConnectivityTester {
             // Let the desync engine settle (honour cancellation while we wait).
             let waited = wait_cancellable(INIT_WAIT, &self.cancel).await;
             if !waited {
-                let _ = self.runner.stop().await;
+                self.stop_for_test().await?;
                 tracing::info!("Strategy test cancelled by user");
                 break;
             }
 
             let (ok, avg_latency_ms) = self.probe(&targets).await;
-            let _ = self.runner.stop().await;
+            self.stop_for_test().await?;
 
             tracing::info!(
                 "[{index}/{total}] {} → {}/{} reachable, avg {} ms",
@@ -230,7 +244,7 @@ impl StrategyTester for ConnectivityTester {
         }
 
         // Make sure nothing is left running after a test.
-        let _ = self.runner.stop().await;
+        self.stop_for_test().await?;
 
         // Rank: most endpoints reachable first, ties broken by lower latency.
         results.sort_by(|a, b| {
@@ -285,26 +299,31 @@ impl StrategyTester for ConnectivityTester {
 
         for (i, strategy) in candidates.iter().enumerate() {
             if self.cancel.load(Ordering::SeqCst) {
-                let _ = self.runner.stop().await;
+                self.stop_for_test().await?;
                 return Ok(AutoEngageOutcome::Cancelled);
             }
             let index = i as u32 + 1;
             on_progress(index, total, &strategy.id);
             tracing::info!("[{index}/{total}] auto-engage trying: {}", strategy.id);
 
-            let _ = self.runner.stop().await;
+            self.stop_for_test().await?;
             if let Err(e) = self.runner.start(strategy).await {
+                if e.downcast_ref::<crate::contracts::AuthorizationCancelled>()
+                    .is_some()
+                {
+                    return Err(e);
+                }
                 tracing::warn!("[{index}/{total}] failed to start {}: {e}", strategy.id);
                 continue;
             }
             // Let the desync engine settle (honouring cancellation).
             if !wait_cancellable(INIT_WAIT, &self.cancel).await {
-                let _ = self.runner.stop().await;
+                self.stop_for_test().await?;
                 return Ok(AutoEngageOutcome::Cancelled);
             }
             let (ok, avg) = self.probe(&targets).await;
             if self.cancel.load(Ordering::SeqCst) {
-                let _ = self.runner.stop().await;
+                self.stop_for_test().await?;
                 return Ok(AutoEngageOutcome::Cancelled);
             }
             tracing::info!(
@@ -328,7 +347,7 @@ impl StrategyTester for ConnectivityTester {
             if best.is_none_or(|(bok, _)| ok > bok) {
                 best = Some((ok, i));
             }
-            let _ = self.runner.stop().await;
+            self.stop_for_test().await?;
         }
 
         // Nothing crossed the threshold. If a candidate had partial reachability,
@@ -336,7 +355,7 @@ impl StrategyTester for ConnectivityTester {
         if let Some((bok, idx)) = best {
             if bok > 0 {
                 let strategy = &candidates[idx];
-                let _ = self.runner.stop().await;
+                self.stop_for_test().await?;
                 if self.runner.start(strategy).await.is_ok() {
                     tracing::info!(
                         "Auto-engage fell back to best candidate: {} ({}/{})",
@@ -349,7 +368,7 @@ impl StrategyTester for ConnectivityTester {
             }
         }
 
-        let _ = self.runner.stop().await;
+        self.stop_for_test().await?;
         Ok(AutoEngageOutcome::NoneWorking)
     }
 

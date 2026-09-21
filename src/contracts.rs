@@ -354,8 +354,19 @@ pub enum RunningMode {
     #[default]
     None,
     UserProcess,
-    WindowsService,
+    SystemService,
 }
+
+/// A user declined an OS authorization dialog. Testers must not retry it for
+/// every remaining candidate.
+#[derive(Debug)]
+pub struct AuthorizationCancelled;
+impl std::fmt::Display for AuthorizationCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Authorization cancelled")
+    }
+}
+impl std::error::Error for AuthorizationCancelled {}
 
 #[derive(Clone, Debug)]
 pub enum InstallStage {

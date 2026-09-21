@@ -4,7 +4,7 @@
 
 # zapret-ui
 
-**Удобный графический интерфейс для обхода DPI-блокировок на Windows.**
+**Удобный графический интерфейс для обхода DPI-блокировок на Windows и macOS Apple Silicon.**
 
 Discord, YouTube и другие сервисы снова работают — без командной строки и возни с `.bat`-файлами.
 
@@ -26,6 +26,8 @@ Discord, YouTube и другие сервисы снова работают — 
 ---
 
 ## 💡 Что это
+
+**macOS 14+ / Apple Silicon:** ядро [Flowseal/zapret-mac-discord-youtube](https://github.com/Flowseal/zapret-mac-discord-youtube), сборка `.app`, запуск через launchd. [Инструкция по сборке и тестированию на Mac](docs/macos.md). Windows-инструкции ниже остаются без изменений; возможности платформ перечислены в инструкции macOS.
 
 Графическая оболочка на основе [`Flowseal/zapret-discord-youtube`](https://github.com/Flowseal/zapret-discord-youtube) — популярного инструмента обхода DPI. Приложение само скачивает zapret, разбирает его пресеты и запускает нужную стратегию одной кнопкой.
 

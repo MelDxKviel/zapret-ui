@@ -18,12 +18,12 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 slint::include_modules!();
 
 mod ui_models;
+#[cfg_attr(target_os = "macos", path = "macexec.rs")]
 mod winexec;
 use ui_models::{is_favorite, rebuild_logs, rebuild_strategies, rebuild_test_results, to_item};
-use winexec::{
-    open_external, relaunch_after_update, relaunch_elevated, relaunch_self_elevated,
-    wait_for_elevated_result,
-};
+use winexec::{open_external, relaunch_after_update};
+#[cfg(windows)]
+use winexec::{relaunch_elevated, relaunch_self_elevated, wait_for_elevated_result};
 
 // ── Log buffer (lives on the Slint UI thread; both the event listener's
 //    invoke_from_event_loop closures and the UI callbacks run there) ──
@@ -165,6 +165,7 @@ fn ordered_candidates(
 /// surfacing the helper's actual error to the UI instead of silently relying on
 /// the next status poll. Passes the current install dir explicitly so the
 /// elevated helper acts on the same directory the UI is using.
+#[cfg(windows)]
 async fn elevate_service_task(
     task: &str,
     strategy: Option<&str>,
@@ -219,16 +220,19 @@ async fn elevate_or_report(
     event_tx: &broadcast::Sender<UiEvent>,
 ) -> bool {
     let msg = format!("{:#}", e);
+    #[cfg(windows)]
     let needs_elevation = msg.contains("NeedsElevation")
         || msg.contains("os error 5")
         || msg.contains("Access is denied")
         || msg.contains("Отказано в доступе");
+    #[cfg(windows)]
     if needs_elevation {
-        elevate_service_task(elevate_task, strategy, config, event_tx).await
-    } else {
-        let _ = event_tx.send(UiEvent::Error(msg));
-        false
+        return elevate_service_task(elevate_task, strategy, config, event_tx).await;
     }
+    #[cfg(not(windows))]
+    let _ = (elevate_task, strategy, config);
+    let _ = event_tx.send(UiEvent::Error(msg));
+    false
 }
 
 async fn stop_bypass_before_install(
@@ -243,7 +247,7 @@ async fn stop_bypass_before_install(
     }
 
     match service_ctl.status().await {
-        Ok(RunningMode::WindowsService) => match service_ctl.stop().await {
+        Ok(RunningMode::SystemService) => match service_ctl.stop().await {
             Ok(()) => true,
             Err(e) => elevate_or_report(e, "service-stop", None, config, event_tx).await,
         },
@@ -373,7 +377,11 @@ impl App {
         // Whether this process is elevated. Drives the admin banner + the
         // disabled state of the buttons that actually need admin (Engage,
         // Tester, service ops — all touch the WinDivert driver / SCM).
+        #[cfg(windows)]
         ui.set_is_admin(crate::zapret::elevation::is_elevated());
+        #[cfg(target_os = "macos")]
+        ui.set_is_admin(true); // privileged operations request authorization individually
+        ui.global::<I18n>().set_macos(cfg!(target_os = "macos"));
 
         // Seed the notifications toggle from the saved config (default on).
         let notifications_seed = self
@@ -469,9 +477,7 @@ impl App {
             });
         }
         ui.on_open_log_file_clicked(move || {
-            let appdata = std::env::var("APPDATA").unwrap_or_default();
-            let path = format!("{}\\zapret-ui\\logs\\app.log", appdata);
-            open_external(&path);
+            open_external(&crate::log::log_dir().join("app.log").to_string_lossy());
         });
         ui.on_open_url_clicked(move |url| {
             open_external(&url);
@@ -537,6 +543,10 @@ impl App {
             let cmd_tx_c = self.cmd_tx.clone();
             let ui_weak = ui.as_weak();
             ui.on_app_update_clicked(move || {
+                if cfg!(target_os = "macos") {
+                    open_external("https://github.com/MelDxKviel/zapret-ui/blob/codex/macos-apple-silicon/docs/macos.md");
+                    return;
+                }
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_app_update_downloading(true);
                     ui.set_app_update_progress(0.0);
@@ -549,6 +559,10 @@ impl App {
             let cmd_tx_c = self.cmd_tx.clone();
             let ui_weak = ui.as_weak();
             ui.on_app_check_update_clicked(move || {
+                if cfg!(target_os = "macos") {
+                    open_external("https://github.com/MelDxKviel/zapret-ui/blob/codex/macos-apple-silicon/docs/macos.md");
+                    return;
+                }
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_app_update_checking(true);
                     ui.set_app_update_msg("".into());
@@ -755,6 +769,7 @@ impl App {
         }
         // "Run as administrator" banner button: relaunch the whole app elevated,
         // then exit this unelevated instance so the new one can take over.
+        #[cfg(windows)]
         ui.on_restart_as_admin(move || match relaunch_self_elevated() {
             Ok(_) => std::process::exit(0),
             Err(e) => tracing::error!("Failed to relaunch as administrator: {}", e),
@@ -762,7 +777,7 @@ impl App {
 
         // Copy arbitrary text to the system clipboard (used by the hosts window).
         ui.on_copy_to_clipboard(move |text| {
-            if let Err(e) = clipboard_win::set_clipboard_string(&text) {
+            if let Err(e) = winexec::copy_to_clipboard(&text) {
                 tracing::warn!("Failed to copy to clipboard: {}", e);
             }
         });
@@ -816,7 +831,10 @@ impl App {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = w.upgrade() {
                         let _ = ui.show();
+                        #[cfg(windows)]
                         crate::winicon::restore_and_focus_window("zapret-ui");
+                        #[cfg(target_os = "macos")]
+                        ui.window().set_minimized(false);
                     }
                 });
             };
@@ -900,7 +918,7 @@ impl App {
                                 ui.set_status_running_mode(match status.running_mode {
                                     RunningMode::None => "None".into(),
                                     RunningMode::UserProcess => "UserProcess".into(),
-                                    RunningMode::WindowsService => "WindowsService".into(),
+                                    RunningMode::SystemService => "WindowsService".into(),
                                 });
                                 let active = status.active_strategy.clone().unwrap_or_default();
                                 ui.set_status_active_strategy(active.as_str().into());
@@ -1180,7 +1198,9 @@ impl App {
         if autoupdate {
             let _ = self.cmd_tx.try_send(BackendCmd::CheckUpdate);
             // Also check whether zapret-ui itself has a newer release.
-            let _ = self.cmd_tx.try_send(BackendCmd::CheckSelfUpdate);
+            if !cfg!(target_os = "macos") {
+                let _ = self.cmd_tx.try_send(BackendCmd::CheckSelfUpdate);
+            }
         }
         // Auto-start the last-used strategy on launch when enabled.
         if autoengage {
@@ -1193,22 +1213,25 @@ impl App {
         // The Slint `icon` property covers the taskbar, but the title-bar small
         // icon needs WM_SETICON. The window can take a few seconds to appear
         // (renderer warm-up), so retry on a timer until it lands, then stop.
-        let icon_timer = std::rc::Rc::new(slint::Timer::default());
-        let icon_timer_weak = std::rc::Rc::downgrade(&icon_timer);
-        let icon_attempts = std::cell::Cell::new(0u32);
-        icon_timer.start(
-            slint::TimerMode::Repeated,
-            std::time::Duration::from_millis(250),
-            move || {
-                let n = icon_attempts.get();
-                icon_attempts.set(n + 1);
-                if crate::winicon::set_window_icon("zapret-ui") || n >= 40 {
-                    if let Some(t) = icon_timer_weak.upgrade() {
-                        t.stop();
+        #[cfg(windows)]
+        {
+            let icon_timer = std::rc::Rc::new(slint::Timer::default());
+            let icon_timer_weak = std::rc::Rc::downgrade(&icon_timer);
+            let icon_attempts = std::cell::Cell::new(0u32);
+            icon_timer.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(250),
+                move || {
+                    let n = icon_attempts.get();
+                    icon_attempts.set(n + 1);
+                    if crate::winicon::set_window_icon("zapret-ui") || n >= 40 {
+                        if let Some(t) = icon_timer_weak.upgrade() {
+                            t.stop();
+                        }
                     }
-                }
-            },
-        );
+                },
+            );
+        }
 
         // Show + `run_event_loop_until_quit` (instead of `ui.run()`) so hiding the
         // window to the tray doesn't quit the app when it's the last open window.
@@ -1245,8 +1268,7 @@ impl App {
                 // While a simple-mode auto-engage is probing candidates, skip the
                 // periodic status refresh: catching a candidate's winws mid-run
                 // would briefly flip the dial to "active" and back.
-                if auto_engaging.load(Ordering::SeqCst)
-                    && matches!(cmd, BackendCmd::RefreshStatus)
+                if auto_engaging.load(Ordering::SeqCst) && matches!(cmd, BackendCmd::RefreshStatus)
                 {
                     continue;
                 }
@@ -1307,7 +1329,7 @@ impl App {
                                     let _ = event_tx.send(UiEvent::UpdateAvailable {
                                         current,
                                         latest,
-                                        url: "https://github.com/Flowseal/zapret-discord-youtube/releases/latest".to_string(),
+                                        url: if cfg!(target_os = "macos") { format!("{}/releases/latest", crate::zapret::macos_bundle::REPO) } else { "https://github.com/Flowseal/zapret-discord-youtube/releases/latest".to_string() },
                                     });
                                 } else {
                                     // Up to date: clear any stale "update available"
@@ -1378,7 +1400,11 @@ impl App {
                                     )
                                     .await;
                                     let mut status = runner.detect_running().await;
-                                    status.running_mode = RunningMode::UserProcess;
+                                    status.running_mode = if cfg!(target_os = "macos") {
+                                        RunningMode::SystemService
+                                    } else {
+                                        RunningMode::UserProcess
+                                    };
                                     status.active_strategy = Some(strategy_id);
                                     status.winws_pid = Some(pid);
                                     state.set_status(status.clone()).await;
@@ -1424,7 +1450,11 @@ impl App {
                                         notify_bypass(&config, &notified_running, true, Some(&id))
                                             .await;
                                         let mut status = runner.detect_running().await;
-                                        status.running_mode = RunningMode::UserProcess;
+                                        status.running_mode = if cfg!(target_os = "macos") {
+                                            RunningMode::SystemService
+                                        } else {
+                                            RunningMode::UserProcess
+                                        };
                                         status.active_strategy = Some(id.clone());
                                         status.winws_pid = Some(pid);
                                         state.set_status(status.clone()).await;
@@ -1458,9 +1488,9 @@ impl App {
                                                         );
                                                     }
                                                 }
-                                                Err(e) => tracing::warn!(
-                                                    "Background verify error: {e:#}"
-                                                ),
+                                                Err(e) => {
+                                                    tracing::warn!("Background verify error: {e:#}")
+                                                }
                                             }
                                         });
                                     }
@@ -1524,8 +1554,8 @@ impl App {
                         tokio::spawn(async move {
                             let ev_progress = event_tx_c.clone();
                             let on_progress = Box::new(move |index, total, _id: &str| {
-                                let _ = ev_progress
-                                    .send(UiEvent::AutoEngageProgress { index, total });
+                                let _ =
+                                    ev_progress.send(UiEvent::AutoEngageProgress { index, total });
                             });
                             match tester_c.auto_engage(candidates, on_progress).await {
                                 Ok(AutoEngageOutcome::Engaged(id)) => {
@@ -1556,13 +1586,8 @@ impl App {
                             // Release the flag before the final refresh so the next
                             // periodic poll is no longer suppressed.
                             auto_engaging_c.store(false, Ordering::SeqCst);
-                            refresh_and_broadcast(
-                                &runner_c,
-                                &service_ctl_c,
-                                &state_c,
-                                &event_tx_c,
-                            )
-                            .await;
+                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c)
+                                .await;
                         });
                     }
                     BackendCmd::CancelAutoEngage => {
@@ -1572,11 +1597,10 @@ impl App {
                     }
                     BackendCmd::Stop => {
                         let status = runner.detect_running().await;
-                        if status.running_mode == RunningMode::WindowsService {
+                        if status.running_mode == RunningMode::SystemService {
                             match service_ctl.stop().await {
                                 Ok(_) => {
-                                    notify_bypass(&config, &notified_running, false, None)
-                                        .await;
+                                    notify_bypass(&config, &notified_running, false, None).await;
                                     refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                         .await;
                                 }
@@ -1605,8 +1629,7 @@ impl App {
                         } else {
                             match runner.stop().await {
                                 Ok(_) => {
-                                    notify_bypass(&config, &notified_running, false, None)
-                                        .await;
+                                    notify_bypass(&config, &notified_running, false, None).await;
                                     refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                         .await;
                                 }
@@ -1617,21 +1640,18 @@ impl App {
                         }
                     }
                     BackendCmd::ServiceInstall(strategy_id) => {
-                        if catalog.by_id(&strategy_id).is_some() {
+                        if let Some(strategy) = catalog.by_id(&strategy_id) {
                             // A user-process bypass holds the WinDivert driver, which
                             // would make the service's own winws.exe fail to start.
                             // Stop it first so the service can take over cleanly.
-                            let _ = runner.stop().await;
+                            if let Err(e) = runner.stop().await {
+                                let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                                continue;
+                            }
                             // Always install via the protected machine dir — even when
                             // we're already elevated — so the LocalSystem service never
                             // runs winws.exe out of the user-writable install dir.
-                            let install_dir = current_install_dir(&config).await;
-                            match crate::zapret::service::install_service_protected(
-                                &install_dir,
-                                &strategy_id,
-                            )
-                            .await
-                            {
+                            match service_ctl.install_protected(&strategy).await {
                                 Ok(_) => {
                                     notify_bypass(
                                         &config,
@@ -1749,13 +1769,12 @@ impl App {
                     }
                     BackendCmd::OpenInstallFolder => {
                         let install_dir = current_install_dir(&config).await;
-                        let _ = std::process::Command::new("explorer")
-                            .arg(&install_dir)
-                            .spawn();
+                        open_external(&install_dir.to_string_lossy());
                     }
                     BackendCmd::OpenIpsetFile => {
                         let install_dir = current_install_dir(&config).await;
-                        let path = install_dir.join("lists").join("ipset-all.txt");
+                        let path =
+                            crate::zapret::paths::lists_dir(&install_dir).join("ipset-all.txt");
                         if path.exists() {
                             open_external(&path.display().to_string());
                         } else {
@@ -1766,18 +1785,7 @@ impl App {
                         }
                     }
                     BackendCmd::OpenHostsFile => {
-                        // The hosts file has no extension (no default association),
-                        // so open it explicitly in Notepad rather than via the shell.
-                        let system_root = std::env::var("SystemRoot")
-                            .unwrap_or_else(|_| r"C:\Windows".to_string());
-                        let hosts_path = std::path::PathBuf::from(system_root)
-                            .join("System32")
-                            .join("drivers")
-                            .join("etc")
-                            .join("hosts");
-                        let _ = std::process::Command::new("notepad.exe")
-                            .arg(&hosts_path)
-                            .spawn();
+                        winexec::open_hosts_file();
                     }
                     BackendCmd::CancelTest => {
                         tester.cancel();

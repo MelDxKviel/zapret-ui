@@ -323,7 +323,7 @@ export component SettingsPage inherits Rectangle {
                 // DPI bypass tuning — the zapret service.bat filters & updaters.
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_dpi");
-                    SettingsRow {
+                    if !I18n.macos : SettingsRow {
                         label: I18n.t(I18n.lang, "common.game_filter");
                         hint: root.installed
                             ? I18n.t(I18n.lang, "settings.gf_hint")

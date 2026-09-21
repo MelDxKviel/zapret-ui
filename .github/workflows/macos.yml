@@ -1,0 +1,43 @@
+name: macOS Apple Silicon
+
+on:
+  push:
+    branches: [main, master, 'codex/macos-apple-silicon']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned Rust
+        run: rustup show
+      - uses: swatinem/rust-cache@v2
+      - name: Verify native Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Lint
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Test without elevation or network changes
+        run: cargo test --locked
+      - name: Build signed app bundle
+        run: sh scripts/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zapret-ui-macos-arm64
+          path: |
+            dist/zapret-ui-macos-arm64.zip
+            dist/zapret-ui-macos-arm64.zip.sha256
+          if-no-files-found: error

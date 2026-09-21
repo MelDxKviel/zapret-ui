@@ -26,5 +26,26 @@ pub fn elevation_result_dir() -> PathBuf {
 /// Helper to check if a directory has a valid installation.
 /// We check if `winws.exe` exists in `bin/winws.exe` or `winws.exe`.
 pub fn is_valid_install_dir(path: &Path) -> bool {
-    path.join("bin").join("winws.exe").exists() || path.join("winws.exe").exists()
+    #[cfg(target_os = "macos")]
+    {
+        crate::zapret::macos_bundle::valid_payload(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        path.join("bin").join("winws.exe").exists() || path.join("winws.exe").exists()
+    }
+}
+
+pub fn lists_dir(install_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = install_dir;
+        crate::zapret::macos_bundle::user_data_dir()
+            .unwrap_or_default()
+            .join("lists")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        install_dir.join("lists")
+    }
 }

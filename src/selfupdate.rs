@@ -178,6 +178,9 @@ impl SelfUpdater for GithubSelfUpdater {
     }
 
     async fn download_and_apply(&self, on_progress: DownloadProgressCb) -> Result<()> {
+        if cfg!(target_os = "macos") {
+            bail!("On macOS, update the complete Zapret UI.app bundle; in-place EXE updates are Windows-only");
+        }
         let tag = self.fetch_latest_tag().await?;
         if !crate::zapret::updater::is_update_available(&self.current, &tag) {
             bail!(

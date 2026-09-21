@@ -1,20 +1,24 @@
 // Build as a Windows GUI app in release so no console window pops up next to the
 // UI. Debug builds keep the console attached so `tracing`/`eprintln!` logs are
 // visible while developing (`cargo run`).
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 pub mod app;
 pub mod config;
 pub mod contracts;
 pub mod i18n;
 pub mod log;
+#[cfg_attr(target_os = "macos", path = "platform/macos/notify.rs")]
 pub mod notify;
 pub mod ports;
 pub mod selfupdate;
+#[cfg_attr(target_os = "macos", path = "platform/macos/single_instance.rs")]
 pub mod single_instance;
 pub mod state;
 pub mod tray;
+#[cfg_attr(target_os = "macos", path = "platform/macos/winenv.rs")]
 pub mod winenv;
+#[cfg(windows)]
 pub mod winicon;
 pub mod zapret;
 
@@ -22,6 +26,7 @@ use crate::contracts::UiEvent;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+#[cfg(windows)]
 #[derive(Default)]
 struct ElevatedArgs {
     task: Option<String>,
@@ -31,6 +36,7 @@ struct ElevatedArgs {
     nonce: Option<String>,
 }
 
+#[cfg(windows)]
 fn parse_args() -> ElevatedArgs {
     let mut out = ElevatedArgs::default();
     for arg in std::env::args() {
@@ -52,10 +58,12 @@ fn parse_args() -> ElevatedArgs {
 /// Resolve the install dir the elevated helper should act on: the one the parent
 /// passed explicitly (so we don't accidentally use a *different* admin account's
 /// `%APPDATA%`), falling back to config only if absent.
+#[cfg(windows)]
 fn elevated_install_dir(explicit: Option<std::path::PathBuf>) -> std::path::PathBuf {
     explicit.unwrap_or_else(|| config::AppConfig::load().install_dir())
 }
 
+#[cfg(windows)]
 async fn run_elevated_task(
     task: &str,
     strategy_id: Option<String>,
@@ -89,6 +97,7 @@ async fn run_elevated_task(
     Ok(())
 }
 
+#[cfg(windows)]
 fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
     let out = std::process::Command::new("icacls")
@@ -116,6 +125,7 @@ fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
     }
 }
 
+#[cfg(windows)]
 fn valid_elevated_result_path(path: &std::path::Path, nonce: &str) -> bool {
     let expected_dir = zapret::paths::elevation_result_dir();
     let expected_file = format!("zapret-ui-elev-{nonce}.result");
@@ -125,6 +135,7 @@ fn valid_elevated_result_path(path: &std::path::Path, nonce: &str) -> bool {
 
 /// Write the one-shot task outcome to the nonce result file so the (unelevated)
 /// parent can report success/failure instead of guessing from a status poll.
+#[cfg(windows)]
 fn write_elevated_result(result_file: &std::path::Path, nonce: &str, outcome: &anyhow::Result<()>) {
     if !valid_elevated_result_path(result_file, nonce) {
         eprintln!(
@@ -168,8 +179,10 @@ fn write_elevated_result(result_file: &std::path::Path, nonce: &str, outcome: &a
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
     let args = parse_args();
 
+    #[cfg(windows)]
     if let Some(task_name) = args.task {
         let install_dir = elevated_install_dir(args.install_dir);
         let outcome = run_elevated_task(&task_name, args.strategy, install_dir).await;
@@ -259,10 +272,11 @@ async fn main() -> anyhow::Result<()> {
         install_dir.clone(),
         github_client,
     ));
-    let runner = Arc::new(zapret::process::ProcessRunner::new(
-        install_dir.clone(),
-    ));
+    let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone()));
+    #[cfg(windows)]
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
+    #[cfg(target_os = "macos")]
+    let service_ctl = Arc::new(zapret::service::MacServiceCtl::new(install_dir.clone()));
     let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(
         install_dir.clone(),
     ));

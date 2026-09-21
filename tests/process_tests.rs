@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 #[path = "../src/contracts.rs"]
 pub mod contracts;
 
@@ -116,8 +118,10 @@ fn main() {
 
     // Capture the stub's output from the tracing channel. Each `recv` is
     // bounded by a timeout so a missing line can never hang the test.
-    let stdout_line = |l: &String| l.contains("winws") && l.contains("Hello from winws stub stdout!");
-    let stderr_line = |l: &String| l.contains("winws") && l.contains("Hello from winws stub stderr!");
+    let stdout_line =
+        |l: &String| l.contains("winws") && l.contains("Hello from winws stub stdout!");
+    let stderr_line =
+        |l: &String| l.contains("winws") && l.contains("Hello from winws stub stderr!");
     let mut logs: Vec<String> = Vec::new();
     while !(logs.iter().any(stdout_line) && logs.iter().any(stderr_line)) {
         match tokio::time::timeout(std::time::Duration::from_secs(3), log_rx.recv()).await {
@@ -127,8 +131,14 @@ fn main() {
         }
     }
 
-    assert!(logs.iter().any(stdout_line), "stdout line missing: {logs:?}");
-    assert!(logs.iter().any(stderr_line), "stderr line missing: {logs:?}");
+    assert!(
+        logs.iter().any(stdout_line),
+        "stdout line missing: {logs:?}"
+    );
+    assert!(
+        logs.iter().any(stderr_line),
+        "stderr line missing: {logs:?}"
+    );
 
     // Stop runner
     runner.stop().await.expect("Failed to stop process");
@@ -206,7 +216,7 @@ fn main() {
             .expect("Failed to install service");
         service_ctl.start().await.expect("Failed to start service");
         let mode = service_ctl.status().await.expect("Failed to query status");
-        assert_eq!(mode, RunningMode::WindowsService);
+        assert_eq!(mode, RunningMode::SystemService);
         service_ctl.stop().await.expect("Failed to stop service");
         service_ctl
             .remove()

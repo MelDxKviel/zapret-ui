@@ -208,6 +208,12 @@ impl ZapretInstaller {
                 std::fs::create_dir_all(&outpath)
                     .context("Failed to create subdirectory inside extraction folder")?;
             } else {
+                if file.is_symlink() {
+                    anyhow::bail!(
+                        "Archive contains an unsupported symbolic link: {}",
+                        file.name()
+                    );
+                }
                 if let Some(p) = outpath.parent() {
                     if !p.exists() {
                         std::fs::create_dir_all(p)
@@ -218,6 +224,16 @@ impl ZapretInstaller {
                     .context("Failed to create file inside extraction folder")?;
                 std::io::copy(&mut file, &mut outfile)
                     .context("Failed to write extracted file contents to disk")?;
+                #[cfg(target_os = "macos")]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let executable = outpath.extension().is_some_and(|ext| ext == "sh")
+                        || outpath.file_name().is_some_and(|name| name == "utunws");
+                    std::fs::set_permissions(
+                        &outpath,
+                        std::fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
+                    )?;
+                }
             }
             on_progress(
                 InstallStage::Extracting,
@@ -249,6 +265,26 @@ impl ZapretInstaller {
                 }
             }
             let _ = std::fs::remove_dir(&sub_dir);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            crate::zapret::macos_bundle::promote_payload(temp_extract_dir)?;
+            let arch = tokio::process::Command::new("/usr/bin/lipo")
+                .args(["-verify_arch", "arm64"])
+                .arg(temp_extract_dir.join("bin/utunws"))
+                .output()
+                .await
+                .context("Checking Apple Silicon core architecture")?;
+            if !arch.status.success() {
+                anyhow::bail!(
+                    "ZapretMac release does not contain an arm64 engine: {}",
+                    String::from_utf8_lossy(&arch.stderr)
+                );
+            }
+            let data = crate::zapret::macos_bundle::user_data_dir()?;
+            crate::zapret::macos_bundle::validate_data_dir(&data)?;
+            crate::zapret::macos_bundle::initialize_user_data(temp_extract_dir, &data)?;
         }
 
         // Determine version: prefer the upstream .service/version.txt, fall back to release tag.
@@ -326,6 +362,7 @@ impl ZapretInstaller {
         }
 
         // Create the user list files winws.exe expects (service.bat:load_user_lists).
+        #[cfg(not(target_os = "macos"))]
         crate::zapret::batparse::ensure_user_lists(&self.install_dir)
             .context("Failed to create winws user list files")?;
 

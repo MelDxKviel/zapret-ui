@@ -61,6 +61,7 @@ impl SystemTray {
             .with_menu_on_left_click(false)
             .with_tooltip("Zapret UI")
             .with_icon(icon)
+            .with_icon_as_template(cfg!(target_os = "macos"))
             .build()?;
 
         Ok(Self {

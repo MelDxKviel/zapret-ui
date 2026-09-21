@@ -917,6 +917,9 @@ fn wait_for_deletion(manager: &ServiceManager, name: &str, timeout: std::time::D
 
 #[async_trait::async_trait]
 impl ServiceCtl for WindowsServiceCtl {
+    async fn install_protected(&self, strategy: &Strategy) -> anyhow::Result<()> {
+        install_service_protected(&self.install_dir, &strategy.id).await
+    }
     async fn install(&self, strategy: &Strategy) -> anyhow::Result<()> {
         check_elevation()?;
         // Mirrors service.bat's `:tcp_enable`, which upstream runs before
@@ -1217,7 +1220,7 @@ impl ServiceCtl for WindowsServiceCtl {
                     .query_status()
                     .map_err(|e| svc_err("QueryServiceStatus", e))?;
                 if status.current_state == ServiceState::Running {
-                    Ok(RunningMode::WindowsService)
+                    Ok(RunningMode::SystemService)
                 } else {
                     Ok(RunningMode::None)
                 }

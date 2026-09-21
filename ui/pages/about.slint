@@ -254,13 +254,13 @@ export component AboutPage inherits Rectangle {
                             AboutLink {
                                 icon: @image-url("../../assets/icons/shield.svg");
                                 label: I18n.t(I18n.lang, "about.upstream");
-                                url: "https://github.com/Flowseal/zapret-discord-youtube";
+                                url: I18n.macos ? "https://github.com/Flowseal/zapret-mac-discord-youtube" : "https://github.com/Flowseal/zapret-discord-youtube";
                                 clicked(u) => { root.open_url(u); }
                             }
                             AboutLink {
                                 icon: @image-url("../../assets/icons/shield.svg");
                                 label: I18n.t(I18n.lang, "about.how_it_works");
-                                url: "https://github.com/Flowseal/zapret-discord-youtube#readme";
+                                url: I18n.macos ? "https://github.com/Flowseal/zapret-mac-discord-youtube#readme" : "https://github.com/Flowseal/zapret-discord-youtube#readme";
                                 clicked(u) => { root.open_url(u); }
                             }
                         }
@@ -359,7 +359,7 @@ export component AboutPage inherits Rectangle {
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.platform");
                                     Text {
-                                        text: "Windows 10 / 11";
+                                        text: I18n.t(I18n.lang, "about.platform_value");
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text;
@@ -369,7 +369,7 @@ export component AboutPage inherits Rectangle {
                                 VRow {
                                     key: I18n.t(I18n.lang, "about.architecture");
                                     Text {
-                                        text: "x86_64";
+                                        text: I18n.macos ? "arm64 (Apple Silicon)" : "x86_64";
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text;

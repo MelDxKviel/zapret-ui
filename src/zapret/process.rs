@@ -334,7 +334,7 @@ impl Runner for ProcessRunner {
 
         // 2. Windows service.
         if mode == RunningMode::None && self.detect_service_running() {
-            mode = RunningMode::WindowsService;
+            mode = RunningMode::SystemService;
         }
 
         // 3. Take at most one process snapshot when we need fallback detection or

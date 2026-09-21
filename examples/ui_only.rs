@@ -129,6 +129,7 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let ui = MainWindow::new()?;
+    ui.global::<I18n>().set_macos(cfg!(target_os = "macos"));
 
     // Window/taskbar icon, decoded from the bundled .ico.
     {
@@ -543,14 +544,24 @@ fn main() -> anyhow::Result<()> {
     // Mirrors what `rebuild_logs` produces: short local time, padded level,
     // shortened tracing target (`app:`) or `winws:` for core output.
     let log_lines = vec![
-        mk(1, "16:14:34", "INFO", "app: zapret-ui started in UI-only mode"),
+        mk(
+            1,
+            "16:14:34",
+            "INFO",
+            "app: zapret-ui started in UI-only mode",
+        ),
         mk(
             2,
             "16:14:34",
             "INFO",
             "installer: Mock installer ready, version v1.0.0-mock",
         ),
-        mk(3, "16:14:34", "INFO", "catalog: 3 strategies loaded from catalog"),
+        mk(
+            3,
+            "16:14:34",
+            "INFO",
+            "catalog: 3 strategies loaded from catalog",
+        ),
         mk(
             4,
             "16:14:35",

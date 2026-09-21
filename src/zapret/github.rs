@@ -41,7 +41,12 @@ impl GithubClient {
         // Fallback to default config directory
         if let Some(base) = directories::BaseDirs::new() {
             let cache_dir = base.config_dir().join("zapret-ui");
-            return Some(cache_dir.join("release_cache.json"));
+            let name = if cfg!(target_os = "macos") {
+                "release_cache_macos.json"
+            } else {
+                "release_cache.json"
+            };
+            return Some(cache_dir.join(name));
         }
         None
     }
@@ -70,6 +75,7 @@ impl GithubClient {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     async fn fetch_branch_commit(&self, branch: &str) -> Result<String> {
         let url =
             format!("https://github.com/Flowseal/zapret-discord-youtube/commits/{branch}.atom");
@@ -91,6 +97,7 @@ impl GithubClient {
             .ok_or_else(|| anyhow::anyhow!("Could not resolve the latest upstream commit SHA"))
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub async fn get_latest_release(&self) -> Result<GithubRelease> {
         // NOTE: api.github.com is blocked by many RU ISPs/DPI (the exact thing zapret bypasses).
         // We deliberately avoid it. First resolve `main` to an immutable commit from the atom feed,
@@ -165,8 +172,49 @@ impl GithubClient {
         self.write_cache(&release);
         Ok(release)
     }
+
+    #[cfg(target_os = "macos")]
+    pub async fn get_latest_release(&self) -> Result<GithubRelease> {
+        use crate::zapret::macos_bundle::{release_tag, ASSET, REPO};
+        let result = async {
+            let body = self
+                .client
+                .get(format!("{REPO}/releases.atom"))
+                .header(USER_AGENT, "zapret-ui-updater")
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            let tag = release_tag(&body).context("No ZapretMac release in feed")?;
+            Ok::<_, anyhow::Error>(GithubRelease {
+                html_url: format!("{REPO}/releases/tag/{tag}"),
+                assets: vec![GithubAsset {
+                    name: ASSET.into(),
+                    browser_download_url: format!("{REPO}/releases/download/{tag}/{ASSET}"),
+                    size: 0,
+                }],
+                tag_name: tag,
+            })
+        }
+        .await;
+        match result {
+            Ok(release) => {
+                self.write_cache(&release);
+                Ok(release)
+            }
+            Err(e) => match self.read_cache() {
+                Some(cached) => {
+                    tracing::warn!("ZapretMac release lookup failed ({e:#}); using cache");
+                    Ok(cached.release)
+                }
+                None => Err(e).context("Cannot fetch ZapretMac release"),
+            },
+        }
+    }
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn parse_first_commit_sha(body: &str) -> Option<String> {
     for marker in ["/commit/", "Grit::Commit/"] {
         let mut rest = body;

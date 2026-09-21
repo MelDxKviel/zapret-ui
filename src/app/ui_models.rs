@@ -21,7 +21,7 @@ pub(super) fn is_favorite(id: &str) -> bool {
 
 /// Map a catalog strategy to its Slint row, tagging its current favorite state.
 pub(super) fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
-    let (pretty, alt) = split_alt(&s.id);
+    let (pretty, alt) = split_alt(&s.display_name);
     StrategyItem {
         id: s.id.as_str().into(),
         display_name: s.display_name.as_str().into(),
@@ -100,7 +100,11 @@ fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
     // from tracing (a level was parsed), so plain text is never mangled.
     let message = match rest.split_once(' ') {
         Some((head, tail)) if !level.is_empty() && head.ends_with(':') && head.contains("::") => {
-            let short = head.trim_end_matches(':').rsplit("::").next().unwrap_or(head);
+            let short = head
+                .trim_end_matches(':')
+                .rsplit("::")
+                .next()
+                .unwrap_or(head);
             format!("{short}: {}", tail.trim_start())
         }
         _ => rest.to_string(),

@@ -8,6 +8,17 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 
+pub(super) fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
+    clipboard_win::set_clipboard_string(text).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+pub(super) fn open_hosts_file() {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let _ = std::process::Command::new("notepad.exe")
+        .arg(std::path::Path::new(&root).join("System32/drivers/etc/hosts"))
+        .spawn();
+}
+
 #[link(name = "shell32")]
 extern "system" {
     fn ShellExecuteW(

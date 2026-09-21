@@ -13,12 +13,14 @@ use crate::contracts::{
     DiscordCacheResult, GameFilterMode, HostsCheck, IpsetMode, MaintenanceStatus,
 };
 use crate::ports::Maintenance;
+#[cfg(not(target_os = "macos"))]
 use crate::zapret::batparse;
 
 /// The Discord cache subfolders `service.bat` deletes under `%appdata%\discord`.
 const DISCORD_CACHE_DIRS: [&str; 3] = ["Cache", "Code Cache", "GPUCache"];
 
 /// The single placeholder entry `service.bat` writes for the ipset "none" mode.
+#[cfg(not(target_os = "macos"))]
 const IPSET_PLACEHOLDER: &str = "203.0.113.113/32";
 
 /// Source lists in the Flowseal repo (raw.githubusercontent.com — reachable even
@@ -35,6 +37,11 @@ pub struct ZapretMaintenance {
 
 impl ZapretMaintenance {
     pub fn new(install_dir: PathBuf, client: reqwest::Client) -> Self {
+        #[cfg(target_os = "macos")]
+        let install_dir = {
+            let _ = install_dir;
+            crate::zapret::macos_bundle::user_data_dir().unwrap_or_default()
+        };
         Self {
             install_dir,
             client,
@@ -47,11 +54,13 @@ impl ZapretMaintenance {
     fn ipset_backup_path(&self) -> PathBuf {
         self.install_dir.join("lists").join("ipset-all.txt.backup")
     }
+    #[cfg(not(target_os = "macos"))]
     fn game_flag_path(&self) -> PathBuf {
         self.install_dir.join("utils").join("game_filter.enabled")
     }
 
     /// Classify `ipset-all.txt` the way `service.bat:ipset_switch_status` does.
+    #[cfg(not(target_os = "macos"))]
     fn read_ipset_mode(&self) -> IpsetMode {
         let content = match std::fs::read_to_string(self.ipset_path()) {
             Ok(c) => c,
@@ -70,12 +79,21 @@ impl ZapretMaintenance {
             IpsetMode::Loaded
         }
     }
+    #[cfg(target_os = "macos")]
+    fn read_ipset_mode(&self) -> IpsetMode {
+        std::fs::read_to_string(self.install_dir.join("ipset-mode"))
+            .map(|s| IpsetMode::from_slug(&s))
+            .unwrap_or_default()
+    }
 }
 
 #[async_trait::async_trait]
 impl Maintenance for ZapretMaintenance {
     async fn status(&self) -> MaintenanceStatus {
+        #[cfg(not(target_os = "macos"))]
         let game_filter = batparse::read_game_filter(&self.install_dir);
+        #[cfg(target_os = "macos")]
+        let game_filter = GameFilterMode::Disabled;
         let ipset_mode = self.read_ipset_mode();
         let ipset_lines = std::fs::read_to_string(self.ipset_path())
             .map(|c| c.lines().filter(|l| !l.trim().is_empty()).count() as u32)
@@ -93,6 +111,7 @@ impl Maintenance for ZapretMaintenance {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     async fn set_game_filter(&self, mode: GameFilterMode) -> Result<()> {
         let flag = self.game_flag_path();
         if let Some(parent) = flag.parent() {
@@ -112,6 +131,7 @@ impl Maintenance for ZapretMaintenance {
         Ok(())
     }
 
+    #[cfg(not(target_os = "macos"))]
     async fn set_ipset_mode(&self, mode: IpsetMode) -> Result<()> {
         let path = self.ipset_path();
         let backup = self.ipset_backup_path();
@@ -148,6 +168,23 @@ impl Maintenance for ZapretMaintenance {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    async fn set_game_filter(&self, _mode: GameFilterMode) -> Result<()> {
+        anyhow::bail!("ZapretMac does not support GameFilter")
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn set_ipset_mode(&self, mode: IpsetMode) -> Result<()> {
+        if mode == IpsetMode::Unknown || !self.ipset_path().is_file() {
+            anyhow::bail!("Install the ZapretMac core first");
+        }
+        std::fs::write(
+            self.install_dir.join("ipset-mode"),
+            format!("{}\n", mode.slug()),
+        )?;
+        Ok(())
+    }
+
     async fn update_ipset_list(&self) -> Result<usize> {
         let path = self.ipset_path();
         if let Some(parent) = path.parent() {
@@ -178,11 +215,15 @@ impl Maintenance for ZapretMaintenance {
     }
 
     async fn update_hosts_file(&self) -> Result<HostsCheck> {
+        #[cfg(not(target_os = "macos"))]
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        #[cfg(not(target_os = "macos"))]
         let hosts_dir = PathBuf::from(system_root)
             .join("System32")
             .join("drivers")
             .join("etc");
+        #[cfg(target_os = "macos")]
+        let hosts_dir = PathBuf::from("/etc");
         let hosts_path = hosts_dir.join("hosts");
 
         tracing::info!("Checking hosts file against {}", HOSTS_URL);
@@ -232,11 +273,18 @@ impl Maintenance for ZapretMaintenance {
         // error here, it just means Discord wasn't running.
         let discord_was_running = kill_discord();
 
+        #[cfg(not(target_os = "macos"))]
         let cache_dir = PathBuf::from(
             std::env::var("APPDATA")
                 .context("APPDATA is not set — cannot locate the Discord cache")?,
         )
         .join("discord");
+
+        #[cfg(target_os = "macos")]
+        let cache_dir = directories::BaseDirs::new()
+            .context("Cannot resolve home")?
+            .home_dir()
+            .join("Library/Application Support/discord");
 
         let mut cleared = 0u32;
         let mut failures = Vec::new();
@@ -280,6 +328,7 @@ impl Maintenance for ZapretMaintenance {
 /// Force-close every `Discord.exe`, returning whether any process was running.
 /// Uses `taskkill` (like `service.bat`) with the no-window flag so no console
 /// flashes; the exit code distinguishes "killed" (0) from "not found" (128).
+#[cfg(not(target_os = "macos"))]
 fn kill_discord() -> bool {
     use std::process::Command;
     let mut cmd = Command::new("taskkill");
@@ -292,10 +341,29 @@ fn kill_discord() -> bool {
     matches!(cmd.output(), Ok(out) if out.status.success())
 }
 
-#[cfg(test)]
+#[cfg(target_os = "macos")]
+fn kill_discord() -> bool {
+    // Restrict to the login user's main Discord process.
+    let uid = std::process::Command::new("/usr/bin/id").arg("-u").output();
+    let Ok(uid) = uid else {
+        return false;
+    };
+    std::process::Command::new("/usr/bin/pkill")
+        .args([
+            "-u",
+            String::from_utf8_lossy(&uid.stdout).trim(),
+            "-x",
+            "Discord",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "macos"))]
     fn fixture() -> (tempfile::TempDir, ZapretMaintenance) {
         let tmp = tempfile::tempdir().unwrap();
         let m = ZapretMaintenance::new(tmp.path().to_path_buf(), reqwest::Client::new());
@@ -320,6 +388,7 @@ mod tests {
         assert!(m.set_ipset_mode(IpsetMode::Loaded).await.is_err());
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn game_filter_flag_round_trips() {
         let (_tmp, m) = fixture();

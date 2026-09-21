@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter, Registry};
 
@@ -36,10 +35,7 @@ impl<'a> fmt::writer::MakeWriter<'a> for UiWriter {
 pub fn init_logging(
     tx: tokio::sync::broadcast::Sender<String>,
 ) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
-    let appdata = std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-    let log_dir = appdata.join("zapret-ui").join("logs");
+    let log_dir = log_dir();
     std::fs::create_dir_all(&log_dir)?;
 
     let file_appender = tracing_appender::rolling::never(&log_dir, "app.log");
@@ -74,4 +70,10 @@ pub fn init_logging(
     }
 
     Ok(guard)
+}
+
+pub fn log_dir() -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|b| b.config_dir().join("zapret-ui/logs"))
+        .unwrap_or_else(|| std::env::temp_dir().join("zapret-ui/logs"))
 }

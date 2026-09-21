@@ -840,8 +840,8 @@ export component HomePage inherits Rectangle {
                 HorizontalLayout {
                     spacing: 12px;
 
-                    // game filter
-                    FilterCard {
+                    // GameFilter is absent from the macOS core.
+                    if !I18n.macos : FilterCard {
                         icon: @image-url("../../assets/icons/gamepad.svg");
                         title: I18n.t(I18n.lang, "common.game_filter");
                         hint: root.installed

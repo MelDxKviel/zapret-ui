@@ -53,7 +53,11 @@ fn embed_windows_resources() {
 
     let mut res = winresource::WindowsResource::new();
     res.set_icon("assets/icon.ico");
-    res.set_manifest_file(manifest_path.to_str().expect("manifest path is valid UTF-8"));
+    res.set_manifest_file(
+        manifest_path
+            .to_str()
+            .expect("manifest path is valid UTF-8"),
+    );
     res.compile().expect("compile Windows resources");
 }
 

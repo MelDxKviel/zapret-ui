@@ -9,7 +9,28 @@ A single-binary Windows GUI (Rust + Slint) wrapping
 a DPI-bypass tool. The app downloads the zapret distribution, parses its `.bat`
 presets into runnable `winws.exe` command lines, and runs the chosen strategy
 either as a child process or a Windows service. Target platform is
-**Windows 10/11 x64 only** (Win32 FFI + `windows-service`).
+**Windows 10/11 x64** (Win32 FFI + `windows-service`) and **macOS 14+ Apple Silicon**.
+
+### macOS adapter
+
+On macOS the core is `Flowseal/zapret-mac-discord-youtube`, downloaded as the
+`ZapretMac-macOS-universal.zip` release asset (Atom feed, no GitHub API).
+`src/zapret/macos_bundle.rs` handles its Payload format and data-path validation;
+`src/zapret/macos/` provides the TSV catalog and launchd runner/service adapters.
+Desktop helpers in `src/platform/macos/` replace Windows-only modules through
+`cfg_attr`. `RunningMode::SystemService` means SCM on Windows or launchd on Mac;
+the legacy Slint wire value remains `WindowsService` on both platforms.
+
+The Mac GUI must run unelevated: upstream PF excludes root traffic, including
+connectivity probes. Root operations use `osascript` authorization and upstream
+install/stop scripts. There is no user-process mode or GameFilter on Mac.
+Upstream owns `/Library/Application Support/ZapretMac` and its launchd label;
+user lists stay in `~/Library/Application Support/ZapretMac` across core updates.
+Do not run networking/service integration tests on CI. `cargo test` must remain
+unprivileged and offline; Windows SCM/process tests are platform-gated.
+Build on Apple Silicon with `sh scripts/build-macos.sh`; see `docs/macos.md`.
+App self-update is manual on Mac to preserve the signed `.app` bundle; core
+update remains supported. Keep translated `macos.*` overrides in both catalogs.
 
 ## Commands
 

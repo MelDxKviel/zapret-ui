@@ -43,6 +43,12 @@ pub fn code(lang: Language) -> &'static str {
 pub fn tr(lang: &str, key: &str) -> String {
     let c = catalog();
     let primary = if lang == EN { &c.en } else { &c.ru };
+    if cfg!(target_os = "macos") {
+        let mac_key = format!("macos.{key}");
+        if let Some(value) = primary.get(&mac_key).or_else(|| c.en.get(&mac_key)) {
+            return value.clone();
+        }
+    }
     if let Some(v) = primary.get(key) {
         return v.clone();
     }

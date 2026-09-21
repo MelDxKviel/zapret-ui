@@ -45,6 +45,10 @@ pub trait Runner: Send + Sync {
 #[async_trait::async_trait]
 pub trait ServiceCtl: Send + Sync {
     async fn install(&self, strategy: &Strategy) -> anyhow::Result<()>;
+    /// Stage the core in an administrator-owned directory and install/start it.
+    async fn install_protected(&self, strategy: &Strategy) -> anyhow::Result<()> {
+        self.install(strategy).await
+    }
     async fn remove(&self) -> anyhow::Result<()>;
     async fn start(&self) -> anyhow::Result<()>;
     async fn stop(&self) -> anyhow::Result<()>;
