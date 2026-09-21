@@ -53,3 +53,8 @@ panic = "abort"
 strip = true
 opt-level = "z"
 
+[profile.release.build-override]
+# macOS 27 dyld rejects some stripped proc-macro dylibs with E0463.
+# Keep build-time libraries loadable; the shipped executable remains stripped.
+# https://github.com/rust-lang/rust/issues/157750
+strip = false

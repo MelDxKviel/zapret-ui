@@ -34,6 +34,8 @@ update remains supported. Keep translated `macos.*` overrides in both catalogs.
 Slint and slint-build are pinned together to 1.17.1 so Slint and tray-icon share
 muda 0.19. Multiple muda versions duplicate Objective-C classes and break macOS
 release LTO; verify the dependency tree when upgrading either GUI dependency.
+Keep `profile.release.build-override.strip = false`: macOS 27 can reject stripped
+proc-macro dylibs (Rust #157750), surfaced as E0463 during release compilation.
 
 ## Commands
 

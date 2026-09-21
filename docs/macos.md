@@ -39,6 +39,26 @@ open "dist/Zapret UI.app"
 cargo run --example ui_only
 ```
 
+### Ошибка E0463 при release-сборке на macOS 27
+
+Ошибки `can't find crate for bytemuck_derive` / `zerofrom_derive` могут означать, что macOS не смогла загрузить уже собранную библиотеку макросов. Для macOS 27 известна [ошибка выравнивания dylib после strip](https://github.com/rust-lang/rust/issues/157750). Поэтому в `Cargo.toml` отключён strip для `[profile.release.build-override]`: макросы и сборочные зависимости сохраняют символы, итоговый исполняемый файл по-прежнему очищается.
+
+Если ошибка возникла на старой версии ветки, обновитесь и повторите сборку:
+
+```sh
+git pull --ff-only
+sh scripts/build-macos.sh
+```
+
+Изменение профиля заставит Cargo пересобрать затронутые зависимости. Если ошибка повторится, сохраните подробный лог и версии инструментов для диагностики:
+
+```sh
+sw_vers
+rustc -vV
+xcode-select -p
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release --target aarch64-apple-darwin -vv > build-macos.log 2>&1
+```
+
 ## Проверка обхода
 
 1. Закройте оригинальное приложение ZapretMac, если оно есть: оба интерфейса управляют **одной** службой Flowseal. Отключите туннельные VPN. Настройте DNS, например 1.1.1.1 или 8.8.8.8 (рекомендация upstream).
