@@ -31,6 +31,9 @@ unprivileged and offline; Windows SCM/process tests are platform-gated.
 Build on Apple Silicon with `sh scripts/build-macos.sh`; see `docs/macos.md`.
 App self-update is manual on Mac to preserve the signed `.app` bundle; core
 update remains supported. Keep translated `macos.*` overrides in both catalogs.
+Slint and slint-build are pinned together to 1.17.1 so Slint and tray-icon share
+muda 0.19. Multiple muda versions duplicate Objective-C classes and break macOS
+release LTO; verify the dependency tree when upgrading either GUI dependency.
 
 ## Commands
 

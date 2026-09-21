@@ -30,6 +30,10 @@ jobs:
           cache-on-failure: true
       - name: Verify native Apple Silicon runner
         run: test "$(uname -m)" = arm64
+      - name: Verify a single native menu dependency
+        # cargo tree rejects an ambiguous name if Slint and tray-icon pull in
+        # different muda versions (their Objective-C classes would collide).
+        run: cargo tree --locked --target aarch64-apple-darwin --invert muda
       - name: Lint
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test without elevation or network changes

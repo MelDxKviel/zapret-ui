@@ -15,7 +15,9 @@ path = "src/lib.rs"
 
 
 [dependencies]
-slint = { version = "1.8", features = ["backend-winit", "renderer-skia"] }
+# 1.17 aligns native menus with tray-icon's muda 0.19, avoiding duplicate
+# Objective-C classes in macOS release builds with LTO enabled.
+slint = { version = "=1.17.1", features = ["backend-winit", "renderer-skia"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 zip = "8"
@@ -41,7 +43,7 @@ clipboard-win = "5"
 tauri-winrt-notification = "0.7"
 
 [build-dependencies]
-slint-build = "1.8"
+slint-build = "=1.17.1"
 winresource = "0.1"
 
 [profile.release]
