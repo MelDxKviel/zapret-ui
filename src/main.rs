@@ -61,7 +61,7 @@ async fn run_elevated_task(
     strategy_id: Option<String>,
     install_dir: std::path::PathBuf,
 ) -> anyhow::Result<()> {
-    use ports::ServiceCtl;
+    use ports::{Maintenance, ServiceCtl};
 
     match task {
         "service-install" => {
@@ -83,6 +83,14 @@ async fn run_elevated_task(
         "service-stop" => {
             let service_ctl = zapret::service::WindowsServiceCtl::new(install_dir);
             service_ctl.stop().await?;
+        }
+        "hosts-update" => {
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .read_timeout(std::time::Duration::from_secs(30))
+                .build()?;
+            let maintenance = zapret::maintenance::ZapretMaintenance::new(install_dir, client);
+            maintenance.update_hosts_file().await?;
         }
         _ => return Err(anyhow::anyhow!("Unknown elevated task: {}", task)),
     }

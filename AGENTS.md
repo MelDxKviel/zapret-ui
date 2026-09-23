@@ -78,7 +78,9 @@ successful core install (or a check that finds no newer version) emit
   `ensure_user_lists` recreates `lists\*-user.txt` that `winws.exe` refuses
   to start without.
 - **`maintenance.rs`** — in-app port of `service.bat` SETTINGS/UPDATES: game
-  filter, IPSet filter, Update IPSet List, Update Hosts File. No admin.
+  filter, IPSet filter, Update IPSet List, Update Hosts File. The Windows hosts
+  update uses the existing one-shot UAC helper, preserves unrelated entries,
+  and leaves a backup next to the system hosts file.
   Surfaced as **DPI bypass tuning** on Settings; applies on next start /
   service reinstall.
 - **`catalog.rs`** — strategies are discovered at runtime by scanning `.bat`

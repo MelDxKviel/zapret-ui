@@ -98,7 +98,8 @@ pub type TestResultCb = Box<dyn Fn(StrategyTestResult) + Send + Sync>;
 
 /// The in-app port of the `service.bat` SETTINGS / UPDATES menu items: the game
 /// filter, the ipset filter, and the ipset-list / hosts-file updaters. All
-/// operations act on files inside the install dir (no elevation required).
+/// Most operations act on files inside the install dir. Updating Windows hosts
+/// requires elevation and is handled through the one-shot elevated helper.
 #[async_trait::async_trait]
 pub trait Maintenance: Send + Sync {
     /// Read the current game-filter + ipset state from the install dir.
@@ -110,8 +111,8 @@ pub trait Maintenance: Send + Sync {
     /// Download the latest ipset list into `lists\ipset-all.txt`. Returns the
     /// number of entries loaded (the caller builds the localized message).
     async fn update_ipset_list(&self) -> anyhow::Result<usize>;
-    /// Download the repo hosts file and compare it to the system hosts file.
-    /// Returns the comparison plus the downloaded content for in-app review.
+    /// Download the repo hosts file and apply it to the system hosts file on
+    /// Windows, preserving unrelated entries and making a backup first.
     async fn update_hosts_file(&self) -> anyhow::Result<HostsCheck>;
     /// Close Discord (if running) and delete its `Cache`/`Code Cache`/`GPUCache`
     /// folders under `%appdata%\discord`. Returns what was closed/cleared.

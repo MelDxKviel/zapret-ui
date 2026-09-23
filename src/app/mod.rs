@@ -1893,7 +1893,9 @@ impl App {
                         let lang = crate::i18n::code(config.read().await.language);
                         match maintenance.update_hosts_file().await {
                             Ok(check) => {
-                                let message = if check.up_to_date {
+                                let message = if check.updated {
+                                    crate::i18n::tr(lang, "msg.hosts_updated")
+                                } else if check.up_to_date {
                                     crate::i18n::tr(lang, "msg.hosts_up_to_date")
                                 } else {
                                     crate::i18n::tr(lang, "msg.hosts_out_of_date")
@@ -1903,7 +1905,7 @@ impl App {
                                     ok: true,
                                     message,
                                 });
-                                if !check.up_to_date {
+                                if !check.up_to_date && !check.updated {
                                     // Open the folder containing the hosts file (so the
                                     // user can paste), then open the in-app review window.
                                     open_external(&check.hosts_dir);
@@ -1915,6 +1917,28 @@ impl App {
                                 }
                             }
                             Err(e) => {
+                                #[cfg(windows)]
+                                if e.to_string().contains("NeedsElevation") {
+                                    let install_dir = current_install_dir(&config).await;
+                                    let result =
+                                        match relaunch_elevated("hosts-update", None, &install_dir)
+                                        {
+                                            Ok(handle) => wait_for_elevated_result(handle).await,
+                                            Err(err) => Err(err.to_string()),
+                                        };
+                                    let (ok, message) = match result {
+                                        Ok(()) => {
+                                            (true, crate::i18n::tr(lang, "msg.hosts_updated"))
+                                        }
+                                        Err(err) => (false, err),
+                                    };
+                                    let _ = event_tx.send(UiEvent::MaintenanceResult {
+                                        kind: "hosts".to_string(),
+                                        ok,
+                                        message,
+                                    });
+                                    continue;
+                                }
                                 let _ = event_tx.send(UiEvent::MaintenanceResult {
                                     kind: "hosts".to_string(),
                                     ok: false,

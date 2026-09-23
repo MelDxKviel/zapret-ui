@@ -146,12 +146,14 @@ pub struct DiscordCacheResult {
     pub cleared: u32,
 }
 
-/// Result of the "Update Hosts File" check.
+/// Result of the "Update Hosts File" action.
 #[derive(Clone, Debug, Default)]
 pub struct HostsCheck {
-    /// Whether the system hosts file already contains the repo's entries.
+    /// Whether the system hosts file already had the repo's entries.
     pub up_to_date: bool,
-    /// The repository hosts file content (for the in-app review window).
+    /// Whether the system hosts file was updated by this action.
+    pub updated: bool,
+    /// The repository hosts content (retained for the review dialog).
     pub content: String,
     /// Absolute path to the system hosts file.
     pub hosts_path: String,
@@ -197,7 +199,7 @@ pub enum BackendCmd {
     SetIpsetMode(IpsetMode),
     /// Download the latest ipset list into `lists\ipset-all.txt`.
     UpdateIpsetList,
-    /// Compare the system hosts file to the repo hosts and open it for merge if stale.
+    /// Update the system hosts file from the repo.
     UpdateHostsFile,
     /// Close Discord (if running) and clear its Cache/Code Cache/GPUCache folders.
     ClearDiscordCache,

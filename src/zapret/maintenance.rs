@@ -1,9 +1,8 @@
 //! In-app port of the `service.bat` SETTINGS / UPDATES menu items.
 //!
 //! Covers the game filter, the ipset filter, "Update IPSet List" and "Update
-//! Hosts File". Every operation touches files under the install dir (or, for the
-//! hosts check, only *reads* the system hosts file), so none of them require
-//! elevation — unlike the SCM service operations.
+//! Hosts File". The Windows hosts update needs elevation; other operations
+//! remain confined to the user-writable install dir.
 
 use anyhow::{Context, Result};
 use reqwest::header::USER_AGENT;
@@ -14,6 +13,8 @@ use crate::contracts::{
 };
 use crate::ports::Maintenance;
 use crate::zapret::batparse;
+#[cfg(windows)]
+use crate::zapret::hosts;
 
 /// The Discord cache subfolders `service.bat` deletes under `%appdata%\discord`.
 const DISCORD_CACHE_DIRS: [&str; 3] = ["Cache", "Code Cache", "GPUCache"];
@@ -178,12 +179,8 @@ impl Maintenance for ZapretMaintenance {
     }
 
     async fn update_hosts_file(&self) -> Result<HostsCheck> {
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
-        let hosts_dir = PathBuf::from(system_root)
-            .join("System32")
-            .join("drivers")
-            .join("etc");
-        let hosts_path = hosts_dir.join("hosts");
+        let hosts_path = hosts::system_hosts_path()?;
+        let hosts_dir = hosts_path.parent().context("hosts path has no parent")?;
 
         tracing::info!("Checking hosts file against {}", HOSTS_URL);
         let resp = self
@@ -197,28 +194,17 @@ impl Maintenance for ZapretMaintenance {
             anyhow::bail!("hosts download returned HTTP {}", resp.status());
         }
         let repo = resp.text().await.context("reading hosts response")?;
-        let repo_lines: Vec<&str> = repo
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
-        let (first, last) = match (repo_lines.first(), repo_lines.last()) {
-            (Some(f), Some(l)) => (*f, *l),
-            _ => anyhow::bail!("the downloaded hosts file was empty"),
-        };
-
-        let system = std::fs::read_to_string(&hosts_path).unwrap_or_default();
-        let up_to_date = system.contains(first) && system.contains(last);
+        let updated = hosts::update_system_hosts(&hosts_path, &repo)?;
+        let up_to_date = !updated;
         if up_to_date {
             tracing::info!("Hosts file is up to date");
         } else {
-            tracing::warn!("Hosts file is out of date — review window available");
+            tracing::info!("Hosts file needed an update");
         }
 
-        // Writing the system hosts file needs admin, so we hand the content back
-        // to the UI for an in-app review/copy window instead of editing it here.
         Ok(HostsCheck {
             up_to_date,
+            updated,
             content: repo,
             hosts_path: hosts_path.display().to_string(),
             hosts_dir: hosts_dir.display().to_string(),

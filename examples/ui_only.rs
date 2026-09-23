@@ -488,14 +488,7 @@ fn main() -> anyhow::Result<()> {
             println!("UI: Update hosts file clicked");
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_hosts_ok(true);
-                ui.set_hosts_msg("Out of date — review the entries and update your hosts file".into());
-                // Demo the review modal with sample content.
-                ui.set_hosts_content(
-                    "# zapret hosts\n127.0.0.1 localhost\n\n# YouTube\n0.0.0.0 example.googlevideo.com\n0.0.0.0 r1---sn-example.googlevideo.com\n# Discord\n0.0.0.0 example.discord.com\n".into(),
-                );
-                ui.set_hosts_path("C:\\Windows\\System32\\drivers\\etc\\hosts".into());
-                ui.set_hosts_dir("C:\\Windows\\System32\\drivers\\etc".into());
-                ui.set_hosts_modal_open(true);
+                ui.set_hosts_msg("Hosts file updated (backup saved)".into());
             }
         });
     }

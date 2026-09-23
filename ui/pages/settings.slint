@@ -410,7 +410,7 @@ export component SettingsPage inherits Rectangle {
                                     clicked => { root.open_hosts_file_clicked(); }
                                 }
                                 AppButton {
-                                    text: root.hosts_busy ? I18n.t(I18n.lang, "settings.checking") : I18n.t(I18n.lang, "settings.check_update");
+                                    text: root.hosts_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "settings.check_update");
                                     icon: @image-url("../../assets/icons/refresh.svg");
                                     enabled: !root.hosts_busy;
                                     clicked => { root.update_hosts_clicked(); }

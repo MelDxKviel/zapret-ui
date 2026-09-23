@@ -204,7 +204,7 @@
   "settings.update_ipset_hint": "Download the latest blocked-IP list (ipset-all.txt) from the zapret repository.",
   "settings.updating": "Updating…",
   "settings.update_hosts_label": "Update hosts file",
-  "settings.update_hosts_hint": "Compare your system hosts file with the repository's. If outdated, the downloaded copy opens for a manual merge.",
+  "settings.update_hosts_hint": "Download current entries and update hosts while preserving other lines and a backup.",
   "settings.checking": "Checking…",
   "settings.check_update": "Check & update",
   "settings.discord_cache_label": "Clear Discord cache",
@@ -254,6 +254,7 @@
   "hosts.open_folder": "Open hosts folder",
 
   "msg.hosts_up_to_date": "Hosts file is already up to date",
+  "msg.hosts_updated": "Hosts file updated (backup saved)",
   "msg.hosts_out_of_date": "Out of date — review the entries and update your hosts file",
   "msg.ipset_updated": "Updated — {count} IP entries loaded",
   "msg.discord_closed": "Discord closed",

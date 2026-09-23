@@ -204,7 +204,7 @@
   "settings.update_ipset_hint": "Загрузить актуальный список заблокированных IP (ipset-all.txt) из репозитория zapret.",
   "settings.updating": "Обновление…",
   "settings.update_hosts_label": "Обновить файл hosts",
-  "settings.update_hosts_hint": "Сравнить ваш системный файл hosts с репозиторием. Если устарел, загруженная копия откроется для ручного объединения.",
+  "settings.update_hosts_hint": "Загрузить актуальные записи и обновить hosts, сохранив остальные строки и резервную копию файла.",
   "settings.checking": "Проверка…",
   "settings.check_update": "Проверить и обновить",
   "settings.discord_cache_label": "Очистить кэш Discord",
@@ -254,6 +254,7 @@
   "hosts.open_folder": "Открыть папку hosts",
 
   "msg.hosts_up_to_date": "Файл hosts уже актуален",
+  "msg.hosts_updated": "Файл hosts обновлён (резервная копия сохранена)",
   "msg.hosts_out_of_date": "Устарел — просмотрите записи и обновите ваш файл hosts",
   "msg.ipset_updated": "Обновлено — загружено записей IP: {count}",
   "msg.discord_closed": "Discord закрыт",

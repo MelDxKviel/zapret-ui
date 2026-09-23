@@ -2,6 +2,8 @@ pub mod batparse;
 pub mod catalog;
 pub mod elevation;
 pub mod github;
+#[cfg(windows)]
+pub mod hosts;
 pub mod installer;
 pub mod maintenance;
 pub mod paths;
