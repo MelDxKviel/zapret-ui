@@ -9,7 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::{collections::BTreeMap, net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::TcpStream,
+    net::{lookup_host, TcpSocket, TcpStream, ToSocketAddrs},
     sync::Mutex,
     time::{timeout, Instant},
 };
@@ -20,6 +20,34 @@ use tokio_tungstenite::{
 };
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+// Keep upstream sockets out of subsequently spawned winws/helper processes too.
+// TcpSocket uses non-inheritable Windows handles at creation, without a race
+// between creating the socket and clearing its inheritance flag.
+async fn connect_tcp(address: impl ToSocketAddrs) -> std::io::Result<TcpStream> {
+    let mut last_error = None;
+    for address in lookup_host(address).await? {
+        let socket = if address.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        };
+        let result = match socket {
+            Ok(socket) => socket.connect(address).await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "no resolved Telegram address",
+        )
+    }))
+}
 
 pub(super) struct Routes {
     overrides: BTreeMap<u16, Ipv4Addr>,
@@ -96,9 +124,9 @@ impl Routes {
                 for domain in &names {
                     let result = timeout(self.timeout, async {
                         let socket = if let Some(ip) = override_ip {
-                            TcpStream::connect((ip, 443)).await?
+                            connect_tcp((ip, 443)).await?
                         } else {
-                            TcpStream::connect((domain.as_str(), 443)).await?
+                            connect_tcp((domain.as_str(), 443)).await?
                         };
                         socket.set_nodelay(true)?;
                         // The override changes the destination IP only. The TLS name
@@ -150,7 +178,7 @@ impl Routes {
         }
         if self.fallback {
             if let Some(ip) = dc_ip(id) {
-                if let Ok(Ok(socket)) = timeout(self.timeout, TcpStream::connect((ip, 443))).await {
+                if let Ok(Ok(socket)) = timeout(self.timeout, connect_tcp((ip, 443))).await {
                     socket.set_nodelay(true)?;
                     tracing::debug!("Telegram DC{dc}: using TCP fallback");
                     return Ok(Upstream::Tcp(socket));

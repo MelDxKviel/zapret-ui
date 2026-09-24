@@ -141,6 +141,12 @@ overrides, retries official domains, and optionally falls back to direct TCP.
 Buffers/connection count are bounded. Never log secrets or proxy links. No CF
 relay domains, public listen addresses, certificate bypass or keepalive pool.
 
+Create Telegram listeners and outbound connections through `TcpSocket`, which
+sets non-inheritable Windows handles atomically. Direct Mio-backed
+`TcpListener::bind` / `TcpStream::connect` can leak sockets into a spawned winws
+or helper process and keep the proxy port occupied after Stop. Do not work around
+this with `SO_REUSEADDR`; genuinely occupied ports must still be rejected.
+
 `cargo test --lib telegram` runs local protocol/lifecycle/bridge tests. The
 ignored `live_telegram_wss_mtproto_roundtrip` test sends an unauthenticated
 req_pq_multi to Telegram (no account or client config), and must be explicitly

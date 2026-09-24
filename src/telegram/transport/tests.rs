@@ -1,6 +1,6 @@
 use super::*;
 use aes::cipher::KeyIvInit;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, client_async};
 
 async fn pair() -> (TcpStream, TcpStream) {
@@ -14,6 +14,66 @@ async fn pair() -> (TcpStream, TcpStream) {
 
 fn cipher(seed: u8) -> Cipher {
     Cipher::new_from_slices(&[seed; 32], &[seed; 16]).unwrap()
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn outbound_connection_closes_while_spawned_child_is_alive() {
+    use std::{path::PathBuf, process::Stdio};
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (outbound, accepted) = timeout(Duration::from_secs(2), async {
+        tokio::join!(connect_tcp(address), listener.accept())
+    })
+    .await
+    .unwrap();
+    let mut outbound = outbound.unwrap();
+    let (mut server, _) = accepted.unwrap();
+    drop(listener);
+
+    timeout(Duration::from_secs(2), async {
+        outbound.write_all(b"ping").await.unwrap();
+        let mut data = [0; 4];
+        server.read_exact(&mut data).await.unwrap();
+        assert_eq!(&data, b"ping");
+        server.write_all(b"pong").await.unwrap();
+        outbound.read_exact(&mut data).await.unwrap();
+        assert_eq!(&data, b"pong");
+    })
+    .await
+    .unwrap();
+
+    // Closing the proxy's upstream must produce EOF even if another process
+    // was launched while it was connected. The child only waits on its stdin.
+    let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32")
+        .join("cmd.exe");
+    let mut child = tokio::process::Command::new(shell)
+        .args(["/D", "/Q", "/C", "set /p proxy_test_wait="])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x08000000)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+
+    drop(outbound);
+    let mut data = [0; 1];
+    let read = timeout(Duration::from_secs(2), server.read(&mut data)).await;
+    let child_still_running = child.try_wait().unwrap().is_none();
+    child.kill().await.unwrap();
+
+    assert!(
+        child_still_running,
+        "the inheritance probe must remain alive"
+    );
+    assert!(
+        matches!(read, Ok(Ok(0))),
+        "child retained upstream socket: {read:?}"
+    );
 }
 
 #[tokio::test]

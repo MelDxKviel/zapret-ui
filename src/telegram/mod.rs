@@ -11,7 +11,7 @@ use anyhow::Result;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{
-    net::TcpListener,
+    net::TcpSocket,
     sync::{oneshot, Mutex},
     task::{JoinHandle, JoinSet},
 };
@@ -54,12 +54,18 @@ impl TelegramProxy for LocalTelegramProxy {
         let secret = settings::decode_secret(&settings.secret)?;
         // Construct TLS config only on Start, and share it across connections.
         let routes = Arc::new(transport::Routes::new(&settings)?);
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, settings.port))
-            .await
-            .map_err(|e| {
-                tracing::warn!("Telegram listener: {e}");
-                anyhow::anyhow!("telegram.error_bind")
-            })?;
+        // TcpSocket creates a non-inheritable handle on Windows. Mio's direct
+        // TcpListener::bind path leaves it inheritable: a subsequently spawned
+        // winws process can then keep the port occupied even after Stop.
+        let listener = (|| {
+            let socket = TcpSocket::new_v4()?;
+            socket.bind((Ipv4Addr::LOCALHOST, settings.port).into())?;
+            socket.listen(1024)
+        })()
+        .map_err(|e| {
+            tracing::warn!("Telegram listener: {e}");
+            anyhow::anyhow!("telegram.error_bind")
+        })?;
         let (shutdown, mut stop) = oneshot::channel();
         on_status(TelegramProxyStatus {
             running: true,

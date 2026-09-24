@@ -3,7 +3,7 @@ use aes::cipher::{KeyIvInit, StreamCipher};
 use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
     time::{timeout, Duration},
 };
 
@@ -77,6 +77,54 @@ async fn occupied_port_fails_without_running_task() {
         "telegram.error_bind"
     );
     assert!(!proxy.is_running().await);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn stopping_proxy_releases_port_while_spawned_child_is_alive() {
+    use std::{path::PathBuf, process::Stdio};
+
+    let proxy = LocalTelegramProxy::default();
+    let settings = TelegramProxySettings {
+        port: free_port(),
+        ..Default::default()
+    };
+    proxy
+        .start(settings.clone(), Arc::new(|_| {}))
+        .await
+        .unwrap();
+
+    // Windows children may inherit handles when their standard I/O is piped.
+    // Keep a harmless child waiting for input, like a long-lived winws process,
+    // while stopping the proxy. An inherited listener would keep its port busy.
+    let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32")
+        .join("cmd.exe");
+    let mut child = tokio::process::Command::new(shell)
+        .args(["/D", "/Q", "/C", "set /p proxy_test_wait="])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x08000000)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+
+    let stopped = timeout(Duration::from_secs(2), proxy.stop()).await;
+    let rebound = TcpListener::bind((Ipv4Addr::LOCALHOST, settings.port)).await;
+    let child_still_running = child.try_wait().unwrap().is_none();
+    child.kill().await.unwrap();
+
+    stopped.unwrap().unwrap();
+    assert!(
+        child_still_running,
+        "the inheritance probe must remain alive"
+    );
+    assert!(
+        rebound.is_ok(),
+        "child retained the proxy listener: {rebound:?}"
+    );
 }
 
 #[tokio::test]
