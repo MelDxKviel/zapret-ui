@@ -16,6 +16,25 @@ fn cipher(seed: u8) -> Cipher {
     Cipher::new_from_slices(&[seed; 32], &[seed; 16]).unwrap()
 }
 
+#[test]
+fn websocket_route_never_substitutes_another_dc() {
+    let routes = Routes::new(&TelegramProxySettings {
+        dc_overrides: "2:149.154.167.220 4:149.154.167.220 203:91.105.192.100".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        routes.wss_override(2),
+        Some(Ipv4Addr::new(149, 154, 167, 220))
+    );
+    assert_eq!(
+        routes.wss_override(-4),
+        Some(Ipv4Addr::new(149, 154, 167, 220))
+    );
+    assert_eq!(routes.wss_override(1), None);
+    assert_eq!(routes.wss_override(203), None);
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn outbound_connection_closes_while_spawned_child_is_alive() {

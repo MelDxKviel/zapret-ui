@@ -209,6 +209,10 @@ fn settings_normalize_validate_and_never_print_secret() {
 #[tokio::test]
 #[ignore = "requires a reachable Telegram WebSocket endpoint"]
 async fn live_telegram_wss_mtproto_roundtrip() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_test_writer()
+        .try_init();
     timeout(Duration::from_secs(35), async {
         let proxy = LocalTelegramProxy::default();
         let settings = proxy
