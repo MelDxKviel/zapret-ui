@@ -13,6 +13,7 @@ pub mod ports;
 pub mod selfupdate;
 pub mod single_instance;
 pub mod state;
+pub mod telegram;
 pub mod tray;
 pub mod winenv;
 pub mod winicon;
@@ -297,6 +298,7 @@ async fn main() -> anyhow::Result<()> {
         tester,
         maintenance,
         self_updater,
+        Arc::new(telegram::LocalTelegramProxy::default()),
         config,
         state,
         event_tx,

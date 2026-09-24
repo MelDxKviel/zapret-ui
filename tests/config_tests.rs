@@ -27,6 +27,33 @@ fn test_config_default() {
     assert!(config.favorites.is_empty());
     assert!(config.notifications_enabled);
     assert!(!config.autoengage);
+    assert!(config.show_telegram_proxy);
+    assert!(config.telegram_proxy.secret.is_empty());
+}
+
+#[test]
+fn telegram_settings_persist_and_old_configs_keep_defaults() {
+    let config = AppConfig {
+        show_telegram_proxy: false,
+        telegram_proxy: contracts::TelegramProxySettings {
+            port: 2443,
+            secret: "00112233445566778899aabbccddeeff".into(),
+            tcp_fallback: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let text = toml::to_string(&config).unwrap();
+    assert_eq!(toml::from_str::<AppConfig>(&text).unwrap(), config);
+    let mut old = toml::Value::try_from(config).unwrap();
+    old.as_table_mut().unwrap().remove("telegram_proxy");
+    old.as_table_mut().unwrap().remove("show_telegram_proxy");
+    let loaded: AppConfig = old.try_into().unwrap();
+    assert!(loaded.show_telegram_proxy);
+    assert_eq!(
+        loaded.telegram_proxy,
+        contracts::TelegramProxySettings::default()
+    );
 }
 
 #[test]

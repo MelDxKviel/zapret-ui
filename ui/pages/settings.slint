@@ -78,6 +78,8 @@ component SettingsRow inherits Rectangle {
 }
 
 export component SettingsPage inherits Rectangle {
+    in-out property <bool> show_telegram_proxy;
+    callback telegram_visibility_changed(bool);
     in-out property <bool> autostart;
     in-out property <bool> autoupdate_check;
     in-out property <bool> minimize_to_tray;
@@ -170,6 +172,14 @@ export component SettingsPage inherits Rectangle {
                 // Application
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_application");
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "telegram.visibility_label");
+                        hint: I18n.t(I18n.lang, "telegram.visibility_hint");
+                        AppSwitch {
+                            checked <=> root.show_telegram_proxy;
+                            toggled(v) => { root.telegram_visibility_changed(v); }
+                        }
+                    }
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.autostart_label");
                         hint: I18n.t(I18n.lang, "settings.autostart_hint");

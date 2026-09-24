@@ -18,6 +18,7 @@ export component AppButton inherits Rectangle {
     callback clicked;
 
     property <bool> is-primary: root.variant == "primary";
+    property <bool> is-telegram: root.variant == "telegram";
     property <bool> is-danger: root.variant == "danger";
     property <bool> is-ghost: root.variant == "ghost";
     property <bool> active: root.enabled && !root.busy;
@@ -29,6 +30,7 @@ export component AppButton inherits Rectangle {
 
     // Foreground (text + icon) colour.
     property <color> fg:
+        root.is-telegram ? #ffffff :
         root.is-primary ? ThemePalette.accent-ink :
         root.is-danger  ? ThemePalette.danger :
         root.is-ghost   ? (root.hovered ? ThemePalette.text : ThemePalette.text-2) :
@@ -44,12 +46,14 @@ export component AppButton inherits Rectangle {
     animate opacity { duration: 120ms; }
 
     background:
+        root.is-telegram ? (root.hovered ? #168cc5 : #229ed9) :
         root.is-primary ? (root.hovered ? ThemePalette.accent-hover : ThemePalette.accent) :
         root.is-danger  ? (root.hovered ? ThemePalette.danger-soft : transparent) :
         root.is-ghost   ? (root.hovered ? ThemePalette.surface : transparent) :
         (root.hovered ? ThemePalette.surface-hover : ThemePalette.surface);
 
     border-color:
+        root.is-telegram ? #229ed9 :
         root.is-primary ? (root.hovered ? ThemePalette.accent-hover : ThemePalette.accent) :
         root.is-danger  ? (root.hovered ? ThemePalette.danger : ThemePalette.danger-line) :
         (root.hovered ? ThemePalette.border-strong : ThemePalette.border);

@@ -7,6 +7,7 @@ pub mod ports;
 pub mod selfupdate;
 pub mod single_instance;
 pub mod state;
+pub mod telegram;
 pub mod tray;
 pub mod winenv;
 pub mod zapret;

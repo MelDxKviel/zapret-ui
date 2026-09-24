@@ -24,11 +24,17 @@ extern "system" {
 /// Uses `ShellExecuteW` directly rather than `cmd /C start`, so shell
 /// metacharacters in the target can't be interpreted (command-injection fix).
 pub(super) fn open_external(target: &str) {
+    let _ = try_open_external(target);
+}
+
+/// Checked variant for actions that need a useful failure message (e.g. a
+/// missing Telegram tg:// protocol handler).
+pub(super) fn try_open_external(target: &str) -> bool {
     let file_w: Vec<u16> = OsStr::new(target).encode_wide().chain(Some(0)).collect();
     unsafe {
         // null lpOperation => default verb ("open"), which handles URLs, files
         // and folders without going through a command interpreter.
-        ShellExecuteW(
+        let result = ShellExecuteW(
             ptr::null_mut(),
             ptr::null(),
             file_w.as_ptr(),
@@ -36,6 +42,7 @@ pub(super) fn open_external(target: &str) {
             ptr::null(),
             1, // SW_SHOWNORMAL
         );
+        result as isize > 32
     }
 }
 

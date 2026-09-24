@@ -11,6 +11,26 @@ pub type TestProgressCb = Box<dyn Fn(u32, u32, &str) + Send + Sync>;
 /// Called as a download streams: `(bytes_so_far, total_bytes_if_known)`.
 pub type DownloadProgressCb = Box<dyn Fn(u64, Option<u64>) + Send + Sync>;
 
+pub type TelegramStatusCb =
+    std::sync::Arc<dyn Fn(crate::contracts::TelegramProxyStatus) + Send + Sync>;
+
+#[async_trait::async_trait]
+pub trait TelegramProxy: Send + Sync {
+    /// Validate and normalize settings; generate a secret only when requested.
+    fn prepare_settings(
+        &self,
+        settings: crate::contracts::TelegramProxySettings,
+    ) -> anyhow::Result<crate::contracts::TelegramProxySettings>;
+    async fn start(
+        &self,
+        settings: crate::contracts::TelegramProxySettings,
+        on_status: TelegramStatusCb,
+    ) -> anyhow::Result<()>;
+    /// Cancels and joins the listener and every connection before returning.
+    async fn stop(&self) -> anyhow::Result<()>;
+    async fn is_running(&self) -> bool;
+}
+
 #[async_trait::async_trait]
 pub trait Installer: Send + Sync {
     async fn is_installed(&self) -> bool;

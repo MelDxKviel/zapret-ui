@@ -250,6 +250,54 @@ fn main() -> anyhow::Result<()> {
     ui.on_open_log_file_clicked(|| println!("UI: Open log file clicked"));
     ui.on_open_url_clicked(|url| println!("UI: Open URL: {}", url));
 
+    // Telegram preview is entirely local mock state: no socket, crypto or config.
+    {
+        let weak = ui.as_weak();
+        ui.on_telegram_start(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_telegram_running(true);
+                ui.set_telegram_busy(false);
+                ui.set_telegram_secret("00112233445566778899aabbccddeeff".into());
+                ui.set_telegram_link("tg://proxy?server=127.0.0.1&port=1443&secret=dd00112233445566778899aabbccddeeff".into());
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_telegram_stop(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_telegram_running(false);
+                ui.set_telegram_busy(false);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_telegram_save(move |port, secret, dc, fallback, timeout, limit| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_telegram_port(port);
+                ui.set_telegram_secret(secret);
+                ui.set_telegram_dc_overrides(dc);
+                ui.set_telegram_fallback(fallback);
+                ui.set_telegram_timeout(timeout);
+                ui.set_telegram_limit(limit);
+                ui.set_telegram_busy(false);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_set_telegram_visible(move |visible| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_show_telegram_proxy(visible);
+                if !visible {
+                    ui.set_telegram_running(false);
+                }
+            }
+        });
+    }
+    ui.on_telegram_connect(|| println!("UI: Connect Telegram (mock)"));
+
     // Set initial status
     ui.set_status_installed(true);
     ui.set_status_installed_version("v1.0.0-mock".into());
@@ -536,14 +584,24 @@ fn main() -> anyhow::Result<()> {
     // Mirrors what `rebuild_logs` produces: short local time, padded level,
     // shortened tracing target (`app:`) or `winws:` for core output.
     let log_lines = vec![
-        mk(1, "16:14:34", "INFO", "app: zapret-ui started in UI-only mode"),
+        mk(
+            1,
+            "16:14:34",
+            "INFO",
+            "app: zapret-ui started in UI-only mode",
+        ),
         mk(
             2,
             "16:14:34",
             "INFO",
             "installer: Mock installer ready, version v1.0.0-mock",
         ),
-        mk(3, "16:14:34", "INFO", "catalog: 3 strategies loaded from catalog"),
+        mk(
+            3,
+            "16:14:34",
+            "INFO",
+            "catalog: 3 strategies loaded from catalog",
+        ),
         mk(
             4,
             "16:14:35",
@@ -627,11 +685,27 @@ fn main() -> anyhow::Result<()> {
     // and/or force a window size, e.g.
     //   ZAPRET_UI_PREVIEW_PAGE=tester ZAPRET_UI_PREVIEW_SIZE=940x900 cargo run --example ui_only
     // The tester page also gets its mock results filled in so the ranked list renders.
+    if let Ok(theme) = std::env::var("ZAPRET_UI_PREVIEW_THEME") {
+        ui.set_theme(theme.into());
+    }
+    if let Ok(lang) = std::env::var("ZAPRET_UI_PREVIEW_LANG") {
+        ui.global::<I18n>().set_lang(lang.into());
+    }
     if let Ok(page) = std::env::var("ZAPRET_UI_PREVIEW_PAGE") {
+        ui.set_current_page(if page.starts_with("telegram") {
+            "telegram".into()
+        } else {
+            page.as_str().into()
+        });
+        if page.starts_with("telegram") {
+            ui.set_telegram_settings_open(page == "telegram-settings");
+            if page == "telegram-active" {
+                ui.invoke_telegram_start();
+            }
+        }
         if page == "tester" {
             ui.invoke_test_start_clicked();
         }
-        ui.set_current_page(page.into());
     }
     if let Ok(size) = std::env::var("ZAPRET_UI_PREVIEW_SIZE") {
         if let Some((w, h)) = size.split_once('x') {
@@ -641,6 +715,29 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Optional renderer snapshot for reproducible visual QA, no desktop capture.
+    if let Ok(path) = std::env::var("ZAPRET_UI_PREVIEW_SNAPSHOT") {
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1000), move || {
+            if let Some(ui) = weak.upgrade() {
+                match ui.window().take_snapshot() {
+                    Ok(pixels) => {
+                        if let Err(e) = image::save_buffer(
+                            &path,
+                            pixels.as_bytes(),
+                            pixels.width(),
+                            pixels.height(),
+                            image::ColorType::Rgba8,
+                        ) {
+                            eprintln!("Snapshot save failed: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("Snapshot failed: {e}"),
+                }
+            }
+            let _ = slint::quit_event_loop();
+        });
+    }
     ui.run()?;
     Ok(())
 }

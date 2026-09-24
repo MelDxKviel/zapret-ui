@@ -1,0 +1,239 @@
+import { ThemePalette } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
+import { AppButton } from "../components/button.slint";
+import { AppInput } from "../components/input.slint";
+import { AppSwitch } from "../components/switch.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component Caption inherits Text {
+    font-family: ThemePalette.font-sans;
+    font-size: ThemePalette.fs-12;
+    color: ThemePalette.text-3;
+    wrap: word-wrap;
+}
+component Label inherits Text {
+    font-family: ThemePalette.font-sans;
+    font-size: ThemePalette.fs-13;
+    font-weight: 500;
+    color: ThemePalette.text;
+    wrap: word-wrap;
+}
+
+export component TelegramPage inherits Rectangle {
+    in property <bool> running;
+    in property <bool> busy;
+    in property <string> error;
+    in property <string> port;
+    in property <string> secret;
+    in property <string> dc-overrides;
+    in property <bool> fallback;
+    in property <string> timeout;
+    in property <string> limit;
+    in property <string> link;
+    callback start-clicked();
+    callback stop-clicked();
+    callback connect-clicked();
+    callback copy-clicked();
+    callback save-clicked(string, string, string, bool, string, string);
+
+    in-out property <bool> settings-open: false;
+    property <bool> saving: false;
+    property <string> draft-port;
+    property <string> draft-secret;
+    property <string> draft-dc;
+    property <bool> draft-fallback;
+    property <string> draft-timeout;
+    property <string> draft-limit;
+    changed busy => {
+        if (!root.busy && root.saving) {
+            root.saving = false;
+            if (root.error == "") { root.settings-open = false; }
+        }
+    }
+    function load-draft() {
+        root.draft-port = root.port;
+        root.draft-secret = root.secret;
+        root.draft-dc = root.dc-overrides;
+        root.draft-fallback = root.fallback;
+        root.draft-timeout = root.timeout;
+        root.draft-limit = root.limit;
+    }
+    changed settings-open => { if (root.settings-open) { root.load-draft(); } }
+    init => { root.load-draft(); }
+
+    width: 100%; height: 100%;
+    background: transparent;
+    HorizontalLayout {
+        VerticalLayout {
+            padding: 32px;
+            spacing: 0px;
+            VerticalLayout {
+                vertical-stretch: 0;
+                padding-bottom: 20px;
+                Text {
+                    text: I18n.t(I18n.lang, root.settings-open ? "telegram.settings_title" : "telegram.title");
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-22;
+                    font-weight: 600;
+                    color: ThemePalette.text;
+                }
+            }
+            Rectangle { height: 1px; background: ThemePalette.divider; }
+            sv := ScrollView {
+                viewport-width: sv.visible-width;
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    width: sv.visible-width;
+                    min-height: sv.visible-height;
+                    padding-top: 28px;
+                    padding-bottom: 28px;
+                    padding-right: 8px;
+                    alignment: center;
+                    VerticalLayout {
+                        horizontal-stretch: 0;
+                        min-width: 0px;
+                        preferred-width: 560px;
+                        max-width: 560px;
+                        spacing: 20px;
+                        alignment: root.settings-open ? start : center;
+                        if !root.settings-open : VerticalLayout {
+                            spacing: 24px;
+                            alignment: start;
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 80px; height: 80px; border-radius: 40px;
+                                    background: #229ed91c;
+                                    Image { source: @image-url("../../assets/icons/telegram.svg"); width: 42px; height: 42px; colorize: #229ed9; }
+                                }
+                            }
+                            Text {
+                                text: I18n.t(I18n.lang, root.running ? "telegram.active" : "telegram.inactive");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-22;
+                                font-weight: 600;
+                                color: ThemePalette.text;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                            Caption { text: I18n.t(I18n.lang, "telegram.description"); horizontal-alignment: center; }
+                            HorizontalLayout {
+                                alignment: center; spacing: 8px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle { width: 7px; height: 7px; border-radius: 4px; background: root.running ? #229ed9 : ThemePalette.text-4; }
+                                }
+                                Caption { text: "127.0.0.1:" + root.port; font-family: ThemePalette.font-mono; }
+                            }
+                            AppButton {
+                                width: min(sv.visible-width - 8px, 560px);
+                                size: "lg";
+                                variant: root.running ? "default" : "telegram";
+                                text: I18n.t(I18n.lang, root.running ? "telegram.stop" : "telegram.start");
+                                busy: root.busy;
+                                clicked => { if (root.running) { root.stop-clicked(); } else { root.start-clicked(); } }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                AppButton {
+                                    width: (min(sv.visible-width - 8px, 560px) - 8px) / 2;
+                                    text: I18n.t(I18n.lang, "telegram.connect");
+                                    icon: @image-url("../../assets/icons/telegram.svg");
+                                    enabled: root.running && !root.busy && root.link != "";
+                                    clicked => { root.connect-clicked(); }
+                                }
+                                AppButton {
+                                    width: (min(sv.visible-width - 8px, 560px) - 8px) / 2;
+                                    text: I18n.t(I18n.lang, "telegram.copy_link");
+                                    enabled: root.running && !root.busy && root.link != "";
+                                    clicked => { root.copy-clicked(); }
+                                }
+                            }
+                            Caption { text: I18n.t(I18n.lang, "telegram.lifetime"); horizontal-alignment: center; }
+                        }
+                        if root.settings-open : VerticalLayout {
+                            spacing: 12px;
+                            Caption { text: I18n.t(I18n.lang, root.running ? "telegram.stop_to_edit" : "telegram.settings_hint"); }
+                            Label { text: I18n.t(I18n.lang, "telegram.port"); }
+                            AppInput { text <=> root.draft-port; enabled: !root.running && !root.busy; }
+                            Label { text: I18n.t(I18n.lang, "telegram.secret"); }
+                            AppInput { text <=> root.draft-secret; enabled: !root.running && !root.busy; placeholder: I18n.t(I18n.lang, "telegram.secret_hint"); }
+                            Caption { text: I18n.t(I18n.lang, "telegram.secret_note"); }
+                            Label { text: I18n.t(I18n.lang, "telegram.dc"); }
+                            AppInput { text <=> root.draft-dc; enabled: !root.running && !root.busy; placeholder: "2:149.154.167.220 4:149.154.167.220"; }
+                            Caption { text: I18n.t(I18n.lang, "telegram.dc_hint"); }
+                            HorizontalLayout {
+                                spacing: 16px;
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    Label { text: I18n.t(I18n.lang, "telegram.timeout"); }
+                                    AppInput { text <=> root.draft-timeout; enabled: !root.running && !root.busy; }
+                                }
+                                VerticalLayout {
+                                    spacing: 6px;
+                                    Label { text: I18n.t(I18n.lang, "telegram.limit"); }
+                                    AppInput { text <=> root.draft-limit; enabled: !root.running && !root.busy; }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 16px;
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Label { text: I18n.t(I18n.lang, "telegram.fallback"); }
+                                    Caption { text: I18n.t(I18n.lang, "telegram.fallback_hint"); }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    AppSwitch { checked <=> root.draft-fallback; enabled: !root.running && !root.busy; }
+                                }
+                            }
+                        }
+                        if root.error != "" : Caption {
+                            text: I18n.t(I18n.lang, root.error);
+                            color: ThemePalette.danger;
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: ThemePalette.divider; }
+            Rectangle {
+                height: 60px;
+                HorizontalLayout {
+                    padding-top: 16px; spacing: 12px;
+                    alignment: end;
+                    if !root.settings-open : VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            text: I18n.t(I18n.lang, "telegram.settings");
+                            icon: @image-url("../../assets/icons/settings.svg");
+                            variant: "ghost";
+                            enabled: !root.busy;
+                            clicked => { root.settings-open = true; }
+                        }
+                    }
+                    if root.settings-open : VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            text: I18n.t(I18n.lang, "telegram.back");
+                            enabled: !root.busy;
+                            clicked => { root.settings-open = false; }
+                        }
+                    }
+                    if root.settings-open : VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            text: I18n.t(I18n.lang, "telegram.save");
+                            variant: "telegram";
+                            enabled: !root.running;
+                            busy: root.busy;
+                            clicked => {
+                                root.saving = true;
+                                root.save-clicked(root.draft-port, root.draft-secret, root.draft-dc, root.draft-fallback, root.draft-timeout, root.draft-limit);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

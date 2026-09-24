@@ -30,9 +30,9 @@ Do not commit `.bundle-ref/` (local upstream tree with `winws.exe` / WinDivert).
 
 ## Architecture
 
-**Ports-and-adapters.** `src/ports.rs` defines seven traits — `Installer`,
+**Ports-and-adapters.** `src/ports.rs` defines eight traits — `Installer`,
 `SelfUpdater`, `Runner`, `ServiceCtl`, `StrategyCatalog`, `StrategyTester`,
-`Maintenance`. `src/contracts.rs` holds the shared types (`Strategy`,
+`Maintenance`, `TelegramProxy`. `src/contracts.rs` holds the shared types (`Strategy`,
 `RuntimeStatus`, `BackendCmd`, `UiEvent`). Concrete adapters live under
 `src/zapret/` (plus `src/selfupdate.rs` for the app binary itself).
 
@@ -117,6 +117,34 @@ successful core install (or a check that finds no newer version) emit
   downloads `zapret-ui.exe` + `.sha256`, verifies, Windows rename-self swap.
   `cleanup_old_binary()` at startup. After a successful swap the orchestrator
   calls `relaunch_after_update()` (`--relaunch`) and `process::exit(0)`.
+
+### Telegram proxy
+
+`src/telegram/` is a native, local-only MTProto → Telegram WSS bridge inspired
+by Flowseal/tg-ws-proxy, not a bundled Python subprocess. `LocalTelegramProxy`
+implements the `TelegramProxy` port. It is always stopped on app launch; no
+listener, TLS context, connection pool, polling or task is created until Start.
+Stop joins the listener and every connection task. Keep it independent of the
+zapret core, strategy testing and elevation.
+
+`src/app/telegram.rs` serializes user actions with an on-demand task + mutex,
+outside the core command queue so a download cannot block Stop. UI updates still
+go through `UiEvent`. Settings are saved before Start; edit only while stopped.
+Hiding the blue entry in the sidebar footer, immediately above the status pill,
+also stops the proxy. Its page is instantiated only while selected
+(`ui/pages/telegram.slint`); keep mocks in `ui_only` synced.
+
+`protocol.rs` implements MTProxy SHA256/AES-256-CTR key derivation and stream
+translation, retaining MTProto payload encryption. `transport.rs` sends complete
+transport packets as WS binary messages, validates TLS names even for IP
+overrides, retries official domains, and optionally falls back to direct TCP.
+Buffers/connection count are bounded. Never log secrets or proxy links. No CF
+relay domains, public listen addresses, certificate bypass or keepalive pool.
+
+`cargo test --lib telegram` runs local protocol/lifecycle/bridge tests. The
+ignored `live_telegram_wss_mtproto_roundtrip` test sends an unauthenticated
+req_pq_multi to Telegram (no account or client config), and must be explicitly
+opted into with `-- --ignored` when network access is available.
 
 ### Elevation model
 

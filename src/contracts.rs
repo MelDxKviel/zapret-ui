@@ -252,6 +252,10 @@ pub struct StrategyTestResult {
 
 #[derive(Clone, Debug)]
 pub enum UiEvent {
+    TelegramStatus(TelegramProxyStatus),
+    TelegramSettings(TelegramProxySettings),
+    TelegramError(String),
+    TelegramVisibility(bool),
     Status(RuntimeStatus),
     DownloadProgress {
         bytes: u64,
@@ -366,4 +370,69 @@ pub enum InstallStage {
     Extracting,
     Verifying,
     Done,
+}
+
+/// Persisted options only: a stopped proxy owns no listener or background task.
+/// The secret is generated on first use, never while loading the application.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TelegramProxySettings {
+    pub port: u16,
+    pub secret: String,
+    /// Optional WS endpoint overrides, e.g. "2:149.154.167.220 4:149.154.167.220".
+    pub dc_overrides: String,
+    pub tcp_fallback: bool,
+    pub connect_timeout_secs: u16,
+    pub max_connections: u16,
+}
+
+// Avoid accidentally disclosing the secret when logging config/commands.
+impl std::fmt::Debug for TelegramProxySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramProxySettings")
+            .field("port", &self.port)
+            .field("secret", &"[redacted]")
+            .field("dc_overrides", &self.dc_overrides)
+            .field("tcp_fallback", &self.tcp_fallback)
+            .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
+}
+
+impl Default for TelegramProxySettings {
+    fn default() -> Self {
+        Self {
+            port: 1443,
+            secret: String::new(),
+            dc_overrides: "2:149.154.167.220 4:149.154.167.220".into(),
+            tcp_fallback: true,
+            connect_timeout_secs: 5,
+            max_connections: 64,
+        }
+    }
+}
+
+impl TelegramProxySettings {
+    /// Padded intermediate MTProto. Always local; never advertise a LAN proxy.
+    pub fn link(&self) -> String {
+        if self.port == 0
+            || self.secret.len() != 32
+            || !self.secret.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            return String::new();
+        }
+        format!(
+            "tg://proxy?server=127.0.0.1&port={}&secret=dd{}",
+            self.port, self.secret
+        )
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TelegramProxyStatus {
+    pub running: bool,
+    pub connections: u32,
+    /// Localizable error key (technical diagnostics go to the log).
+    pub error: String,
 }

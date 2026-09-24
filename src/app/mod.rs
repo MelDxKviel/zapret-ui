@@ -5,6 +5,7 @@ use crate::contracts::{
 };
 use crate::ports::{
     Installer, Maintenance, Runner, SelfUpdater, ServiceCtl, StrategyCatalog, StrategyTester,
+    TelegramProxy,
 };
 use crate::state::AppState;
 use crate::tray::SystemTray;
@@ -17,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 slint::include_modules!();
 
+mod telegram;
 mod ui_models;
 mod winexec;
 use ui_models::{is_favorite, rebuild_logs, rebuild_strategies, rebuild_test_results, to_item};
@@ -263,6 +265,7 @@ pub struct App {
     tester: Arc<dyn StrategyTester>,
     maintenance: Arc<dyn Maintenance>,
     self_updater: Arc<dyn SelfUpdater>,
+    telegram_proxy: Arc<dyn TelegramProxy>,
     config: Arc<RwLock<AppConfig>>,
     state: AppState,
     cmd_tx: mpsc::Sender<BackendCmd>,
@@ -280,6 +283,7 @@ impl App {
         tester: Arc<dyn StrategyTester>,
         maintenance: Arc<dyn Maintenance>,
         self_updater: Arc<dyn SelfUpdater>,
+        telegram_proxy: Arc<dyn TelegramProxy>,
         config: AppConfig,
         state: AppState,
         event_tx: broadcast::Sender<UiEvent>,
@@ -294,6 +298,7 @@ impl App {
             tester,
             maintenance,
             self_updater,
+            telegram_proxy,
             config: Arc::new(RwLock::new(config)),
             state,
             cmd_tx,
@@ -307,6 +312,12 @@ impl App {
         _guard: tracing_appender::non_blocking::WorkerGuard,
     ) -> anyhow::Result<()> {
         let ui = MainWindow::new()?;
+        telegram::bind(
+            &ui,
+            self.telegram_proxy.clone(),
+            self.config.clone(),
+            self.event_tx.clone(),
+        );
 
         // Window/taskbar icon (winit needs this set at runtime, separate from the
         // embedded .exe resource icon).
@@ -886,12 +897,32 @@ impl App {
         let catalog = self.catalog.clone();
         let mut event_rx = self.event_tx.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = event_rx.recv().await {
+            loop {
+                let event = match event_rx.recv().await {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
                 let ui_weak = ui_weak.clone();
                 let catalog = catalog.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         match event {
+                            UiEvent::TelegramStatus(status) => {
+                                ui.set_telegram_running(status.running);
+                                ui.set_telegram_error(status.error.into());
+                            }
+                            UiEvent::TelegramSettings(settings) => {
+                                telegram::apply_settings(&ui, &settings);
+                                ui.set_telegram_busy(false);
+                            }
+                            UiEvent::TelegramError(error) => {
+                                ui.set_telegram_error(error.into());
+                                ui.set_telegram_busy(false);
+                            }
+                            UiEvent::TelegramVisibility(visible) => {
+                                ui.set_show_telegram_proxy(visible);
+                            }
                             UiEvent::Status(status) => {
                                 ui.set_status_installed(status.installed);
                                 ui.set_status_installed_version(

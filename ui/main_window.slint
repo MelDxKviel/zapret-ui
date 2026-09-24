@@ -11,6 +11,7 @@ import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
+import { TelegramPage } from "pages/telegram.slint";
 import { AdminBanner } from "components/admin_banner.slint";
 import { UpdateBanner } from "components/update_banner.slint";
 import { ModeToggle } from "components/mode_toggle.slint";
@@ -26,6 +27,8 @@ export { StrategyItem, AppStatus, LogLineItem, TestResultItem, I18n }
 
 // ── Sidebar nav row ──
 component NavItem inherits Rectangle {
+    in property <bool> branded: false;
+    in property <color> accent: ThemePalette.accent;
     in property <string> label;
     in property <image> icon;
     in property <bool> active;
@@ -46,7 +49,7 @@ component NavItem inherits Rectangle {
         width: 2px;
         height: parent.height - 18px;
         border-radius: ThemePalette.r-2;
-        background: ThemePalette.accent;
+        background: root.accent;
     }
 
     ta := TouchArea {
@@ -65,7 +68,7 @@ component NavItem inherits Rectangle {
                 source: root.icon;
                 width: 16px;
                 height: 16px;
-                colorize: root.active ? ThemePalette.accent : ThemePalette.text-2;
+                colorize: root.branded || root.active ? root.accent : ThemePalette.text-2;
                 animate colorize { duration: 120ms; }
             }
         }
@@ -74,7 +77,7 @@ component NavItem inherits Rectangle {
             font-family: ThemePalette.font-sans;
             font-size: ThemePalette.fs-13;
             font-weight: root.active ? 600 : 500;
-            color: root.active ? ThemePalette.text : ThemePalette.text-2;
+            color: root.branded ? root.accent : (root.active ? ThemePalette.text : ThemePalette.text-2);
             vertical-alignment: center;
             animate color { duration: 120ms; }
         }
@@ -85,7 +88,7 @@ component NavItem inherits Rectangle {
                 width: 7px;
                 height: 7px;
                 border-radius: 3.5px;
-                background: ThemePalette.accent;
+                background: root.accent;
             }
         }
     }
@@ -195,6 +198,34 @@ export component MainWindow inherits Window {
     in-out property <bool> is_admin: true;
     // Windows toast notifications on bypass start/stop (Settings → Application).
     in-out property <bool> notifications: true;
+
+    // Telegram is independent of the core's busy/running state.
+    in-out property <bool> show_telegram_proxy: true;
+    in-out property <bool> telegram_settings_open: false;
+    changed current_page => {
+        if (root.current_page != "telegram") { root.telegram_settings_open = false; }
+    }
+    in-out property <bool> telegram_running: false;
+    in-out property <bool> telegram_busy: false;
+    in-out property <string> telegram_error: "";
+    in-out property <string> telegram_port: "1443";
+    in-out property <string> telegram_secret: "";
+    in-out property <string> telegram_dc_overrides: "2:149.154.167.220 4:149.154.167.220";
+    in-out property <bool> telegram_fallback: true;
+    in-out property <string> telegram_timeout: "5";
+    in-out property <string> telegram_limit: "64";
+    in-out property <string> telegram_link: "";
+    changed show_telegram_proxy => {
+        if (!root.show_telegram_proxy) {
+            root.telegram_settings_open = false;
+            if (root.current_page == "telegram") { root.current_page = "home"; }
+        }
+    }
+    callback telegram_start();
+    callback telegram_stop();
+    callback telegram_save(string, string, string, bool, string, string);
+    callback telegram_connect();
+    callback set_telegram_visible(bool);
 
     // ── Data ──
     in-out property <[StrategyItem]> strategies: [];
@@ -467,6 +498,17 @@ export component MainWindow inherits Window {
                     Rectangle { height: 1px; background: ThemePalette.border; }
                     Rectangle { height: 4px; }
 
+                    // Keep Telegram in the footer, just above the bypass status.
+                    if root.show_telegram_proxy : NavItem {
+                        label: I18n.t(I18n.lang, "telegram.title");
+                        icon: @image-url("../assets/icons/telegram.svg");
+                        branded: true;
+                        accent: #229ed9;
+                        active: root.current_page == "telegram";
+                        attention: root.telegram_running;
+                        clicked => { root.current_page = "telegram"; }
+                    }
+
                     // status pill (click → refresh)
                     Rectangle {
                         height: 40px;
@@ -555,6 +597,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+
                 }
             }
         }
@@ -732,6 +775,31 @@ export component MainWindow inherits Window {
                 }
             }
 
+            if root.current_page == "telegram" && root.show_telegram_proxy : Fade {
+                TelegramPage {
+                    settings-open <=> root.telegram_settings_open;
+                    running: root.telegram_running;
+                    busy: root.telegram_busy;
+                    error: root.telegram_error;
+                    port: root.telegram_port;
+                    secret: root.telegram_secret;
+                    dc-overrides: root.telegram_dc_overrides;
+                    fallback: root.telegram_fallback;
+                    timeout: root.telegram_timeout;
+                    limit: root.telegram_limit;
+                    link: root.telegram_link;
+                    start-clicked => { root.telegram_busy = true; root.telegram_error = ""; root.telegram_start(); }
+                    stop-clicked => { root.telegram_busy = true; root.telegram_error = ""; root.telegram_stop(); }
+                    connect-clicked => { root.telegram_connect(); }
+                    copy-clicked => { root.copy_to_clipboard(root.telegram_link); }
+                    save-clicked(p, s, d, f, t, l) => {
+                        root.telegram_busy = true;
+                        root.telegram_error = "";
+                        root.telegram_save(p, s, d, f, t, l);
+                    }
+                }
+            }
+
             if root.current_page == "settings" : Fade {
                 SettingsPage {
                     width: 100%;
@@ -740,6 +808,8 @@ export component MainWindow inherits Window {
                     autoupdate_check <=> root.autoupdate_check;
                     minimize_to_tray <=> root.minimize_to_tray;
                     notifications <=> root.notifications;
+                    show_telegram_proxy <=> root.show_telegram_proxy;
+                    telegram_visibility_changed(v) => { root.set_telegram_visible(v); }
                     autoengage <=> root.autoengage;
                     compact <=> root.compact;
                     install_dir <=> root.install_dir;

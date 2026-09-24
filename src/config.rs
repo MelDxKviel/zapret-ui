@@ -73,6 +73,10 @@ impl Language {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default = "default_true")]
+    pub show_telegram_proxy: bool,
+    #[serde(default)]
+    pub telegram_proxy: crate::contracts::TelegramProxySettings,
     pub last_strategy: Option<String>,
     pub autostart: bool,
     pub autoupdate_check: bool,
@@ -129,6 +133,8 @@ pub fn default_install_dir() -> Option<PathBuf> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            show_telegram_proxy: true,
+            telegram_proxy: crate::contracts::TelegramProxySettings::default(),
             last_strategy: None,
             autostart: false,
             autoupdate_check: true,

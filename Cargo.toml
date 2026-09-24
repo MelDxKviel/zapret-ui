@@ -1,6 +1,6 @@
 [package]
 name = "zapret-ui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Native Windows GUI for the zapret DPI-bypass core (Flowseal/zapret-discord-youtube)."
 authors = ["meldxkviel"]
@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 slint = { version = "1.8", features = ["backend-winit", "renderer-skia"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time", "net"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 zip = "8"
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +32,13 @@ windows-service = "0.8"
 sysinfo = "0.39"
 semver = "1"
 sha2 = "0.11"
+aes = "0.9"
+ctr = "0.10"
+getrandom = "0.4"
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 tray-icon = "0.24"
 tempfile = "3"
 clipboard-win = "5"
