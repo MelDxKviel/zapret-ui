@@ -79,6 +79,58 @@ async fn occupied_port_fails_without_running_task() {
     assert!(!proxy.is_running().await);
 }
 
+#[tokio::test]
+async fn cancelled_stop_is_joined_before_start_rebinds() {
+    timeout(Duration::from_secs(2), async {
+        let proxy = LocalTelegramProxy::default();
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let listener = socket.listen(1).unwrap();
+        let settings = TelegramProxySettings {
+            port: listener.local_addr().unwrap().port(),
+            ..Default::default()
+        };
+        let (shutdown, stop) = oneshot::channel();
+        let (observed, shutdown_observed) = oneshot::channel();
+        let (release, wait_for_release) = oneshot::channel();
+        // Pause cleanup after shutdown is received, like a listener that is
+        // still joining connection tasks when its caller cancels Stop.
+        let task = tokio::spawn(async move {
+            stop.await.unwrap();
+            observed.send(()).unwrap();
+            wait_for_release.await.unwrap();
+            drop(listener);
+        });
+        *proxy.running.lock().await = Some(Running {
+            shutdown: Some(shutdown),
+            task,
+        });
+        {
+            let stopping = proxy.stop();
+            tokio::pin!(stopping);
+            tokio::select! {
+                result = &mut stopping => panic!("Stop returned before cleanup: {result:?}"),
+                result = shutdown_observed => result.unwrap(),
+            }
+            // Dropping this unfinished future cancels the caller's await.
+        }
+        tokio::spawn(async move { release.send(()).unwrap() });
+        // Start must join the previously signalled shutdown before binding. It
+        // cannot report an idempotent start or race the old listener's cleanup.
+        proxy
+            .start(settings.clone(), Arc::new(|_| {}))
+            .await
+            .unwrap();
+        assert!(proxy.is_running().await);
+        assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, settings.port))
+            .await
+            .is_ok());
+        proxy.stop().await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn stopping_proxy_releases_port_while_spawned_child_is_alive() {

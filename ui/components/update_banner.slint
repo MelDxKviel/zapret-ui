@@ -14,7 +14,7 @@ export component UpdateBanner inherits Rectangle {
     callback update_clicked();
     callback dismiss_clicked();
 
-    background: ThemePalette.accent-soft;
+    background: ThemePalette.accent-surface;
     vertical-stretch: 0;
     height: row.preferred-height;
 
@@ -22,8 +22,7 @@ export component UpdateBanner inherits Rectangle {
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
-        background: ThemePalette.accent;
-        opacity: 0.45;
+        background: ThemePalette.accent-border;
     }
 
     row := HorizontalLayout {
@@ -40,14 +39,14 @@ export component UpdateBanner inherits Rectangle {
                 width: 32px;
                 height: 32px;
                 border-radius: ThemePalette.r-8;
-                background: ThemePalette.accent-soft;
+                background: ThemePalette.accent;
                 border-width: 1px;
                 border-color: ThemePalette.accent-line;
                 Image {
                     source: @image-url("../../assets/icons/rocket.svg");
                     width: 16px;
                     height: 16px;
-                    colorize: ThemePalette.accent;
+                    colorize: ThemePalette.accent-ink;
                 }
             }
         }

@@ -100,7 +100,8 @@ async fn run_elevated_task(
 
 fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let out = std::process::Command::new("icacls")
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new(zapret::paths::system_executable("icacls.exe")?)
         .arg(dir)
         .args([
             "/inheritance:r",
@@ -114,6 +115,7 @@ fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
             "/C",
             "/Q",
         ])
+        .creation_flags(0x0800_0000)
         .output()?;
     if out.status.success() {
         Ok(())
@@ -240,16 +242,11 @@ async fn main() -> anyhow::Result<()> {
     let (event_tx, _event_rx) = broadcast::channel::<UiEvent>(256);
 
     // Initialize logging (broadcast to event_tx)
-    let (log_tx, mut log_rx) = broadcast::channel::<String>(256);
+    let (log_tx, log_rx) = broadcast::channel::<String>(256);
     let guard = log::init_logging(log_tx)?;
 
     // Forward log lines from log_rx to event_tx
-    let event_tx_c = event_tx.clone();
-    tokio::spawn(async move {
-        while let Ok(line) = log_rx.recv().await {
-            let _ = event_tx_c.send(UiEvent::LogLine(line));
-        }
-    });
+    tokio::spawn(log::forward_logs(log_rx, event_tx.clone()));
 
     // Load config and state
     let config = config::AppConfig::load();
@@ -268,9 +265,7 @@ async fn main() -> anyhow::Result<()> {
         install_dir.clone(),
         github_client,
     ));
-    let runner = Arc::new(zapret::process::ProcessRunner::new(
-        install_dir.clone(),
-    ));
+    let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone()));
     let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
     let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(
         install_dir.clone(),

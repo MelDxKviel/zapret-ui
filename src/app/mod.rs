@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 slint::include_modules!();
 
+mod preferences;
 mod telegram;
 mod ui_models;
 mod winexec;
@@ -43,6 +44,34 @@ thread_local! {
 }
 
 const LOG_BUF_CAP: usize = 4000;
+
+/// UI-thread error surface shared by core and independent Telegram actions.
+/// Callers release only the busy state of their own subsystem.
+fn report_ui_error(ui: &MainWindow, err: String) {
+    tracing::error!("UI Error: {}", err);
+    let now = std::time::Instant::now();
+    let show = LAST_ERROR_TOAST.with(|c| {
+        let mut last = c.borrow_mut();
+        let suppress = last.as_ref().is_some_and(|(msg, at)| {
+            let dt = now.duration_since(*at);
+            (*msg == err && dt < std::time::Duration::from_secs(30))
+                || dt < std::time::Duration::from_secs(5)
+        });
+        if suppress {
+            false
+        } else {
+            *last = Some((err.clone(), now));
+            true
+        }
+    });
+    if show {
+        let title = crate::i18n::tr(
+            ui.global::<I18n>().get_lang().as_str(),
+            "notify.error_title",
+        );
+        std::thread::spawn(move || crate::notify::show(&title, &err));
+    }
+}
 
 /// Decode the bundled `icon.ico` into a Slint `Image` for use as the window
 /// (title bar + taskbar) icon. The `.ico` is also embedded as a Win32 resource
@@ -257,6 +286,21 @@ async fn stop_bypass_before_install(
     }
 }
 
+/// A failed process stop must abort the transition to service mode; otherwise
+/// both instances can contend for the WinDivert driver.
+async fn stop_process_before_service(
+    runner: &Arc<dyn Runner>,
+    event_tx: &broadcast::Sender<UiEvent>,
+) -> bool {
+    match runner.stop().await {
+        Ok(()) => true,
+        Err(e) => {
+            let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+            false
+        }
+    }
+}
+
 pub struct App {
     installer: Arc<dyn Installer>,
     runner: Arc<dyn Runner>,
@@ -312,7 +356,8 @@ impl App {
         _guard: tracing_appender::non_blocking::WorkerGuard,
     ) -> anyhow::Result<()> {
         let ui = MainWindow::new()?;
-        telegram::bind(
+        let preferences = preferences::Controller::new(self.config.clone());
+        let telegram = telegram::bind(
             &ui,
             self.telegram_proxy.clone(),
             self.config.clone(),
@@ -340,34 +385,22 @@ impl App {
         // Persist a language switch from the Settings page. The Slint side flips
         // `I18n.lang` itself (so the UI re-renders instantly); we just save it.
         {
-            let config = self.config.clone();
+            let preferences = preferences.clone();
             ui.on_set_language(move |code| {
-                let config = config.clone();
-                let lang = crate::config::Language::from_code(&code);
-                tokio::spawn(async move {
-                    let mut cfg = config.write().await;
-                    cfg.language = lang;
-                    if let Err(e) = cfg.save() {
-                        tracing::warn!("Failed to persist language: {}", e);
-                    }
-                });
+                preferences.dispatch(preferences::Action::Language(
+                    crate::config::Language::from_code(&code),
+                ));
             });
         }
 
         // Persist the dashboard mode (simple dial vs. advanced) when the user
         // flips the toggle. The Slint side switches the view itself; we just save.
         {
-            let config = self.config.clone();
+            let preferences = preferences.clone();
             ui.on_set_ui_mode(move |slug| {
-                let config = config.clone();
-                let mode = crate::config::UiMode::from_slug(&slug);
-                tokio::spawn(async move {
-                    let mut cfg = config.write().await;
-                    cfg.ui_mode = mode;
-                    if let Err(e) = cfg.save() {
-                        tracing::warn!("Failed to persist UI mode: {}", e);
-                    }
-                });
+                preferences.dispatch(preferences::Action::UiMode(
+                    crate::config::UiMode::from_slug(&slug),
+                ));
             });
         }
 
@@ -616,21 +649,9 @@ impl App {
             });
         }
         {
-            let cmd_tx_c = self.cmd_tx.clone();
-            let config = self.config.clone();
+            let preferences = preferences.clone();
             ui.on_strategy_selected(move |id| {
-                // Remember the pick immediately so it survives a restart even if
-                // the user never presses Engage.
-                let id = id.to_string();
-                let config = config.clone();
-                tokio::spawn(async move {
-                    let mut cfg = config.write().await;
-                    cfg.last_strategy = Some(id);
-                    if let Err(e) = cfg.save() {
-                        tracing::warn!("Failed to persist selected strategy: {}", e);
-                    }
-                });
-                let _ = cmd_tx_c.try_send(BackendCmd::RefreshStatus);
+                preferences.dispatch(preferences::Action::SelectedStrategy(id.to_string()));
             });
         }
         {
@@ -649,7 +670,7 @@ impl App {
         // and apply it as the user's selection, then jump to the dashboard.
         {
             let catalog = self.catalog.clone();
-            let config = self.config.clone();
+            let preferences = preferences.clone();
             let ui_weak = ui.as_weak();
             ui.on_test_use_strategy(move |id| {
                 if let Some(ui) = ui_weak.upgrade() {
@@ -660,14 +681,7 @@ impl App {
                         ui.set_current_page("home".into());
                         // Persist the manual pick so it survives a restart even if
                         // the user never presses Engage (matches strategy_selected).
-                        let config = config.clone();
-                        tokio::spawn(async move {
-                            let mut cfg = config.write().await;
-                            cfg.last_strategy = Some(id);
-                            if let Err(e) = cfg.save() {
-                                tracing::warn!("Failed to persist tester-selected strategy: {}", e);
-                            }
-                        });
+                        preferences.dispatch(preferences::Action::SelectedStrategy(id));
                     }
                 }
             });
@@ -917,11 +931,23 @@ impl App {
                                 ui.set_telegram_busy(false);
                             }
                             UiEvent::TelegramError(error) => {
-                                ui.set_telegram_error(error.into());
+                                ui.set_telegram_error(error.as_str().into());
                                 ui.set_telegram_busy(false);
+                                // Automatic startup and Settings actions may
+                                // fail while the proxy page is not visible.
+                                if ui.get_current_page().as_str() != "telegram" {
+                                    let message = crate::i18n::tr(
+                                        ui.global::<I18n>().get_lang().as_str(),
+                                        &error,
+                                    );
+                                    report_ui_error(&ui, message);
+                                }
                             }
                             UiEvent::TelegramVisibility(visible) => {
                                 ui.set_show_telegram_proxy(visible);
+                            }
+                            UiEvent::TelegramAutostart(enabled) => {
+                                ui.set_telegram_autostart(enabled);
                             }
                             UiEvent::Status(status) => {
                                 ui.set_status_installed(status.installed);
@@ -1014,37 +1040,8 @@ impl App {
                                 ui.set_latest_version(latest.into());
                             }
                             UiEvent::Error(err) => {
-                                tracing::error!("UI Error: {}", err);
                                 ui.set_is_busy(false);
-                                // Surface the failure as a toast — errors used to be
-                                // logged only, so a failed action looked like it
-                                // silently did nothing. But dedupe: a single failed
-                                // operation can emit a burst of identical errors, so
-                                // suppress repeats of the same message within 30s and
-                                // rate-limit any toast to one per 5s. (Always logged.)
-                                let now = std::time::Instant::now();
-                                let show = LAST_ERROR_TOAST.with(|c| {
-                                    let mut last = c.borrow_mut();
-                                    let suppress = last.as_ref().is_some_and(|(msg, at)| {
-                                        let dt = now.duration_since(*at);
-                                        (*msg == err && dt < std::time::Duration::from_secs(30))
-                                            || dt < std::time::Duration::from_secs(5)
-                                    });
-                                    if suppress {
-                                        false
-                                    } else {
-                                        *last = Some((err.clone(), now));
-                                        true
-                                    }
-                                });
-                                if show {
-                                    let title = crate::i18n::tr(
-                                        ui.global::<I18n>().get_lang().as_str(),
-                                        "notify.error_title",
-                                    );
-                                    let body = err.clone();
-                                    std::thread::spawn(move || crate::notify::show(&title, &body));
-                                }
+                                report_ui_error(&ui, err);
                             }
                             UiEvent::TestStarted { total } => {
                                 TEST_RESULTS.with(|b| b.borrow_mut().clear());
@@ -1185,7 +1182,7 @@ impl App {
 
         // Run the backend loop task
         if let Some(cmd_rx) = self.cmd_rx.take() {
-            self.run_backend_loop(cmd_rx);
+            self.run_backend_loop(cmd_rx, preferences.clone());
         }
 
         // Periodically refresh status
@@ -1208,6 +1205,10 @@ impl App {
             .try_read()
             .map(|c| (c.autoupdate_check, c.autoengage, c.last_strategy.clone()))
             .unwrap_or((true, false, None));
+        // Snapshot core startup preferences before Telegram can acquire the
+        // config write lock to persist its settings. Its own startup is isolated
+        // from core downloads and the app's Windows startup preference.
+        telegram.start_on_launch();
         if autoupdate {
             let _ = self.cmd_tx.try_send(BackendCmd::CheckUpdate);
             // Also check whether zapret-ui itself has a newer release.
@@ -1249,7 +1250,11 @@ impl App {
         Ok(())
     }
 
-    fn run_backend_loop(&self, mut rx: mpsc::Receiver<BackendCmd>) {
+    fn run_backend_loop(
+        &self,
+        mut rx: mpsc::Receiver<BackendCmd>,
+        preferences: preferences::Controller,
+    ) {
         let installer = self.installer.clone();
         let runner = self.runner.clone();
         let service_ctl = self.service_ctl.clone();
@@ -1263,11 +1268,13 @@ impl App {
 
         tokio::spawn(async move {
             let test_running = Arc::new(AtomicBool::new(false));
+            let test_cancelled = Arc::new(AtomicBool::new(false));
             // Simple-mode auto-engage in flight. Like `test_running`, this both
             // rejects conflicting commands and suppresses the periodic status
             // refresh (which would otherwise briefly flip the dial to "active" as
             // a candidate is probed). Shared into the spawned auto-engage task.
             let auto_engaging = Arc::new(AtomicBool::new(false));
+            let auto_cancelled = Arc::new(AtomicBool::new(false));
             // Last-notified bypass running state, so start/stop toasts fire only on
             // a real transition (see `notify_bypass`). Seeded to "stopped". An
             // `Arc<Mutex>` so the spawned auto-engage task can update it too.
@@ -1276,8 +1283,7 @@ impl App {
                 // While a simple-mode auto-engage is probing candidates, skip the
                 // periodic status refresh: catching a candidate's winws mid-run
                 // would briefly flip the dial to "active" and back.
-                if auto_engaging.load(Ordering::SeqCst)
-                    && matches!(cmd, BackendCmd::RefreshStatus)
+                if auto_engaging.load(Ordering::SeqCst) && matches!(cmd, BackendCmd::RefreshStatus)
                 {
                     continue;
                 }
@@ -1321,6 +1327,8 @@ impl App {
                             }
                             Err(e) => {
                                 let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                    .await;
                             }
                         }
                     }
@@ -1377,6 +1385,7 @@ impl App {
                                 // Relaunch it and exit so the user lands on the
                                 // updated build; `--relaunch` makes the new process
                                 // wait for this one to drop the single-instance mutex.
+                                preferences.flush().await;
                                 tracing::info!("Self-update applied — relaunching");
                                 match relaunch_after_update() {
                                     Ok(_) => std::process::exit(0),
@@ -1489,9 +1498,9 @@ impl App {
                                                         );
                                                     }
                                                 }
-                                                Err(e) => tracing::warn!(
-                                                    "Background verify error: {e:#}"
-                                                ),
+                                                Err(e) => {
+                                                    tracing::warn!("Background verify error: {e:#}")
+                                                }
                                             }
                                         });
                                     }
@@ -1524,6 +1533,7 @@ impl App {
                             // A scan is already running — ignore the duplicate.
                             continue;
                         }
+                        auto_cancelled.store(false, Ordering::SeqCst);
                         // Build the candidate order from the saved last-good +
                         // favorites (the dial handles install on a separate press,
                         // so an empty catalog here just means nothing is installed).
@@ -1551,12 +1561,21 @@ impl App {
                         let config_c = config.clone();
                         let event_tx_c = event_tx.clone();
                         let auto_engaging_c = auto_engaging.clone();
+                        let auto_cancelled_c = auto_cancelled.clone();
                         let notified_c = notified_running.clone();
                         tokio::spawn(async move {
                             let ev_progress = event_tx_c.clone();
+                            let cancelled = auto_cancelled_c.clone();
+                            let cancel_tester = tester_c.clone();
                             let on_progress = Box::new(move |index, total, _id: &str| {
-                                let _ = ev_progress
-                                    .send(UiEvent::AutoEngageProgress { index, total });
+                                // Replay a cancel that arrived before this task
+                                // began and the adapter reset its cancel flag.
+                                if cancelled.load(Ordering::SeqCst) {
+                                    cancel_tester.cancel();
+                                    return;
+                                }
+                                let _ =
+                                    ev_progress.send(UiEvent::AutoEngageProgress { index, total });
                             });
                             match tester_c.auto_engage(candidates, on_progress).await {
                                 Ok(AutoEngageOutcome::Engaged(id)) => {
@@ -1584,30 +1603,32 @@ impl App {
                                     let _ = event_tx_c.send(UiEvent::AutoEngageFailed);
                                 }
                             }
+                            if auto_cancelled_c.load(Ordering::SeqCst) {
+                                if let Err(e) = runner_c.stop().await {
+                                    let _ = event_tx_c.send(UiEvent::Error(format!("{e:#}")));
+                                }
+                            }
                             // Release the flag before the final refresh so the next
                             // periodic poll is no longer suppressed.
                             auto_engaging_c.store(false, Ordering::SeqCst);
-                            refresh_and_broadcast(
-                                &runner_c,
-                                &service_ctl_c,
-                                &state_c,
-                                &event_tx_c,
-                            )
-                            .await;
+                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c)
+                                .await;
                         });
                     }
                     BackendCmd::CancelAutoEngage => {
                         // Same cancel flag as the tester; the in-flight auto_engage
                         // notices it, stops winws, and resolves to Cancelled.
-                        tester.cancel();
+                        if auto_engaging.load(Ordering::SeqCst) {
+                            auto_cancelled.store(true, Ordering::SeqCst);
+                            tester.cancel();
+                        }
                     }
                     BackendCmd::Stop => {
                         let status = runner.detect_running().await;
                         if status.running_mode == RunningMode::WindowsService {
                             match service_ctl.stop().await {
                                 Ok(_) => {
-                                    notify_bypass(&config, &notified_running, false, None)
-                                        .await;
+                                    notify_bypass(&config, &notified_running, false, None).await;
                                     refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                         .await;
                                 }
@@ -1636,8 +1657,7 @@ impl App {
                         } else {
                             match runner.stop().await {
                                 Ok(_) => {
-                                    notify_bypass(&config, &notified_running, false, None)
-                                        .await;
+                                    notify_bypass(&config, &notified_running, false, None).await;
                                     refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
                                         .await;
                                 }
@@ -1652,7 +1672,11 @@ impl App {
                             // A user-process bypass holds the WinDivert driver, which
                             // would make the service's own winws.exe fail to start.
                             // Stop it first so the service can take over cleanly.
-                            let _ = runner.stop().await;
+                            if !stop_process_before_service(&runner, &event_tx).await {
+                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
+                                    .await;
+                                continue;
+                            }
                             // Always install via the protected machine dir — even when
                             // we're already elevated — so the LocalSystem service never
                             // runs winws.exe out of the user-writable install dir.
@@ -1718,7 +1742,10 @@ impl App {
                     BackendCmd::ServiceStart => {
                         // Release the WinDivert driver from any user-process bypass so
                         // the service's winws.exe isn't blocked from starting.
-                        let _ = runner.stop().await;
+                        if !stop_process_before_service(&runner, &event_tx).await {
+                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            continue;
+                        }
                         match service_ctl.start().await {
                             Ok(_) => {
                                 notify_bypass(&config, &notified_running, true, None).await;
@@ -1780,9 +1807,7 @@ impl App {
                     }
                     BackendCmd::OpenInstallFolder => {
                         let install_dir = current_install_dir(&config).await;
-                        let _ = std::process::Command::new("explorer")
-                            .arg(&install_dir)
-                            .spawn();
+                        open_external(&install_dir.display().to_string());
                     }
                     BackendCmd::OpenIpsetFile => {
                         let install_dir = current_install_dir(&config).await;
@@ -1799,19 +1824,23 @@ impl App {
                     BackendCmd::OpenHostsFile => {
                         // The hosts file has no extension (no default association),
                         // so open it explicitly in Notepad rather than via the shell.
-                        let system_root = std::env::var("SystemRoot")
-                            .unwrap_or_else(|_| r"C:\Windows".to_string());
-                        let hosts_path = std::path::PathBuf::from(system_root)
-                            .join("System32")
-                            .join("drivers")
-                            .join("etc")
-                            .join("hosts");
-                        let _ = std::process::Command::new("notepad.exe")
-                            .arg(&hosts_path)
-                            .spawn();
+                        let result = (|| -> anyhow::Result<()> {
+                            let hosts_path = crate::zapret::hosts::system_hosts_path()?;
+                            let notepad = crate::zapret::paths::system_executable("notepad.exe")?;
+                            std::process::Command::new(notepad)
+                                .arg(hosts_path)
+                                .spawn()?;
+                            Ok(())
+                        })();
+                        if let Err(e) = result {
+                            let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                        }
                     }
                     BackendCmd::CancelTest => {
-                        tester.cancel();
+                        if test_running.load(Ordering::SeqCst) {
+                            test_cancelled.store(true, Ordering::SeqCst);
+                            tester.cancel();
+                        }
                     }
                     BackendCmd::SetFavorites(favs) => {
                         let mut cfg = config.write().await;
@@ -2030,6 +2059,7 @@ impl App {
                             continue;
                         }
                         let total = strategies.len() as u32;
+                        test_cancelled.store(false, Ordering::SeqCst);
                         let _ = event_tx.send(UiEvent::TestStarted { total });
 
                         // Run the test on its own task so the backend loop keeps
@@ -2043,13 +2073,20 @@ impl App {
                         let config_c = config.clone();
                         let event_tx_c = event_tx.clone();
                         let test_running_c = test_running.clone();
+                        let test_cancelled_c = test_cancelled.clone();
                         tokio::spawn(async move {
                             let ev_result = event_tx_c.clone();
                             let on_each = Box::new(move |r| {
                                 let _ = ev_result.send(UiEvent::TestResult(r));
                             });
                             let ev_progress = event_tx_c.clone();
+                            let cancelled = test_cancelled_c.clone();
+                            let cancel_tester = tester_c.clone();
                             let on_progress = Box::new(move |index, total, id: &str| {
+                                if cancelled.load(Ordering::SeqCst) {
+                                    cancel_tester.cancel();
+                                    return;
+                                }
                                 let _ = ev_progress.send(UiEvent::TestProgress {
                                     index,
                                     total,
@@ -2059,11 +2096,15 @@ impl App {
 
                             match tester_c.test_all(strategies, on_each, on_progress).await {
                                 Ok(results) => {
-                                    let best = results
-                                        .first()
-                                        .filter(|r| r.ok > 0)
-                                        .map(|r| r.id.clone())
-                                        .unwrap_or_default();
+                                    let best = if test_cancelled_c.load(Ordering::SeqCst) {
+                                        String::new()
+                                    } else {
+                                        results
+                                            .first()
+                                            .filter(|r| r.ok > 0)
+                                            .map(|r| r.id.clone())
+                                            .unwrap_or_default()
+                                    };
                                     if !best.is_empty() {
                                         let mut cfg = config_c.write().await;
                                         cfg.last_strategy = Some(best.clone());
@@ -2093,5 +2134,37 @@ impl App {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::{RuntimeStatus, Strategy};
+
+    struct StopFailure;
+
+    #[async_trait::async_trait]
+    impl Runner for StopFailure {
+        async fn start(&self, _: &Strategy) -> anyhow::Result<u32> {
+            panic!("a service transition must not start another child");
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Err(anyhow::anyhow!("child is still running").context("cannot release WinDivert"))
+        }
+
+        async fn detect_running(&self) -> RuntimeStatus {
+            RuntimeStatus::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_process_stop_blocks_service_transition_and_reports_cause() {
+        let runner: Arc<dyn Runner> = Arc::new(StopFailure);
+        let (events, mut rx) = broadcast::channel(4);
+        assert!(!stop_process_before_service(&runner, &events).await);
+        assert!(matches!(rx.recv().await.unwrap(), UiEvent::Error(message)
+            if message.contains("cannot release WinDivert") && message.contains("child is still running")));
     }
 }

@@ -11,6 +11,13 @@ const PERSONALIZE_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\T
 
 /// Enable or disable launching this exe at user logon (HKCU Run key).
 pub fn set_autostart(enable: bool) {
+    let reg = match crate::zapret::paths::system_executable("reg.exe") {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!("autostart: cannot resolve system reg.exe: {e:#}");
+            return;
+        }
+    };
     let result = if enable {
         let exe = match std::env::current_exe() {
             Ok(p) => p,
@@ -19,7 +26,7 @@ pub fn set_autostart(enable: bool) {
                 return;
             }
         };
-        std::process::Command::new("reg")
+        std::process::Command::new(&reg)
             .args([
                 "add",
                 RUN_KEY,
@@ -34,20 +41,28 @@ pub fn set_autostart(enable: bool) {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
     } else {
-        std::process::Command::new("reg")
+        std::process::Command::new(&reg)
             .args(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
     };
-    if let Err(e) = result {
-        tracing::warn!("autostart: failed to update Run key: {e}");
+    match result {
+        Ok(output) if !output.status.success() => tracing::warn!(
+            "autostart: registry update failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(e) => tracing::warn!("autostart: failed to update Run key: {e}"),
+        _ => {}
     }
 }
 
 /// True if Windows apps are currently using the dark theme. Reads
 /// `AppsUseLightTheme` (0 = dark, 1 = light); defaults to dark when unreadable.
 pub fn system_is_dark() -> bool {
-    let out = std::process::Command::new("reg")
+    let Ok(reg) = crate::zapret::paths::system_executable("reg.exe") else {
+        return true;
+    };
+    let out = std::process::Command::new(reg)
         .args(["query", PERSONALIZE_KEY, "/v", "AppsUseLightTheme"])
         .creation_flags(CREATE_NO_WINDOW)
         .output();

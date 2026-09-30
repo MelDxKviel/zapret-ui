@@ -256,6 +256,7 @@ pub enum UiEvent {
     TelegramSettings(TelegramProxySettings),
     TelegramError(String),
     TelegramVisibility(bool),
+    TelegramAutostart(bool),
     Status(RuntimeStatus),
     DownloadProgress {
         bytes: u64,

@@ -1,15 +1,14 @@
 import { ThemePalette } from "../tokens.slint";
 import { Icon } from "icon.slint";
 
-// .search-bar / input field — default 32px high, leading icon slot, accent-line
-// focus ring (a soft glow behind + border colour change). Trailing controls can
+// Search / input field with a crisp focus border. Trailing controls can
 // be injected via @children (e.g. a "clear" button).
 export component AppInput inherits Rectangle {
     in-out property <string> text;
     in property <string> placeholder;
     in property <bool> enabled: true;
     in property <image> icon;
-    in property <length> field-height: 32px;
+    in property <length> field-height: 36px;
     in property <length> font-size: ThemePalette.fs-13;
 
     callback edited(string);
@@ -20,26 +19,15 @@ export component AppInput inherits Rectangle {
     height: root.field-height;
     border-radius: ThemePalette.r-8;
     border-width: 1px;
-    border-color: root.focused ? ThemePalette.accent-line : ThemePalette.border;
+    border-color: root.focused ? ThemePalette.accent-text : ThemePalette.border-strong;
     background: ThemePalette.surface;
+    opacity: root.enabled ? 1 : 0.5;
     animate border-color { duration: 120ms; }
 
-    // Soft focus glow (≈ box-shadow 0 0 0 3px accent-soft).
-    if root.focused : Rectangle {
-        x: -3px;
-        y: -3px;
-        width: parent.width + 6px;
-        height: parent.height + 6px;
-        border-radius: parent.border-radius + 3px;
-        background: transparent;
-        border-width: 3px;
-        border-color: ThemePalette.accent-soft;
-    }
-
     HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 8px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
 
         if root.icon.width > 0 : Icon {
             source: root.icon;
@@ -49,11 +37,14 @@ export component AppInput inherits Rectangle {
 
         scope := FocusScope {
             input := TextInput {
+                width: 100%;
+                height: 100%;
                 text <=> root.text;
                 font-family: ThemePalette.font-sans;
                 font-size: root.font-size;
                 color: ThemePalette.text;
                 vertical-alignment: center;
+                horizontal-alignment: left;
                 single-line: true;
                 enabled: root.enabled;
                 edited => { root.edited(self.text); }
@@ -61,11 +52,14 @@ export component AppInput inherits Rectangle {
             }
 
             if root.text == "" : Text {
+                width: 100%;
+                height: 100%;
                 text: root.placeholder;
                 font-family: ThemePalette.font-sans;
                 font-size: root.font-size;
                 color: ThemePalette.text-4;
                 vertical-alignment: center;
+                horizontal-alignment: left;
             }
         }
 

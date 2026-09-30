@@ -8,6 +8,7 @@ import { ScrollView } from "std-widgets.slint";
 
 component SettingsGroup inherits Rectangle {
     in property <string> title;
+    in property <image> icon;
     background: ThemePalette.surface;
     border-width: 1px;
     border-color: ThemePalette.border;
@@ -17,22 +18,39 @@ component SettingsGroup inherits Rectangle {
     VerticalLayout {
         alignment: start;
         Rectangle {
-            height: 44px;
-            background: ThemePalette.bg-2;
+            height: 58px;
+            background: ThemePalette.surface;
             HorizontalLayout {
-                padding-left: 18px;
-                padding-right: 18px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: ThemePalette.r-8;
+                        background: ThemePalette.accent-surface;
+                        Icon {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            source: root.icon;
+                            size: 15px;
+                            tint: ThemePalette.accent-text;
+                        }
+                    }
+                }
                 Text {
                     text: root.title;
-                    font-family: ThemePalette.font-mono;
-                    font-size: ThemePalette.fs-11;
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-14;
                     font-weight: 600;
-                    color: ThemePalette.text-3;
-                    letter-spacing: 1px;
+                    color: ThemePalette.text;
                     vertical-alignment: center;
                 }
             }
-            Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
+            Rectangle { x: 20px; y: parent.height - 1px; width: parent.width - 40px; height: 1px; background: ThemePalette.divider; }
         }
         @children
     }
@@ -42,29 +60,33 @@ component SettingsRow inherits Rectangle {
     in property <string> label;
     in property <string> hint;
     in property <bool> last: false;
+    // Reserve the measured wrapped text height, including its row padding.
+    // The minimum alone suppresses the implicit height-for-width constraint.
+    height: max(78px, row.preferred-height);
     vertical-stretch: 0;
-    HorizontalLayout {
-        padding-left: 18px;
-        padding-right: 18px;
+    row := HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
         padding-top: 16px;
         padding-bottom: 16px;
         spacing: 24px;
         VerticalLayout {
             horizontal-stretch: 1;
-            spacing: 2px;
+            spacing: 5px;
             alignment: center;
             Text {
                 text: root.label;
                 font-family: ThemePalette.font-sans;
-                font-size: ThemePalette.fs-13;
+                font-size: ThemePalette.fs-14;
                 font-weight: 500;
                 color: ThemePalette.text;
+                wrap: word-wrap;
             }
             Text {
                 text: root.hint;
                 font-family: ThemePalette.font-sans;
                 font-size: ThemePalette.fs-12;
-                color: ThemePalette.text-3;
+                color: ThemePalette.text-2;
                 wrap: word-wrap;
             }
         }
@@ -74,12 +96,14 @@ component SettingsRow inherits Rectangle {
             @children
         }
     }
-    if !root.last : Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
+    if !root.last : Rectangle { x: 20px; y: parent.height - 1px; width: parent.width - 40px; height: 1px; background: ThemePalette.divider; }
 }
 
 export component SettingsPage inherits Rectangle {
     in-out property <bool> show_telegram_proxy;
+    in-out property <bool> telegram_autostart;
     callback telegram_visibility_changed(bool);
+    callback telegram_autostart_changed(bool);
     in-out property <bool> autostart;
     in-out property <bool> autoupdate_check;
     in-out property <bool> minimize_to_tray;
@@ -140,9 +164,9 @@ export component SettingsPage inherits Rectangle {
         HorizontalLayout {
             VerticalLayout {
                 horizontal-stretch: 0;
-                width: min(sv.visible-width - 64px, 980px);
+                width: min(sv.visible-width, 1040px);
                 padding-left: 32px;
-                padding-top: 28px;
+                padding-top: 32px;
                 padding-right: 32px;
                 padding-bottom: 60px;
                 spacing: 0px;
@@ -150,12 +174,12 @@ export component SettingsPage inherits Rectangle {
 
                 // page-head
                 VerticalLayout {
-                    spacing: 2px;
-                    padding-bottom: 20px;
+                    spacing: 6px;
+                    padding-bottom: 24px;
                     Text {
                         text: I18n.t(I18n.lang, "settings.title");
                         font-family: ThemePalette.font-sans;
-                        font-size: ThemePalette.fs-22;
+                        font-size: ThemePalette.fs-28;
                         font-weight: 600;
                         color: ThemePalette.text;
                     }
@@ -163,23 +187,48 @@ export component SettingsPage inherits Rectangle {
                         text: I18n.t(I18n.lang, "settings.subtitle");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-13;
-                        color: ThemePalette.text-3;
+                        color: ThemePalette.text-2;
+                        wrap: word-wrap;
                     }
                 }
-                Rectangle { height: 1px; background: ThemePalette.divider; }
-                Rectangle { height: 16px; }
+
+                // Appearance
+                SettingsGroup {
+                    title: I18n.t(I18n.lang, "settings.group_appearance");
+                    icon: @image-url("../../assets/icons/sun.svg");
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "settings.language_label");
+                        hint: I18n.t(I18n.lang, "settings.language_hint");
+                        Segmented {
+                            selected: I18n.lang;
+                            options: [
+                                { value: "ru", label: "Русский" },
+                                { value: "en", label: "English" },
+                            ];
+                            changed(v) => { I18n.lang = v; root.language_changed(v); }
+                        }
+                    }
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "settings.theme_label");
+                        hint: I18n.t(I18n.lang, "settings.theme_hint");
+                        last: true;
+                        Segmented {
+                            selected: root.theme;
+                            options: [
+                                { value: "dark",   label: I18n.t(I18n.lang, "settings.theme_dark"),   icon: @image-url("../../assets/icons/moon.svg") },
+                                { value: "light",  label: I18n.t(I18n.lang, "settings.theme_light"),  icon: @image-url("../../assets/icons/sun.svg") },
+                                { value: "system", label: I18n.t(I18n.lang, "settings.theme_system"), icon: @image-url("../../assets/icons/system.svg") },
+                            ];
+                            changed(v) => { root.theme = v; root.theme_changed(v); }
+                        }
+                    }
+                }
+                Rectangle { height: 18px; }
 
                 // Application
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_application");
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "telegram.visibility_label");
-                        hint: I18n.t(I18n.lang, "telegram.visibility_hint");
-                        AppSwitch {
-                            checked <=> root.show_telegram_proxy;
-                            toggled(v) => { root.telegram_visibility_changed(v); }
-                        }
-                    }
+                    icon: @image-url("../../assets/icons/rocket.svg");
                     SettingsRow {
                         label: I18n.t(I18n.lang, "settings.autostart_label");
                         hint: I18n.t(I18n.lang, "settings.autostart_hint");
@@ -214,11 +263,37 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
                 }
-                Rectangle { height: 16px; }
+                Rectangle { height: 18px; }
+
+                // Telegram is independent of the core's startup preference.
+                SettingsGroup {
+                    title: I18n.t(I18n.lang, "settings.group_telegram");
+                    icon: @image-url("../../assets/icons/telegram.svg");
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "telegram.visibility_label");
+                        hint: I18n.t(I18n.lang, "telegram.visibility_hint");
+                        AppSwitch {
+                            checked <=> root.show_telegram_proxy;
+                            toggled(v) => { root.telegram_visibility_changed(v); }
+                        }
+                    }
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "telegram.autostart_label");
+                        hint: I18n.t(I18n.lang, "telegram.autostart_hint");
+                        last: true;
+                        AppSwitch {
+                            checked <=> root.telegram_autostart;
+                            enabled: root.show_telegram_proxy;
+                            toggled(v) => { root.telegram_autostart_changed(v); }
+                        }
+                    }
+                }
+                Rectangle { height: 18px; }
 
                 // Updates & paths
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_updates");
+                    icon: @image-url("../../assets/icons/download.svg");
                     SettingsRow {
                         label: I18n.t(I18n.lang, "update.settings_label");
                         hint: I18n.t(I18n.lang, "update.settings_hint");
@@ -232,6 +307,9 @@ export component SettingsPage inherits Rectangle {
                                     alignment: center;
                                     Text {
                                         text: root.app_version;
+                                        width: 108px;
+                                        overflow: elide;
+                                        horizontal-alignment: right;
                                         font-family: ThemePalette.font-mono;
                                         font-size: ThemePalette.fs-12;
                                         color: ThemePalette.text-3;
@@ -273,7 +351,7 @@ export component SettingsPage inherits Rectangle {
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
                                 color: (!root.app_update_ok && root.app_update_msg != "")
-                                    ? ThemePalette.danger
+                                    ? ThemePalette.danger-text
                                     : ThemePalette.text-3;
                             }
                         }
@@ -328,11 +406,12 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
                 }
-                Rectangle { height: 16px; }
+                Rectangle { height: 18px; }
 
                 // DPI bypass tuning — the zapret service.bat filters & updaters.
                 SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_dpi");
+                    icon: @image-url("../../assets/icons/filter.svg");
                     SettingsRow {
                         label: I18n.t(I18n.lang, "common.game_filter");
                         hint: root.installed
@@ -400,7 +479,7 @@ export component SettingsPage inherits Rectangle {
                                 wrap: word-wrap;
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
-                                color: root.ipset_ok ? ThemePalette.text-3 : ThemePalette.danger;
+                                color: root.ipset_ok ? ThemePalette.text-3 : ThemePalette.danger-text;
                             }
                         }
                     }
@@ -433,7 +512,7 @@ export component SettingsPage inherits Rectangle {
                                 wrap: word-wrap;
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
-                                color: root.hosts_ok ? ThemePalette.text-3 : ThemePalette.danger;
+                                color: root.hosts_ok ? ThemePalette.text-3 : ThemePalette.danger-text;
                             }
                         }
                     }
@@ -460,43 +539,13 @@ export component SettingsPage inherits Rectangle {
                                 wrap: word-wrap;
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
-                                color: root.discord_ok ? ThemePalette.text-3 : ThemePalette.danger;
+                                color: root.discord_ok ? ThemePalette.text-3 : ThemePalette.danger-text;
                             }
                         }
                     }
                 }
-                Rectangle { height: 16px; }
+                Rectangle { height: 18px; }
 
-                // Appearance
-                SettingsGroup {
-                    title: I18n.t(I18n.lang, "settings.group_appearance");
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.language_label");
-                        hint: I18n.t(I18n.lang, "settings.language_hint");
-                        Segmented {
-                            selected: I18n.lang;
-                            options: [
-                                { value: "ru", label: "Русский" },
-                                { value: "en", label: "English" },
-                            ];
-                            changed(v) => { I18n.lang = v; root.language_changed(v); }
-                        }
-                    }
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "settings.theme_label");
-                        hint: I18n.t(I18n.lang, "settings.theme_hint");
-                        last: true;
-                        Segmented {
-                            selected: root.theme;
-                            options: [
-                                { value: "dark",   label: I18n.t(I18n.lang, "settings.theme_dark"),   icon: @image-url("../../assets/icons/moon.svg") },
-                                { value: "light",  label: I18n.t(I18n.lang, "settings.theme_light"),  icon: @image-url("../../assets/icons/sun.svg") },
-                                { value: "system", label: I18n.t(I18n.lang, "settings.theme_system"), icon: @image-url("../../assets/icons/system.svg") },
-                            ];
-                            changed(v) => { root.theme = v; root.theme_changed(v); }
-                        }
-                    }
-                }
             }
             Rectangle { }
         }

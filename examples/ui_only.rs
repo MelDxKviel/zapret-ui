@@ -164,8 +164,9 @@ fn main() -> anyhow::Result<()> {
             if let Some(ui) = ui_weak.upgrade() {
                 let favs = favorites.borrow();
                 let q = ui.get_strategies_query().to_string().trim().to_lowercase();
-                let mut list: Vec<Strategy> = MockCatalog
-                    .all()
+                let all = MockCatalog.all();
+                ui.set_total_strategy_count(all.len() as i32);
+                let mut list: Vec<Strategy> = all
                     .into_iter()
                     .filter(|s| {
                         q.is_empty()
@@ -291,8 +292,19 @@ fn main() -> anyhow::Result<()> {
             if let Some(ui) = weak.upgrade() {
                 ui.set_show_telegram_proxy(visible);
                 if !visible {
+                    ui.set_telegram_autostart(false);
                     ui.set_telegram_running(false);
+                    ui.set_telegram_busy(false);
                 }
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_set_telegram_autostart(move |enabled| {
+            println!("UI: Telegram app startup: {enabled} (mock)");
+            if let Some(ui) = weak.upgrade() {
+                ui.set_telegram_autostart(enabled && ui.get_show_telegram_proxy());
             }
         });
     }
@@ -633,7 +645,7 @@ fn main() -> anyhow::Result<()> {
     // About row pill and the Settings row are all visible. The mock callbacks
     // animate a fake download to completion (no real swap/relaunch).
     ui.set_app_has_update(true);
-    ui.set_app_latest_version("v0.2.0".into());
+    ui.set_app_latest_version("v0.3.0-mock".into());
     ui.set_app_update_checked(true);
     ui.set_app_update_ok(true);
     {
@@ -691,6 +703,61 @@ fn main() -> anyhow::Result<()> {
     if let Ok(lang) = std::env::var("ZAPRET_UI_PREVIEW_LANG") {
         ui.global::<I18n>().set_lang(lang.into());
     }
+    if let Ok(mode) = std::env::var("ZAPRET_UI_PREVIEW_MODE") {
+        if matches!(mode.as_str(), "simple" | "advanced") {
+            ui.set_ui_mode(mode.into());
+        }
+    }
+    if let Ok(id) = std::env::var("ZAPRET_UI_PREVIEW_SELECTED") {
+        if let Some(strategy) = MockCatalog.by_id(&id) {
+            let (pretty, alt) = zapret_ui::contracts::split_alt(&strategy.id);
+            ui.set_selected_strategy(strategy.id.as_str().into());
+            ui.set_selected_item(StrategyItem {
+                id: strategy.id.as_str().into(),
+                display_name: strategy.display_name.as_str().into(),
+                category: format!("{:?}", strategy.category).into(),
+                description: strategy.description.as_str().into(),
+                pretty: pretty.into(),
+                alt: alt.into(),
+                favorite: false,
+            });
+        }
+    }
+    if let Ok(admin) = std::env::var("ZAPRET_UI_PREVIEW_ADMIN") {
+        ui.set_is_admin(admin != "false");
+    }
+    if let Ok(updates) = std::env::var("ZAPRET_UI_PREVIEW_UPDATES") {
+        if updates == "false" {
+            ui.set_app_has_update(false);
+            ui.set_has_update(false);
+        }
+    }
+    if let Ok(state) = std::env::var("ZAPRET_UI_PREVIEW_STATE") {
+        match state.as_str() {
+            "active" => {
+                ui.set_status_running_mode("UserProcess".into());
+                ui.set_status_active_strategy("general (ALT2)".into());
+                ui.set_status_winws_pid(4242);
+                ui.set_status_uptime(3725);
+                ui.set_active_item(StrategyItem {
+                    id: "general (ALT2)".into(),
+                    display_name: "general (ALT2)".into(),
+                    pretty: "general".into(),
+                    alt: "ALT2".into(),
+                    ..Default::default()
+                });
+            }
+            "busy" => {
+                ui.set_pending_op("start".into());
+                ui.set_is_busy(true);
+                ui.set_engage_index(2);
+                ui.set_engage_total(3);
+            }
+            "error" => ui.set_simple_failed(true),
+            "uninstalled" => ui.set_status_installed(false),
+            _ => {}
+        }
+    }
     if let Ok(page) = std::env::var("ZAPRET_UI_PREVIEW_PAGE") {
         ui.set_current_page(if page.starts_with("telegram") {
             "telegram".into()
@@ -717,6 +784,28 @@ fn main() -> anyhow::Result<()> {
 
     // Optional renderer snapshot for reproducible visual QA, no desktop capture.
     if let Ok(path) = std::env::var("ZAPRET_UI_PREVIEW_SNAPSHOT") {
+        // Exercise the actual wheel event path when reviewing clipped forms.
+        if std::env::var("ZAPRET_UI_PREVIEW_SCROLL").as_deref() == Ok("bottom") {
+            let weak = ui.as_weak();
+            slint::Timer::single_shot(std::time::Duration::from_millis(400), move || {
+                if let Some(ui) = weak.upgrade() {
+                    let window = ui.window();
+                    let size = window.size();
+                    let scale = window.scale_factor();
+                    let event = slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(
+                            size.width as f32 / scale - 48.0,
+                            size.height as f32 / scale / 2.0,
+                        ),
+                        delta_x: 0.0,
+                        delta_y: -10000.0,
+                    };
+                    if let Err(e) = window.try_dispatch_event(event) {
+                        eprintln!("Preview scroll failed: {e}");
+                    }
+                }
+            });
+        }
         let weak = ui.as_weak();
         slint::Timer::single_shot(std::time::Duration::from_millis(1000), move || {
             if let Some(ui) = weak.upgrade() {

@@ -1,7 +1,6 @@
 import { ThemePalette, TestResultItem } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
-import { StatusDot } from "../components/status_dot.slint";
 import { StarToggle } from "../components/star.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -12,8 +11,9 @@ component ResultRow inherits Rectangle {
     callback use_clicked();
     callback toggle_favorite();
 
-    height: 64px;
-    background: ta.has-hover ? ThemePalette.surface-hover : transparent;
+    height: 78px;
+    background: root.is_active || root.item.is_best ? ThemePalette.accent-surface
+        : ta.has-hover ? ThemePalette.surface-hover : ThemePalette.surface;
     animate background { duration: 120ms; }
 
     Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
@@ -29,19 +29,26 @@ component ResultRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
-        spacing: 14px;
+        spacing: 12px;
 
         // rank
         VerticalLayout {
             alignment: center;
-            width: 26px;
-            Text {
-                text: root.item.rank > 0 ? "#\{root.item.rank}" : "·";
-                font-family: ThemePalette.font-mono;
-                font-size: ThemePalette.fs-12;
-                font-weight: 600;
-                color: root.item.is_best ? ThemePalette.accent : ThemePalette.text-4;
-                horizontal-alignment: right;
+            width: 30px;
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                border-radius: ThemePalette.r-8;
+                background: root.item.is_best ? ThemePalette.accent : ThemePalette.surface-2;
+                Text {
+                    text: root.item.rank > 0 ? "\{root.item.rank}" : "·";
+                    font-family: ThemePalette.font-mono;
+                    font-size: ThemePalette.fs-12;
+                    font-weight: 600;
+                    color: root.item.is_best ? ThemePalette.accent-ink : ThemePalette.text-2;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
         }
 
@@ -50,11 +57,11 @@ component ResultRow inherits Rectangle {
         // windows instead of pushing the action button out of the card.
         VerticalLayout {
             horizontal-stretch: 0;
-            min-width: 150px;
-            preferred-width: 200px;
-            max-width: 200px;
+            min-width: 120px;
+            preferred-width: 190px;
+            max-width: 190px;
             alignment: center;
-            spacing: 3px;
+            spacing: 5px;
             HorizontalLayout {
                 spacing: 6px;
                 Text {
@@ -71,17 +78,19 @@ component ResultRow inherits Rectangle {
                 if root.item.alt != "" : Rectangle {
                     horizontal-stretch: 0;
                     max-width: 110px;
-                    height: 17px;
-                    border-radius: ThemePalette.r-4;
-                    background: ThemePalette.surface-2;
+                    height: 21px;
+                    border-radius: ThemePalette.r-6;
+                    border-width: 1px;
+                    border-color: ThemePalette.border;
+                    background: ThemePalette.surface;
                     HorizontalLayout {
-                        padding-left: 5px;
-                        padding-right: 5px;
+                        padding-left: 7px;
+                        padding-right: 7px;
                         Text {
                             text: root.item.alt;
                             font-family: ThemePalette.font-mono;
                             font-size: ThemePalette.fs-10;
-                            color: ThemePalette.text-3;
+                            color: ThemePalette.text-2;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                             overflow: elide;
@@ -95,7 +104,7 @@ component ResultRow inherits Rectangle {
                 text: I18n.t(I18n.lang, "tester.best_label");
                 font-family: ThemePalette.font-mono;
                 font-size: ThemePalette.fs-10;
-                color: ThemePalette.accent;
+                color: ThemePalette.accent-text;
                 overflow: elide;
             }
         }
@@ -109,11 +118,11 @@ component ResultRow inherits Rectangle {
             min-width: 150px;
             preferred-width: 240px;
             alignment: center;
-            spacing: 5px;
+            spacing: 8px;
             Rectangle {
-                height: 8px;
+                height: 5px;
                 border-radius: ThemePalette.r-4;
-                background: ThemePalette.surface-2;
+                background: ThemePalette.border;
                 clip: true;
                 Rectangle {
                     x: 0;
@@ -130,8 +139,8 @@ component ResultRow inherits Rectangle {
                 text: "\{root.item.ok}/\{root.item.total}" + I18n.t(I18n.lang, "tester.reachable")
                     + (root.item.latency > 0 ? " · \{root.item.latency}" + I18n.t(I18n.lang, "tester.ms_avg") : "");
                 font-family: ThemePalette.font-mono;
-                font-size: ThemePalette.fs-10;
-                color: ThemePalette.text-3;
+                font-size: ThemePalette.fs-11;
+                color: root.item.ok == 0 ? ThemePalette.danger-text : ThemePalette.text-2;
                 min-width: 0px;
                 overflow: elide;
             }
@@ -151,7 +160,7 @@ component ResultRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            width: 96px;
+            width: 100px;
             HorizontalLayout {
                 alignment: end;
                 if root.is_active : AppButton {
@@ -196,21 +205,18 @@ export component TesterPage inherits Rectangle {
     HorizontalLayout {
         VerticalLayout {
             horizontal-stretch: 0;
-            width: min(parent.width - 64px, 980px);
-            padding-left: 32px;
-            padding-top: 28px;
-            padding-right: 32px;
-            padding-bottom: 28px;
+            width: min(parent.width, 1044px);
+            padding: 32px;
             spacing: 0px;
 
             // page-head
             VerticalLayout {
-                spacing: 2px;
-                padding-bottom: 20px;
+                spacing: 8px;
+                padding-bottom: 24px;
                 Text {
                     text: I18n.t(I18n.lang, "tester.title");
                     font-family: ThemePalette.font-sans;
-                    font-size: ThemePalette.fs-22;
+                    font-size: ThemePalette.fs-28;
                     font-weight: 600;
                     color: ThemePalette.text;
                 }
@@ -218,38 +224,55 @@ export component TesterPage inherits Rectangle {
                     text: I18n.t(I18n.lang, "tester.subtitle");
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-13;
-                    color: ThemePalette.text-3;
+                    color: ThemePalette.text-2;
+                    wrap: word-wrap;
                 }
             }
-            Rectangle { height: 1px; background: ThemePalette.divider; }
-            Rectangle { height: 18px; }
-
             // ── control card ──
             Rectangle {
                 vertical-stretch: 0;
-                background: @linear-gradient(180deg, ThemePalette.surface 0%, ThemePalette.bg-2 100%);
+                background: ThemePalette.surface;
                 border-width: 1px;
                 border-color: ThemePalette.border;
-                border-radius: ThemePalette.r-12;
+                border-radius: ThemePalette.r-16;
                 clip: true;
 
                 VerticalLayout {
-                    padding: 20px;
+                    padding: 24px;
                     spacing: 16px;
 
                     HorizontalLayout {
                         spacing: 16px;
+                        VerticalLayout {
+                            horizontal-stretch: 0;
+                            alignment: center;
+                            Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                border-radius: ThemePalette.r-12;
+                                background: ThemePalette.accent-surface;
+                                border-width: 1px;
+                                border-color: ThemePalette.accent-border;
+                                Image {
+                                    x: 14px; y: 14px; width: 20px; height: 20px;
+                                    source: root.has-results && !root.running
+                                        ? @image-url("../../assets/icons/check.svg")
+                                        : @image-url("../../assets/icons/rocket.svg");
+                                    colorize: ThemePalette.accent-text;
+                                }
+                            }
+                        }
                         // info
                         VerticalLayout {
                             horizontal-stretch: 1;
-                            spacing: 6px;
+                            spacing: 8px;
                             alignment: center;
                             Text {
                                 text: root.running ? I18n.t(I18n.lang, "tester.state_testing") : root.has-results ? I18n.t(I18n.lang, "tester.state_complete") : I18n.t(I18n.lang, "tester.state_ready");
                                 font-family: ThemePalette.font-mono;
-                                font-size: ThemePalette.fs-10;
-                                color: ThemePalette.text-4;
-                                letter-spacing: 1.4px;
+                                font-size: ThemePalette.fs-11;
+                                color: root.running || root.has-results ? ThemePalette.accent-text : ThemePalette.text-3;
+                                letter-spacing: 0.8px;
                             }
                             Text {
                                 text: root.running
@@ -260,7 +283,7 @@ export component TesterPage inherits Rectangle {
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-14;
                                 font-weight: root.running || (root.has-results && root.best_id != "") ? 600 : 400;
-                                color: root.has-results && root.best_id != "" && !root.running ? ThemePalette.accent : ThemePalette.text-2;
+                                color: root.has-results && root.best_id != "" && !root.running ? ThemePalette.accent-text : ThemePalette.text-2;
                                 wrap: word-wrap;
                             }
                         }
@@ -271,12 +294,14 @@ export component TesterPage inherits Rectangle {
                             if root.running : AppButton {
                                 text: I18n.t(I18n.lang, "common.cancel");
                                 variant: "danger";
+                                size: "lg";
                                 icon: @image-url("../../assets/icons/stop.svg");
                                 clicked => { root.cancel_clicked(); }
                             }
                             if !root.running : AppButton {
                                 text: root.has-results ? I18n.t(I18n.lang, "tester.run_again") : I18n.t(I18n.lang, "tester.run_test");
                                 variant: "primary";
+                                size: "lg";
                                 icon: @image-url("../../assets/icons/rocket.svg");
                                 enabled: root.installed && root.strategy_count > 0 && root.is_admin;
                                 clicked => { root.start_clicked(); }
@@ -309,42 +334,119 @@ export component TesterPage inherits Rectangle {
                 }
             }
 
-            Rectangle { height: 16px; }
+            Rectangle { height: 20px; }
 
             // ── results list ──
             Rectangle {
                 vertical-stretch: 1;
                 border-width: 1px;
                 border-color: ThemePalette.border;
-                border-radius: ThemePalette.r-12;
+                border-radius: ThemePalette.r-16;
                 background: ThemePalette.surface;
                 clip: true;
 
-                if !root.has-results : VerticalLayout {
-                    alignment: center;
-                    spacing: 8px;
-                    Text {
-                        text: root.running ? I18n.t(I18n.lang, "tester.collecting") : I18n.t(I18n.lang, "tester.no_results");
-                        font-family: ThemePalette.font-sans;
-                        font-size: ThemePalette.fs-14;
-                        color: ThemePalette.text-2;
-                        horizontal-alignment: center;
+                VerticalLayout {
+                    spacing: 0px;
+                    Rectangle {
+                        height: 58px;
+                        HorizontalLayout {
+                            padding-left: 18px;
+                            padding-right: 18px;
+                            spacing: 10px;
+                            Text {
+                                text: I18n.t(I18n.lang, "tester.results_title");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-14;
+                                font-weight: 600;
+                                color: ThemePalette.text;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                text: "\{root.results.length} " + I18n.t(I18n.lang, "tester.results_count_suffix");
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-11;
+                                color: ThemePalette.text-3;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
                     }
-                    Text {
-                        text: root.running ? I18n.t(I18n.lang, "tester.collecting_sub") : I18n.t(I18n.lang, "tester.no_results_sub");
-                        font-family: ThemePalette.font-sans;
-                        font-size: ThemePalette.fs-12;
-                        color: ThemePalette.text-3;
-                        horizontal-alignment: center;
-                    }
-                }
 
-                if root.has-results : ListView {
-                    for item in root.results : ResultRow {
-                        item: item;
-                        is_active: root.selected_strategy == item.id;
-                        use_clicked => { root.use_strategy(item.id); }
-                        toggle_favorite => { root.toggle_favorite(item.id); }
+                    if root.has-results : Rectangle {
+                        height: 34px;
+                        background: ThemePalette.surface-2;
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 12px;
+                            Text {
+                                width: 30px;
+                                text: "#";
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-10;
+                                color: ThemePalette.text-3;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                horizontal-stretch: 0;
+                                min-width: 120px;
+                                preferred-width: 190px;
+                                max-width: 190px;
+                                text: I18n.t(I18n.lang, "tester.col_strategy");
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-10;
+                                color: ThemePalette.text-3;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                min-width: 150px;
+                                text: I18n.t(I18n.lang, "tester.col_reachability");
+                                font-family: ThemePalette.font-mono;
+                                font-size: ThemePalette.fs-10;
+                                color: ThemePalette.text-3;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { width: 28px; }
+                            Rectangle { width: 100px; }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        if !root.has-results : VerticalLayout {
+                            alignment: center;
+                            padding: 28px;
+                            spacing: 10px;
+                            Text {
+                                text: root.running ? I18n.t(I18n.lang, "tester.collecting") : I18n.t(I18n.lang, "tester.no_results");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-16;
+                                font-weight: 500;
+                                color: ThemePalette.text-2;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: root.running ? I18n.t(I18n.lang, "tester.collecting_sub") : I18n.t(I18n.lang, "tester.no_results_sub");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: ThemePalette.text-3;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        result-list := ListView {
+                            viewport-width: result-list.visible-width;
+                            for item in root.results : ResultRow {
+                                item: item;
+                                is_active: root.selected_strategy == item.id;
+                                use_clicked => { root.use_strategy(item.id); }
+                                toggle_favorite => { root.toggle_favorite(item.id); }
+                            }
+                        }
                     }
                 }
             }

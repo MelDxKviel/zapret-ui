@@ -122,8 +122,11 @@ successful core install (or a check that finds no newer version) emit
 
 `src/telegram/` is a native, local-only MTProto → Telegram WSS bridge inspired
 by Flowseal/tg-ws-proxy, not a bundled Python subprocess. `LocalTelegramProxy`
-implements the `TelegramProxy` port. It is always stopped on app launch; no
+implements the `TelegramProxy` port. It is stopped on app launch by default; no
 listener, TLS context, connection pool, polling or task is created until Start.
+An explicit opt-in `telegram_autostart` preference starts it when the app opens,
+independently of the core and the app's separate Windows startup preference.
+Hiding Telegram disables its startup preference as well as stopping the proxy.
 Stop joins the listener and every connection task. Keep it independent of the
 zapret core, strategy testing and elevation.
 
@@ -174,6 +177,10 @@ Slint compiled by `build.rs` (`slint_build::compile("ui/main_window.slint")`);
 
 `tokens.slint` (palettes + `StrategyItem` / `AppStatus` / `LogLineItem`) →
 `components/` → `pages/` → `main_window.slint`.
+
+Keep `std-widgets` `Palette.color-scheme` synchronized with `ThemePalette`.
+The native TextEdit used for logs/hosts otherwise retains the OS theme and
+can render unreadable text when the app theme differs.
 
 **Callback and property names in `main_window.slint` are a hand-maintained
 contract with both `src/app/mod.rs` and `examples/ui_only.rs`.** Add/rename a

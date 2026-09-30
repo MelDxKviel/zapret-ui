@@ -332,6 +332,9 @@ async fn forward<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     loop {
         let len = reader.read(&mut data).await?;
         if len == 0 {
+            // Propagate graceful EOF and check its result before releasing the
+            // sockets. OwnedWriteHalf's Drop cannot report a failed shutdown.
+            writer.shutdown().await?;
             return Ok(());
         }
         decrypt.apply_keystream(&mut data[..len]);

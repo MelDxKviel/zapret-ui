@@ -187,7 +187,12 @@ async fn tcp_fallback_bridge_preserves_stream_and_closes_on_eof() {
         desktop.read_exact(&mut reply).await.unwrap();
         cipher(2).apply_keystream(&mut reply);
         assert_eq!(&reply, b"ok");
-        drop(remote);
+        // Exercise graceful EOF, rather than Winsock's implicit shutdown on
+        // socket close, which may reset the connection under scheduling load.
+        remote.shutdown().await.unwrap();
+        let mut eof = [0; 1];
+        assert_eq!(desktop.read(&mut eof).await.unwrap(), 0);
+        assert_eq!(remote.read(&mut eof).await.unwrap(), 0);
         relay.await.unwrap().unwrap();
     })
     .await

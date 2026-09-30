@@ -46,8 +46,14 @@ impl TelegramProxy for LocalTelegramProxy {
         on_status: TelegramStatusCb,
     ) -> Result<()> {
         let mut running = self.running.lock().await;
-        if running.as_ref().is_some_and(|r| !r.task.is_finished()) {
-            return Ok(());
+        if let Some(active) = running.as_mut() {
+            if active.shutdown.is_some() && !active.task.is_finished() {
+                return Ok(());
+            }
+            // A cancelled Stop may have signalled shutdown without finishing
+            // the join. Keep owning the old task until it releases its listener
+            // and every client, then bind the replacement.
+            let _ = (&mut active.task).await;
         }
         running.take();
         let settings = settings::prepare(settings)?;
@@ -126,12 +132,15 @@ impl TelegramProxy for LocalTelegramProxy {
 
     async fn stop(&self) -> Result<()> {
         let mut running = self.running.lock().await;
-        if let Some(mut active) = running.take() {
+        if let Some(active) = running.as_mut() {
             if let Some(shutdown) = active.shutdown.take() {
                 let _ = shutdown.send(());
             }
             let _ = (&mut active.task).await;
         }
+        // Leave Running in the slot across the await, so cancellation cannot
+        // discard the join and let a subsequent Start race the old listener.
+        running.take();
         Ok(())
     }
 

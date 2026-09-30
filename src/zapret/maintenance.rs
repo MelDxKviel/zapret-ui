@@ -101,9 +101,11 @@ impl Maintenance for ZapretMaintenance {
         }
         match mode {
             // No flag file == disabled (matches service.bat).
-            GameFilterMode::Disabled => {
-                let _ = std::fs::remove_file(&flag);
-            }
+            GameFilterMode::Disabled => match std::fs::remove_file(&flag) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).context("removing game_filter.enabled"),
+            },
             other => {
                 std::fs::write(&flag, format!("{}\n", other.slug()))
                     .context("writing game_filter.enabled")?;
@@ -268,7 +270,14 @@ impl Maintenance for ZapretMaintenance {
 /// flashes; the exit code distinguishes "killed" (0) from "not found" (128).
 fn kill_discord() -> bool {
     use std::process::Command;
-    let mut cmd = Command::new("taskkill");
+    let taskkill = match crate::zapret::paths::system_executable("taskkill.exe") {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!("Could not resolve taskkill.exe: {e:#}");
+            return false;
+        }
+    };
+    let mut cmd = Command::new(taskkill);
     cmd.args(["/IM", "Discord.exe", "/F"]);
     #[cfg(windows)]
     {

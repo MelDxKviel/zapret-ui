@@ -317,7 +317,7 @@ fn copy_file_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
 }
 
 fn run_icacls(path: &Path, args: &[&str], ctx: &str) -> anyhow::Result<()> {
-    let mut cmd = Command::new("icacls");
+    let mut cmd = Command::new(crate::zapret::paths::system_executable("icacls.exe")?);
     cmd.arg(path).args(args);
     #[cfg(windows)]
     {
@@ -341,7 +341,7 @@ fn run_icacls(path: &Path, args: &[&str], ctx: &str) -> anyhow::Result<()> {
 }
 
 fn run_hidden_command(program: &str, args: &[OsString], ctx: &str) -> anyhow::Result<()> {
-    let mut cmd = Command::new(program);
+    let mut cmd = Command::new(crate::zapret::paths::system_executable(program)?);
     cmd.args(args);
     #[cfg(windows)]
     {
@@ -585,15 +585,9 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<Protecte
         return Err(e);
     }
 
-    remove_dir_all_recovering(&dst, "Failed to clear protected service dir")?;
-    if let Err(e) = std::fs::rename(&stage, &dst) {
+    if let Err(e) = promote_service_dir(&stage, &dst, |from, to| std::fs::rename(from, to)) {
         let _ = remove_dir_all_recovering(&stage, "Cleaning unpromoted service staging dir");
-        return Err(anyhow::anyhow!(
-            "Failed to promote staged service dir {:?} to {:?}: {}",
-            stage,
-            dst,
-            e
-        ));
+        return Err(e);
     }
 
     Ok(ProtectedDir {
@@ -602,60 +596,90 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<Protecte
     })
 }
 
-/// Best-effort teardown of a pre-existing "zapret" service that belongs to us —
+/// Keep the previous protected copy until its replacement is in place. A
+/// promotion failure must leave the existing service binary available.
+fn promote_service_dir(
+    stage: &Path,
+    dst: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    let backup = dst.with_file_name(format!(
+        "zapret.previous.{}.{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    ));
+    let had_previous = dst.exists();
+    if had_previous {
+        rename(dst, &backup).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to back up protected service directory {}: {e}",
+                dst.display()
+            )
+        })?;
+    }
+    if let Err(promote_error) = rename(stage, dst) {
+        if had_previous {
+            if let Err(rollback_error) = rename(&backup, dst) {
+                anyhow::bail!(
+                    "Failed to promote service files: {promote_error}; rollback failed: {rollback_error}. Previous files remain at {}",
+                    backup.display()
+                );
+            }
+        }
+        anyhow::bail!(
+            "Failed to promote service files from {}: {promote_error}",
+            stage.display()
+        );
+    }
+    if had_previous {
+        if let Err(e) =
+            remove_dir_all_recovering(&backup, "Cleaning previous protected service copy")
+        {
+            tracing::warn!("Service files installed; old copy could not be removed: {e:#}");
+        }
+    }
+    Ok(())
+}
+
+/// Tear down a pre-existing "zapret" service that belongs to us —
 /// i.e. one whose ImagePath is a `winws.exe` inside any directory in
 /// `owned_dirs` (the user install dir and/or the protected machine dir). Stops
 /// it (releasing the winws.exe file lock) and deletes its SCM registration so a
 /// fresh install can re-create it without an ownership conflict.
 ///
-/// A "zapret" service that points somewhere else is left untouched, so we never
-/// tear down an unrelated service that merely shares the name. Caller must be
+/// A "zapret" service that points somewhere else is left untouched and returns
+/// an ownership error. Stop, query and deletion failures abort replacement.
+/// Caller must be
 /// elevated (it's only ever reached from `install_service_protected`).
-fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) {
-    let manager = match ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
-    {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-    let service = match manager.open_service(
+fn remove_prior_zapret_service(owned_dirs: &[PathBuf]) -> anyhow::Result<()> {
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|e| svc_err("OpenSCManager(remove prior)", e))?;
+    let Some(service) = open_service_with_repair(
+        &manager,
         "zapret",
         ServiceAccess::STOP
             | ServiceAccess::DELETE
             | ServiceAccess::QUERY_STATUS
             | ServiceAccess::QUERY_CONFIG,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            // ERROR_SERVICE_DOES_NOT_EXIST is normal (nothing to clean up); log
-            // anything else so an access problem here is visible.
-            let missing = matches!(&e, windows_service::Error::Winapi(io) if io.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST));
-            if !missing {
-                tracing::warn!("remove_prior: could not open existing zapret service: {e}");
-            }
-            return;
-        }
+        owned_dirs,
+        "OpenService(remove prior)",
+    )?
+    else {
+        return Ok(());
     };
 
-    let ours = service_belongs_to_dirs("zapret", &service, owned_dirs).unwrap_or(false);
-    if !ours {
-        return;
+    if !service_belongs_to_dirs("zapret", &service, owned_dirs)? {
+        return Err(service_ownership_error("zapret"));
     }
 
-    if let Ok(status) = service.query_status() {
-        if status.current_state != ServiceState::Stopped {
-            if let Err(e) = service.stop() {
-                tracing::warn!("remove_prior: stopping existing zapret service failed: {e}");
-            }
-            wait_for_stopped(&service, std::time::Duration::from_secs(10));
-        }
-    }
-    if let Err(e) = service.delete() {
-        tracing::warn!("remove_prior: deleting existing zapret service failed: {e}");
-    } else {
-        tracing::info!("remove_prior: removed pre-existing zapret service");
-    }
+    stop_service_and_wait(&service)?;
+    service
+        .delete()
+        .map_err(|e| svc_err("DeleteService(remove prior)", e))?;
     drop(service);
-    wait_for_deletion(&manager, "zapret", std::time::Duration::from_secs(10));
+    wait_for_deletion(&manager, "zapret", std::time::Duration::from_secs(10))?;
+    tracing::info!("remove_prior: removed pre-existing zapret service");
+    Ok(())
 }
 
 /// Resolve `strategy_id` into a runnable `Strategy` from the verified staged copy
@@ -749,7 +773,7 @@ pub async fn install_service_protected(
     // Tear down any prior "zapret" service of ours first. This matters for two
     // reasons, both of which otherwise make a reinstall silently fail:
     //   1. A service still running out of the protected dir locks its winws.exe,
-    //      so `prepare_protected_dir`'s `remove_dir_all` errors with "in use".
+    //      so replacing the protected copy can fail with "in use".
     //   2. Older builds registered the service pointing at the user-writable
     //      install dir (%APPDATA%); the new ownership check in `install()` only
     //      accepts the protected dir, so it would reject that stale service as
@@ -757,7 +781,7 @@ pub async fn install_service_protected(
     remove_prior_zapret_service(&[
         user_install_dir.to_path_buf(),
         crate::zapret::paths::service_install_dir(),
-    ]);
+    ])?;
     let protected = prepare_protected_dir(user_install_dir)?;
     // Resolve the exact preset snapshot we just copied and verified. Reading from
     // the staged copy avoids a race where the user-writable .bat changes after
@@ -802,6 +826,13 @@ impl WindowsServiceCtl {
             self.install_dir.join("winws.exe")
         }
     }
+
+    fn owned_dirs(&self) -> [PathBuf; 2] {
+        [
+            self.install_dir.clone(),
+            crate::zapret::paths::service_install_dir(),
+        ]
+    }
 }
 
 /// ERROR_SERVICE_DOES_NOT_EXIST — the service name is simply not registered.
@@ -824,7 +855,7 @@ fn repair_service_dacl(service_name: &str) -> anyhow::Result<()> {
     // interactive/service users query-only. This mirrors the default SCM shape
     // but makes upgrades resilient if an older/broken service DACL got persisted.
     const SERVICE_DACL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
-    let mut cmd = std::process::Command::new("sc.exe");
+    let mut cmd = std::process::Command::new(crate::zapret::paths::system_executable("sc.exe")?);
     cmd.args(["sdset", service_name, SERVICE_DACL]);
     #[cfg(windows)]
     {
@@ -845,7 +876,7 @@ fn repair_service_dacl(service_name: &str) -> anyhow::Result<()> {
 }
 
 fn start_service_via_sc(service_name: &str) -> anyhow::Result<()> {
-    let mut cmd = std::process::Command::new("sc.exe");
+    let mut cmd = std::process::Command::new(crate::zapret::paths::system_executable("sc.exe")?);
     cmd.args(["start", service_name]);
     #[cfg(windows)]
     {
@@ -869,50 +900,133 @@ fn open_service_with_repair(
     manager: &ServiceManager,
     name: &str,
     access: ServiceAccess,
+    owned_dirs: &[PathBuf],
     ctx: &str,
-) -> anyhow::Result<windows_service::service::Service> {
+) -> anyhow::Result<Option<windows_service::service::Service>> {
     match manager.open_service(name, access) {
-        Ok(service) => Ok(service),
+        Ok(service) => Ok(Some(service)),
+        Err(windows_service::Error::Winapi(io))
+            if io.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST) =>
+        {
+            Ok(None)
+        }
         Err(e) if is_access_denied(&e) => {
-            repair_service_dacl(name)?;
+            repair_service_dacl_if_owned(manager, name, owned_dirs)?;
             manager
                 .open_service(name, access)
+                .map(Some)
                 .map_err(|e| svc_err(ctx, e))
         }
         Err(e) => Err(svc_err(ctx, e)),
     }
 }
 
-/// Poll a service's state until it reaches `Stopped` or the timeout elapses.
-fn wait_for_stopped(service: &windows_service::service::Service, timeout: std::time::Duration) {
+fn require_owned_image(name: &str, image: &OsStr, owned_dirs: &[PathBuf]) -> anyhow::Result<()> {
+    if service_image_belongs_to_dirs(image, owned_dirs) {
+        Ok(())
+    } else {
+        Err(service_ownership_error(name))
+    }
+}
+
+fn repair_service_dacl_if_owned(
+    manager: &ServiceManager,
+    name: &str,
+    owned_dirs: &[PathBuf],
+) -> anyhow::Result<()> {
+    // Opening ALL_ACCESS can fail before the caller has checked ownership.
+    // Read the registry or request only QUERY_CONFIG before modifying the DACL.
+    let image = match service_image_path_from_registry(name) {
+        Some(image) => image,
+        None => {
+            let service = manager
+                .open_service(name, ServiceAccess::QUERY_CONFIG)
+                .map_err(|e| svc_err("OpenService(ownership before DACL repair)", e))?;
+            service
+                .query_config()
+                .map_err(|e| svc_err("QueryServiceConfig(before DACL repair)", e))?
+                .executable_path
+                .into_os_string()
+        }
+    };
+    require_owned_image(name, image.as_os_str(), owned_dirs)?;
+    repair_service_dacl(name)
+}
+
+fn wait_until(
+    description: &str,
+    timeout: std::time::Duration,
+    mut reached: impl FnMut() -> anyhow::Result<bool>,
+) -> anyhow::Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        match service.query_status() {
-            Ok(s) if s.current_state == ServiceState::Stopped => break,
-            _ => {}
+        if reached()? {
+            return Ok(());
         }
-        if std::time::Instant::now() >= deadline {
-            break;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("Timed out waiting for {description}");
         }
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(150)));
+    }
+}
+
+/// Poll until Stopped. A query failure or timeout cannot count as a successful Stop.
+fn wait_for_stopped(
+    service: &windows_service::service::Service,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    wait_until("service to stop", timeout, || {
+        let status = service
+            .query_status()
+            .map_err(|e| svc_err("QueryServiceStatus(wait for Stop)", e))?;
+        Ok(status.current_state == ServiceState::Stopped)
+    })
+}
+
+fn stop_service_and_wait(service: &windows_service::service::Service) -> anyhow::Result<()> {
+    let status = service
+        .query_status()
+        .map_err(|e| svc_err("QueryServiceStatus(before Stop)", e))?;
+    if status.current_state != ServiceState::Stopped {
+        match service.stop() {
+            Ok(_) => {}
+            Err(windows_service::Error::Winapi(io))
+                if io.raw_os_error() == Some(ERROR_SERVICE_NOT_ACTIVE) => {}
+            Err(e) => return Err(svc_err("ControlService(STOP)", e)),
+        }
+        wait_for_stopped(service, std::time::Duration::from_secs(10))?;
+    }
+    Ok(())
+}
+
+fn deletion_error_means_missing(error: windows_service::Error) -> anyhow::Result<bool> {
+    match error {
+        windows_service::Error::Winapi(io)
+            if io.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST) =>
+        {
+            Ok(true)
+        }
+        // Marked for deletion still has a registration until all handles close.
+        windows_service::Error::Winapi(io) if io.raw_os_error() == Some(1072) => Ok(false),
+        other => Err(svc_err("OpenService(wait for deletion)", other)),
     }
 }
 
 /// Poll the SCM until the named service is gone (post-`delete`) or timeout.
-fn wait_for_deletion(manager: &ServiceManager, name: &str, timeout: std::time::Duration) {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if manager
-            .open_service(name, ServiceAccess::QUERY_STATUS)
-            .is_err()
-        {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(150));
-    }
+fn wait_for_deletion(
+    manager: &ServiceManager,
+    name: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    wait_until(
+        &format!("service {name} to be deleted"),
+        timeout,
+        || match manager.open_service(name, ServiceAccess::QUERY_STATUS) {
+            Ok(_) => Ok(false),
+            Err(e) => deletion_error_means_missing(e),
+        },
+    )
 }
 
 #[async_trait::async_trait]
@@ -938,27 +1052,19 @@ impl ServiceCtl for WindowsServiceCtl {
         // create_service fails with ERROR_SERVICE_EXISTS. But only if it's *ours*:
         // refuse to touch a same-named service that points somewhere else, so we
         // never tear down an unrelated service that happens to be called "zapret".
-        if let Ok(existing) = open_service_with_repair(
+        if let Some(existing) = open_service_with_repair(
             &manager,
             &self.service_name,
             ServiceAccess::ALL_ACCESS,
+            &self.owned_dirs(),
             "OpenService(existing)",
-        ) {
-            let owned_dirs = [
-                self.install_dir.clone(),
-                crate::zapret::paths::service_install_dir(),
-            ];
-            let owned = service_belongs_to_dirs(&self.service_name, &existing, &owned_dirs)
-                .unwrap_or(false);
+        )? {
+            let owned_dirs = self.owned_dirs();
+            let owned = service_belongs_to_dirs(&self.service_name, &existing, &owned_dirs)?;
             if !owned {
                 return Err(service_ownership_error(&self.service_name));
             }
-            if let Ok(status) = existing.query_status() {
-                if status.current_state != ServiceState::Stopped {
-                    let _ = existing.stop();
-                    wait_for_stopped(&existing, std::time::Duration::from_secs(10));
-                }
-            }
+            stop_service_and_wait(&existing)?;
             existing
                 .delete()
                 .map_err(|e| svc_err("DeleteService(existing)", e))?;
@@ -968,7 +1074,7 @@ impl ServiceCtl for WindowsServiceCtl {
                 &manager,
                 &self.service_name,
                 std::time::Duration::from_secs(10),
-            );
+            )?;
         }
 
         // Prepare the launch arguments.
@@ -1002,7 +1108,7 @@ impl ServiceCtl for WindowsServiceCtl {
         loop {
             match manager.create_service(&service_info, ServiceAccess::ALL_ACCESS) {
                 Ok(_) => {
-                    repair_service_dacl(&self.service_name)?;
+                    repair_service_dacl_if_owned(&manager, &self.service_name, &self.owned_dirs())?;
                     break;
                 }
                 Err(e) => {
@@ -1033,8 +1139,10 @@ impl ServiceCtl for WindowsServiceCtl {
             &manager,
             &self.service_name,
             ServiceAccess::ALL_ACCESS,
+            &self.owned_dirs(),
             "OpenService(remove)",
-        )?;
+        )?
+        .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
 
         let owned_dirs = [
             self.install_dir.clone(),
@@ -1048,12 +1156,7 @@ impl ServiceCtl for WindowsServiceCtl {
         // handles are closed and it has stopped running. Without this the service
         // entry stays in the SCM and the next `install` call fails with
         // ERROR_SERVICE_MARKED_FOR_DELETE.
-        if let Ok(status) = service.query_status() {
-            if status.current_state != ServiceState::Stopped {
-                let _ = service.stop();
-                wait_for_stopped(&service, std::time::Duration::from_secs(10));
-            }
-        }
+        stop_service_and_wait(&service)?;
 
         service.delete().map_err(|e| svc_err("DeleteService", e))?;
         // Wait for the SCM to actually drop the registration so a follow-up
@@ -1063,7 +1166,7 @@ impl ServiceCtl for WindowsServiceCtl {
             &manager,
             &self.service_name,
             std::time::Duration::from_secs(10),
-        );
+        )?;
         Ok(())
     }
 
@@ -1079,8 +1182,10 @@ impl ServiceCtl for WindowsServiceCtl {
             &manager,
             &self.service_name,
             ServiceAccess::ALL_ACCESS,
+            &self.owned_dirs(),
             "OpenService(start)",
-        )?;
+        )?
+        .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
 
         let owned_dirs = [
             self.install_dir.clone(),
@@ -1101,13 +1206,15 @@ impl ServiceCtl for WindowsServiceCtl {
                 return Ok(());
             }
             Err(e) if is_access_denied(&e) => {
-                repair_service_dacl(&self.service_name)?;
+                repair_service_dacl_if_owned(&manager, &self.service_name, &owned_dirs)?;
                 let service = open_service_with_repair(
                     &manager,
                     &self.service_name,
                     ServiceAccess::ALL_ACCESS,
+                    &owned_dirs,
                     "OpenService(start-retry)",
-                )?;
+                )?
+                .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
                 match service.start(&[] as &[&str]) {
                     Ok(_) => {}
                     Err(windows_service::Error::Winapi(io))
@@ -1172,8 +1279,10 @@ impl ServiceCtl for WindowsServiceCtl {
             &manager,
             &self.service_name,
             ServiceAccess::ALL_ACCESS,
+            &self.owned_dirs(),
             "OpenService(stop)",
-        )?;
+        )?
+        .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
 
         let owned_dirs = [
             self.install_dir.clone(),
@@ -1183,16 +1292,7 @@ impl ServiceCtl for WindowsServiceCtl {
             return Err(service_ownership_error(&self.service_name));
         }
 
-        match service.stop() {
-            Ok(_) => {}
-            // Already stopped → the desired end state already holds; not an error.
-            Err(windows_service::Error::Winapi(io))
-                if io.raw_os_error() == Some(ERROR_SERVICE_NOT_ACTIVE) => {}
-            Err(e) => return Err(svc_err("ControlService(STOP)", e)),
-        }
-        // Wait for it to actually reach Stopped so the UI status is accurate.
-        wait_for_stopped(&service, std::time::Duration::from_secs(10));
-        Ok(())
+        stop_service_and_wait(&service)
     }
 
     async fn status(&self) -> anyhow::Result<RunningMode> {
@@ -1269,5 +1369,99 @@ mod tests {
             OsStr::new(r#""C:\ProgramData\zapret-ui\zapret2\bin\winws.exe" --wf-tcp=80"#),
             &owned,
         ));
+    }
+
+    #[test]
+    fn dacl_repair_requires_a_winws_image_in_an_owned_directory() {
+        let owned = [PathBuf::from(r"C:\ProgramData\zapret-ui\zapret")];
+        assert!(require_owned_image(
+            "zapret",
+            OsStr::new(r#""C:\ProgramData\zapret-ui\zapret\bin\winws.exe" --wf-tcp=80"#),
+            &owned,
+        )
+        .is_ok());
+        for image in [
+            r#""C:\other-app\winws.exe" --wf-tcp=80"#,
+            r#""C:\ProgramData\zapret-ui\zapret\other.exe" --wf-tcp=80"#,
+            "",
+        ] {
+            assert!(require_owned_image("zapret", OsStr::new(image), &owned).is_err());
+        }
+    }
+
+    #[test]
+    fn service_wait_reports_timeout_and_query_errors() {
+        let timeout =
+            wait_until("service to stop", std::time::Duration::ZERO, || Ok(false)).unwrap_err();
+        assert!(timeout.to_string().contains("Timed out"));
+        let query_error = wait_until("service to stop", std::time::Duration::ZERO, || {
+            Err(anyhow::anyhow!("status query denied"))
+        })
+        .unwrap_err();
+        assert_eq!(query_error.to_string(), "status query denied");
+        assert!(wait_until("service to stop", std::time::Duration::ZERO, || Ok(true)).is_ok());
+    }
+
+    #[test]
+    fn deletion_wait_distinguishes_absent_pending_and_access_denied() {
+        let winapi_error =
+            |code| windows_service::Error::Winapi(std::io::Error::from_raw_os_error(code));
+        assert!(deletion_error_means_missing(winapi_error(ERROR_SERVICE_DOES_NOT_EXIST)).unwrap());
+        assert!(!deletion_error_means_missing(winapi_error(1072)).unwrap());
+        assert!(deletion_error_means_missing(winapi_error(ERROR_ACCESS_DENIED)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod protected_promotion_tests {
+    use super::*;
+
+    #[test]
+    fn failed_promotion_restores_the_previous_service_files() {
+        let root = tempfile::tempdir().unwrap();
+        let dst = root.path().join("zapret");
+        let stage = root.path().join("stage");
+        std::fs::create_dir(&dst).unwrap();
+        std::fs::create_dir(&stage).unwrap();
+        std::fs::write(dst.join("winws.exe"), "old").unwrap();
+        std::fs::write(stage.join("winws.exe"), "new").unwrap();
+        let result = promote_service_dir(&stage, &dst, |from, to| {
+            if from == stage {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected promotion failure",
+                ))
+            } else {
+                std::fs::rename(from, to)
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(dst.join("winws.exe")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stage.join("winws.exe")).unwrap(),
+            "new"
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn successful_promotion_replaces_files_and_removes_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let dst = root.path().join("zapret");
+        let stage = root.path().join("stage");
+        std::fs::create_dir(&dst).unwrap();
+        std::fs::create_dir(&stage).unwrap();
+        std::fs::write(dst.join("winws.exe"), "old").unwrap();
+        std::fs::write(stage.join("winws.exe"), "new").unwrap();
+        promote_service_dir(&stage, &dst, |from, to| std::fs::rename(from, to)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dst.join("winws.exe")).unwrap(),
+            "new"
+        );
+        assert!(!stage.exists());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
     }
 }

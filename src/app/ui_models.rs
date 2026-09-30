@@ -38,8 +38,9 @@ pub(super) fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
 /// each group). Runs on the UI thread.
 pub(super) fn rebuild_strategies(ui: &MainWindow, catalog: &Arc<dyn StrategyCatalog>) {
     let q = ui.get_strategies_query().to_string().trim().to_lowercase();
-    let mut list: Vec<crate::contracts::Strategy> = catalog
-        .all()
+    let all = catalog.all();
+    ui.set_total_strategy_count(all.len().min(i32::MAX as usize) as i32);
+    let mut list: Vec<crate::contracts::Strategy> = all
         .into_iter()
         .filter(|s| {
             q.is_empty()
@@ -100,7 +101,11 @@ fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
     // from tracing (a level was parsed), so plain text is never mangled.
     let message = match rest.split_once(' ') {
         Some((head, tail)) if !level.is_empty() && head.ends_with(':') && head.contains("::") => {
-            let short = head.trim_end_matches(':').rsplit("::").next().unwrap_or(head);
+            let short = head
+                .trim_end_matches(':')
+                .rsplit("::")
+                .next()
+                .unwrap_or(head);
             format!("{short}: {}", tail.trim_start())
         }
         _ => rest.to_string(),
@@ -115,12 +120,9 @@ fn parse_log_line(no: usize, raw: &str) -> LogLineItem {
 }
 
 fn line_passes(raw: &str, grep: &str, level: &str) -> bool {
-    if level != "ALL" {
-        let up = raw.to_uppercase();
-        let want = if level == "ERROR" { "ERR" } else { level };
-        if !up.contains(want) {
-            return false;
-        }
+    // Match the severity token, not words in the message or module name.
+    if level != "ALL" && parse_log_line(0, raw).level.as_str() != level {
+        return false;
     }
     if !grep.is_empty() && !raw.to_lowercase().contains(&grep.to_lowercase()) {
         return false;
@@ -204,4 +206,33 @@ pub(super) fn rebuild_test_results(ui: &MainWindow) {
         })
         .collect();
     ui.set_test_results(Rc::new(slint::VecModel::from(items)).into());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{line_passes, parse_log_line};
+
+    #[test]
+    fn log_filter_matches_severity_instead_of_message() {
+        let warning = "2026-09-30T12:34:56.123+03:00 WARN tester: INFO endpoint returned ERROR";
+        assert!(line_passes(warning, "endpoint", "WARN"));
+        assert!(!line_passes(warning, "", "INFO"));
+        assert!(!line_passes(warning, "", "ERROR"));
+        assert!(!line_passes("an INFO message without severity", "", "INFO"));
+        assert!(line_passes("WARNING tester: unavailable", "", "WARN"));
+        assert!(line_passes("ERR tester: unavailable", "", "ERROR"));
+        assert!(line_passes(warning, "error", "ALL"));
+    }
+
+    #[test]
+    fn log_line_keeps_local_time_and_shortens_target() {
+        let item = parse_log_line(
+            7,
+            "2026-09-30T12:34:56.123+03:00  INFO zapret_ui::zapret::tester: ready",
+        );
+        assert_eq!(item.line_no, 7);
+        assert_eq!(item.timestamp.as_str(), "12:34:56");
+        assert_eq!(item.level.as_str(), "INFO");
+        assert_eq!(item.message.as_str(), "tester: ready");
+    }
 }

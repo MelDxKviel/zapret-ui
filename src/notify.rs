@@ -27,22 +27,29 @@ pub fn init() {
     // Register the AUMID display name in HKCU. Without this key Windows silently
     // drops toasts for a custom AppId that has no Start-menu shortcut.
     let key = format!("HKCU\\Software\\Classes\\AppUserModelId\\{APP_ID}");
-    let result = std::process::Command::new("reg")
-        .args([
-            "add",
-            &key,
-            "/v",
-            "DisplayName",
-            "/t",
-            "REG_SZ",
-            "/d",
-            APP_DISPLAY_NAME,
-            "/f",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
-    if let Err(e) = result {
-        tracing::warn!("Failed to register notification AppUserModelID: {}", e);
+    let result = crate::zapret::paths::system_executable("reg.exe").and_then(|reg| {
+        Ok(std::process::Command::new(reg)
+            .args([
+                "add",
+                &key,
+                "/v",
+                "DisplayName",
+                "/t",
+                "REG_SZ",
+                "/d",
+                APP_DISPLAY_NAME,
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()?)
+    });
+    match result {
+        Ok(output) if !output.status.success() => tracing::warn!(
+            "Failed to register notification AppUserModelID: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(e) => tracing::warn!("Failed to register notification AppUserModelID: {e:#}"),
+        _ => {}
     }
 
     let wide: Vec<u16> = OsStr::new(APP_ID).encode_wide().chain(Some(0)).collect();
