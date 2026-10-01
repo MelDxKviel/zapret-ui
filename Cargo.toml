@@ -39,7 +39,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
-tray-icon = "0.24"
+tray-icon = "0.25"
 tempfile = "3"
 clipboard-win = "5"
 tauri-winrt-notification = "0.8"
