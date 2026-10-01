@@ -2,7 +2,6 @@ name: CI / Release
 
 on:
   push:
-    branches: [ "main", "master" ]
     tags:
       - "v*"
   pull_request:
@@ -119,10 +118,13 @@ jobs:
           "$hash  zapret-ui.exe" | Out-File -FilePath "target/release/zapret-ui.exe.sha256" -Encoding ascii
           Write-Host "SHA256: $hash"
 
-      - name: Create GitHub Release
+      - name: Upload assets to draft release
         uses: softprops/action-gh-release@v3
         with:
           name: zapret-ui ${{ github.ref_name }}
+          # Keep both stable releases and prereleases hidden until every asset
+          # is uploaded, so the updater never sees an unfinished release.
+          draft: true
           prerelease: ${{ steps.ver.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
@@ -131,3 +133,11 @@ jobs:
             target/release/zapret-ui.exe.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish complete release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$env:RELEASE_TAG" --draft=false

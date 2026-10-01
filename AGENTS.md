@@ -113,8 +113,9 @@ successful core install (or a check that finds no newer version) emit
 - **`elevation.rs`** — `check_elevation()` → `Err(anyhow!("NeedsElevation"))`
   when not admin.
 - **`src/selfupdate.rs`** (`GithubSelfUpdater`) — updates **zapret-ui itself**,
-  not the core. Latest tag from `releases.atom` (no `api.github.com`),
-  downloads `zapret-ui.exe` + `.sha256`, verifies, Windows rename-self swap.
+  not the core. Candidates from `releases.atom` (no `api.github.com`); bare tags
+  and incomplete releases are skipped until `zapret-ui.exe` + a valid `.sha256`
+  are available. Downloads and verifies the exe, then Windows rename-self swap.
   `cleanup_old_binary()` at startup. After a successful swap the orchestrator
   calls `relaunch_after_update()` (`--relaunch`) and `process::exit(0)`.
 
@@ -230,5 +231,6 @@ and fires `set_language` to persist. `examples/ui_only.rs` must register
 - Tests under `tests/` `#[path = "../src/..."]` include listed modules rather
   than `use zapret_ui::...`. A test file compiles only what it lists.
   `process_tests.rs` includes `src/zapret/mod.rs` (the whole adapter tree).
-- CI (`.github/workflows/release.yml`) is `cargo test` + `cargo build --release`
-  on `windows-2022`. Tag `v*` publishes `zapret-ui.exe`.
+- CI (`.github/workflows/release.yml`) runs on `v*` tag pushes and PRs, not
+  branch pushes: checks + `cargo test` + `cargo build --release` on
+  `windows-2022`. Tag `v*` uploads the exe + checksum to a draft, then publishes.

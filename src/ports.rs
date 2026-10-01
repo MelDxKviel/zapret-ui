@@ -47,7 +47,8 @@ pub trait Installer: Send + Sync {
 pub trait SelfUpdater: Send + Sync {
     /// The version this running binary was built as (e.g. `"v0.1.0"`).
     fn current_version(&self) -> String;
-    /// Resolve the latest published release tag (e.g. `"v0.2.0"`).
+    /// Resolve a newer release with ready assets (e.g. `"v0.2.0"`), or return
+    /// the current version when no downloadable update is available.
     async fn latest_version(&self) -> anyhow::Result<String>;
     /// Download the latest `zapret-ui.exe`, verify its checksum, and atomically
     /// replace the running binary on disk. Does **not** relaunch or exit — the

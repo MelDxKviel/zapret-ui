@@ -7,8 +7,10 @@
 //! rename-self trick.
 //!
 //! Like [`crate::zapret::github`], we deliberately avoid `api.github.com`
-//! (blocked by the DPI this tool bypasses). The latest tag is read from the
-//! repository's `releases.atom` feed on `github.com`, and the asset is fetched
+//! (blocked by the DPI this tool bypasses). Release candidates are read from the
+//! repository's `releases.atom` feed on `github.com`. The feed can also contain
+//! bare tags, so an update is offered only after both assets are available and
+//! the checksum is valid. The asset is fetched
 //! from the `github.com/.../releases/download/<tag>/...` URL (which redirects to
 //! `objects.githubusercontent.com`). Both are reachable when the API is not.
 
@@ -27,6 +29,11 @@ const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
 /// The release asset name produced by CI.
 const ASSET_NAME: &str = "zapret-ui.exe";
+
+struct ReadyRelease {
+    tag: String,
+    sha256: String,
+}
 
 pub struct GithubSelfUpdater {
     client: reqwest::Client,
@@ -54,15 +61,28 @@ impl GithubSelfUpdater {
         }
     }
 
-    async fn fetch_latest_tag(&self) -> Result<String> {
-        let url = format!(
+    async fn fetch_latest_release(&self) -> Result<Option<ReadyRelease>> {
+        let feed_url = format!(
             "https://github.com/{}/{}/releases.atom",
             self.owner, self.repo
         );
-        tracing::info!("Fetching zapret-ui releases feed from {url}");
+        let download_base = format!(
+            "https://github.com/{}/{}/releases/download",
+            self.owner, self.repo
+        );
+        self.fetch_latest_release_from(&feed_url, &download_base)
+            .await
+    }
+
+    async fn fetch_latest_release_from(
+        &self,
+        feed_url: &str,
+        download_base: &str,
+    ) -> Result<Option<ReadyRelease>> {
+        tracing::info!("Fetching zapret-ui releases feed from {feed_url}");
         let resp = self
             .client
-            .get(&url)
+            .get(feed_url)
             .header(USER_AGENT, "zapret-ui-selfupdate")
             .send()
             .await
@@ -74,15 +94,45 @@ impl GithubSelfUpdater {
             .text()
             .await
             .context("Failed to read releases feed body")?;
-        parse_first_release_tag(&body)
-            .ok_or_else(|| anyhow!("No published releases found in the feed"))
+        if !body.contains("<feed") || !body.contains("</feed>") {
+            bail!("Invalid releases feed");
+        }
+        for tag in parse_release_tags(&body) {
+            if !crate::zapret::updater::is_update_available(&self.current, &tag) {
+                continue;
+            }
+
+            let Some(sha256) = self.fetch_release_checksum(download_base, &tag).await? else {
+                tracing::debug!("Skipping zapret-ui {tag}: checksum is not ready");
+                continue;
+            };
+            // HEAD follows GitHub's redirect to the asset storage without
+            // downloading the executable during an update check.
+            let resp = self
+                .client
+                .head(format!("{download_base}/{tag}/{ASSET_NAME}"))
+                .header(USER_AGENT, "zapret-ui-selfupdate")
+                .send()
+                .await
+                .context("Failed to check the release executable")?;
+            if asset_is_missing(resp.status()) {
+                tracing::debug!("Skipping zapret-ui {tag}: executable is not ready");
+                continue;
+            }
+            if !resp.status().is_success() {
+                bail!("executable request returned HTTP {}", resp.status());
+            }
+            return Ok(Some(ReadyRelease { tag, sha256 }));
+        }
+        Ok(None)
     }
 
-    async fn fetch_expected_sha256(&self, tag: &str) -> Result<String> {
-        let url = format!(
-            "https://github.com/{}/{}/releases/download/{}/{ASSET_NAME}.sha256",
-            self.owner, self.repo, tag
-        );
+    async fn fetch_release_checksum(
+        &self,
+        download_base: &str,
+        tag: &str,
+    ) -> Result<Option<String>> {
+        let url = format!("{download_base}/{tag}/{ASSET_NAME}.sha256");
         let resp = self
             .client
             .get(&url)
@@ -90,6 +140,9 @@ impl GithubSelfUpdater {
             .send()
             .await
             .context("Failed to fetch the release checksum")?;
+        if asset_is_missing(resp.status()) {
+            return Ok(None);
+        }
         if !resp.status().is_success() {
             bail!("checksum request returned HTTP {}", resp.status());
         }
@@ -98,13 +151,9 @@ impl GithubSelfUpdater {
             .await
             .context("Failed to read the checksum body")?;
         // The file is "<hex>  zapret-ui.exe"; take the leading hex token.
-        let hex = body
-            .split_whitespace()
-            .next()
-            .map(|s| s.to_string())
-            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-            .ok_or_else(|| anyhow!("Malformed checksum file"))?;
-        Ok(hex)
+        parse_sha256(&body)
+            .map(Some)
+            .ok_or_else(|| anyhow!("Malformed checksum file"))
     }
 
     async fn download_asset(
@@ -174,17 +223,20 @@ impl SelfUpdater for GithubSelfUpdater {
     }
 
     async fn latest_version(&self) -> Result<String> {
-        self.fetch_latest_tag().await
+        Ok(self
+            .fetch_latest_release()
+            .await?
+            .map(|release| release.tag)
+            .unwrap_or_else(|| self.current.clone()))
     }
 
     async fn download_and_apply(&self, on_progress: DownloadProgressCb) -> Result<()> {
-        let tag = self.fetch_latest_tag().await?;
-        if !crate::zapret::updater::is_update_available(&self.current, &tag) {
-            bail!(
-                "No newer zapret-ui release is available (current {}, latest {tag})",
+        let release = self.fetch_latest_release().await?.ok_or_else(|| {
+            anyhow!(
+                "No newer zapret-ui release with ready assets is available (current {})",
                 self.current
-            );
-        }
+            )
+        })?;
 
         let current_exe = std::env::current_exe().context("Failed to resolve current exe path")?;
         // Download into the same directory so the final rename is a same-volume
@@ -197,11 +249,13 @@ impl SelfUpdater for GithubSelfUpdater {
 
         // Download + checksum, with cleanup of the temp file on any failure.
         let result = async {
-            let actual = self.download_asset(&tag, &new_path, &on_progress).await?;
-            let expected = self.fetch_expected_sha256(&tag).await?;
-            if !expected.eq_ignore_ascii_case(&actual) {
+            let actual = self
+                .download_asset(&release.tag, &new_path, &on_progress)
+                .await?;
+            if !release.sha256.eq_ignore_ascii_case(&actual) {
                 bail!(
-                    "Integrity check failed: downloaded SHA-256 {actual} != published {expected}"
+                    "Integrity check failed: downloaded SHA-256 {actual} != published {}",
+                    release.sha256
                 );
             }
             tracing::info!("New zapret-ui.exe verified (SHA-256 {actual})");
@@ -270,22 +324,43 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
     Some((owner, repo))
 }
 
-/// Pull the first release tag out of a GitHub `releases.atom` feed. Entries are
-/// newest-first; each links to `…/releases/tag/<TAG>`, which is the reliable
-/// source of the tag (the `<title>` may be a custom release name).
-fn parse_first_release_tag(atom: &str) -> Option<String> {
-    const MARKER: &str = "/releases/tag/";
-    let start = atom.find(MARKER)? + MARKER.len();
-    let rest = &atom[start..];
-    let end = rest
-        .find(|c: char| c == '"' || c == '<' || c == '/' || c.is_whitespace())
-        .unwrap_or(rest.len());
-    let tag = rest[..end].trim();
-    if tag.is_empty() {
-        None
-    } else {
-        Some(tag.to_string())
-    }
+/// Read candidates in feed order. Only entry links identify releases; titles
+/// and release-note links can reference unrelated versions.
+fn parse_release_tags(atom: &str) -> Vec<String> {
+    atom.split("<entry>")
+        .skip(1)
+        .filter_map(|entry| {
+            let (entry, _) = entry.split_once("</entry>")?;
+            entry.split("<link ").skip(1).find_map(|link| {
+                let (link, _) = link.split_once('>')?;
+                let (_, href) = link.split_once("href=")?;
+                let quote = href.chars().next()?;
+                if quote != '"' && quote != '\'' {
+                    return None;
+                }
+                let href = href[1..].split(quote).next()?;
+                let (_, tag) = href.split_once("/releases/tag/")?;
+                if tag.is_empty() || tag.contains(['/', '?', '#']) {
+                    return None;
+                }
+                Some(tag.to_string())
+            })
+        })
+        .collect()
+}
+
+fn asset_is_missing(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
+    )
+}
+
+fn parse_sha256(body: &str) -> Option<String> {
+    body.split_whitespace()
+        .next()
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_string)
 }
 
 /// Lower-case hex encoding (avoids pulling in a hex crate; mirrors installer.rs).
@@ -315,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_latest_tag_from_atom() {
+    fn parses_candidate_tags_from_atom() {
         let atom = r#"
             <feed>
               <entry>
@@ -328,12 +403,228 @@ mod tests {
               </entry>
             </feed>
         "#;
-        assert_eq!(parse_first_release_tag(atom).as_deref(), Some("v0.2.0"));
+        assert_eq!(parse_release_tags(atom), ["v0.2.0", "v0.1.0"]);
     }
 
     #[test]
     fn no_tag_when_feed_empty() {
-        assert_eq!(parse_first_release_tag("<feed></feed>"), None);
+        assert!(parse_release_tags("<feed></feed>").is_empty());
+    }
+
+    #[test]
+    fn ignores_release_links_in_notes_and_outside_entries() {
+        let atom = r#"
+            <feed>
+              <link href="https://github.com/o/r/releases/tag/v9.0.0"/>
+              <entry>
+                <content>See https://github.com/o/r/releases/tag/v8.0.0</content>
+                <link href='https://github.com/o/r/releases/tag/v0.2.0-rc.1'/>
+              </entry>
+              <entry><link href="https://github.com/o/r/releases/tag/"/></entry>
+            </feed>
+        "#;
+        assert_eq!(parse_release_tags(atom), ["v0.2.0-rc.1"]);
+    }
+
+    const TEST_SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn feed(tags: &[&str]) -> String {
+        let entries: String = tags
+            .iter()
+            .map(|tag| {
+                format!(
+                    r#"<entry><link href="https://github.com/o/r/releases/tag/{tag}"/></entry>"#
+                )
+            })
+            .collect();
+        format!("<feed>{entries}</feed>")
+    }
+
+    fn checksum() -> String {
+        format!("{TEST_SHA256}  {ASSET_NAME}\n")
+    }
+
+    /// A local HTTP server with an exact request sequence, so checks cannot
+    /// accidentally download an exe or query GitHub's API.
+    async fn release_server(
+        replies: Vec<(&'static str, u16, String)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = socket.listen(8).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (expected, status, body) in replies {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let len = stream.read(&mut buf).await.unwrap();
+                        assert!(len > 0, "request ended before headers");
+                        request.extend_from_slice(&buf[..len]);
+                    }
+                    let request = String::from_utf8(request).unwrap();
+                    assert_eq!(request.lines().next().unwrap(), expected);
+                    let headers = format!(
+                        "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(headers.as_bytes()).await.unwrap();
+                    if !expected.starts_with("HEAD ") {
+                        stream.write_all(body.as_bytes()).await.unwrap();
+                    }
+                    stream.shutdown().await.unwrap();
+                })
+                .await
+                .expect("release check did not make the expected request");
+            }
+        });
+        (base, server)
+    }
+
+    async fn check_releases(
+        replies: Vec<(&'static str, u16, String)>,
+    ) -> Result<Option<ReadyRelease>> {
+        let (base, server) = release_server(replies).await;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let updater = GithubSelfUpdater::from_repo_url(client, "https://github.com/o/r", "v0.1.0");
+        let result = updater
+            .fetch_latest_release_from(&format!("{base}/feed"), &format!("{base}/downloads"))
+            .await;
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn offers_release_only_when_executable_and_checksum_are_ready() {
+        let release = check_releases(vec![
+            ("GET /feed HTTP/1.1", 200, feed(&["v0.2.0", "v0.1.0"])),
+            (
+                "GET /downloads/v0.2.0/zapret-ui.exe.sha256 HTTP/1.1",
+                200,
+                checksum(),
+            ),
+            (
+                "HEAD /downloads/v0.2.0/zapret-ui.exe HTTP/1.1",
+                200,
+                "exe".into(),
+            ),
+        ])
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(release.tag, "v0.2.0");
+        assert_eq!(release.sha256, TEST_SHA256);
+    }
+
+    #[tokio::test]
+    async fn skips_bare_tag_and_partial_release_for_older_ready_update() {
+        let release = check_releases(vec![
+            (
+                "GET /feed HTTP/1.1",
+                200,
+                feed(&["v0.4.0", "v0.3.0", "v0.2.0", "v0.1.0"]),
+            ),
+            (
+                "GET /downloads/v0.4.0/zapret-ui.exe.sha256 HTTP/1.1",
+                404,
+                String::new(),
+            ),
+            (
+                "GET /downloads/v0.3.0/zapret-ui.exe.sha256 HTTP/1.1",
+                200,
+                checksum(),
+            ),
+            (
+                "HEAD /downloads/v0.3.0/zapret-ui.exe HTTP/1.1",
+                410,
+                String::new(),
+            ),
+            (
+                "GET /downloads/v0.2.0/zapret-ui.exe.sha256 HTTP/1.1",
+                200,
+                checksum(),
+            ),
+            (
+                "HEAD /downloads/v0.2.0/zapret-ui.exe HTTP/1.1",
+                200,
+                "exe".into(),
+            ),
+        ])
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(release.tag, "v0.2.0");
+    }
+
+    #[tokio::test]
+    async fn no_update_for_empty_feed_or_only_current_and_unfinished_releases() {
+        for tags in [vec![], vec!["v0.1.0", "v0.0.9"]] {
+            assert!(
+                check_releases(vec![("GET /feed HTTP/1.1", 200, feed(&tags))])
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(check_releases(vec![
+            ("GET /feed HTTP/1.1", 200, feed(&["v0.2.0", "v0.1.0"])),
+            (
+                "GET /downloads/v0.2.0/zapret-ui.exe.sha256 HTTP/1.1",
+                410,
+                String::new(),
+            ),
+        ])
+        .await
+        .unwrap()
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_checks_are_errors_instead_of_no_update() {
+        for (status, body) in [(503, String::new()), (200, "<html>error</html>".into())] {
+            assert!(check_releases(vec![("GET /feed HTTP/1.1", status, body)])
+                .await
+                .is_err());
+        }
+        for (status, body) in [
+            (403, String::new()),
+            (503, String::new()),
+            (200, "invalid checksum".into()),
+        ] {
+            assert!(check_releases(vec![
+                ("GET /feed HTTP/1.1", 200, feed(&["v0.2.0"])),
+                (
+                    "GET /downloads/v0.2.0/zapret-ui.exe.sha256 HTTP/1.1",
+                    status,
+                    body,
+                ),
+            ])
+            .await
+            .is_err());
+        }
+        assert!(check_releases(vec![
+            ("GET /feed HTTP/1.1", 200, feed(&["v0.2.0"])),
+            (
+                "GET /downloads/v0.2.0/zapret-ui.exe.sha256 HTTP/1.1",
+                200,
+                checksum(),
+            ),
+            (
+                "HEAD /downloads/v0.2.0/zapret-ui.exe HTTP/1.1",
+                503,
+                String::new(),
+            ),
+        ])
+        .await
+        .is_err());
     }
 
     #[test]
