@@ -7,7 +7,7 @@ use aes::cipher::StreamCipher;
 use anyhow::{bail, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -25,6 +25,50 @@ use tokio_tungstenite::{
 };
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
+const MAX_WSS_ADDRESSES: usize = 16;
+
+// Keep resolver order, but bound parallel attempts and avoid retrying the
+// override IP (or the same DNS address twice) after it has already failed.
+fn alternate_ws_addresses(
+    addresses: impl IntoIterator<Item = SocketAddr>,
+    override_ip: IpAddr,
+) -> Vec<SocketAddr> {
+    let mut seen = BTreeSet::new();
+    addresses
+        .into_iter()
+        .filter(|address| address.ip() != override_ip && seen.insert(address.ip()))
+        .take(MAX_WSS_ADDRESSES)
+        .collect()
+}
+
+// Do not interpolate arbitrary upstream error text into logs: HTTP response
+// bodies and headers are untrusted, and proxy links/secrets must stay private.
+fn io_failure(error: &std::io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => format!("I/O {:?} (OS {code})", error.kind()),
+        None => format!("I/O {:?}", error.kind()),
+    }
+}
+
+fn ws_failure(error: &anyhow::Error) -> String {
+    use tokio_tungstenite::tungstenite::Error;
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            return io_failure(error);
+        }
+        if let Some(error) = cause.downcast_ref::<Error>() {
+            return match error {
+                Error::Io(error) => io_failure(error),
+                Error::Tls(_) => "TLS handshake failed".into(),
+                Error::Http(response) => format!("HTTP {}", response.status().as_u16()),
+                Error::Protocol(_) => "invalid WebSocket response".into(),
+                Error::ConnectionClosed | Error::AlreadyClosed => "connection closed".into(),
+                _ => "WebSocket connection failed".into(),
+            };
+        }
+    }
+    "WebSocket connection failed".into()
+}
 
 // Keep upstream sockets out of subsequently spawned winws/helper processes too.
 // TcpSocket uses non-inheritable Windows handles at creation, without a race
@@ -106,19 +150,34 @@ impl Routes {
         Ok(ws)
     }
 
-    async fn race_ws(&self, dc: i16, candidates: Vec<(String, SocketAddr)>) -> Option<Ws> {
+    async fn race_ws(
+        &self,
+        dc: i16,
+        domain: &str,
+        candidates: Vec<SocketAddr>,
+        failures: &mut Vec<String>,
+    ) -> Option<Ws> {
         let mut attempts = futures_util::stream::FuturesUnordered::new();
-        for (domain, address) in candidates {
+        let mut pending: BTreeSet<_> = candidates.iter().copied().collect();
+        for address in candidates {
             attempts.push(async move {
-                let result = self.connect_ws(&domain, address).await;
-                (domain, result)
+                let result = self.connect_ws(domain, address).await;
+                (address, result)
             });
         }
         match timeout(self.timeout, async {
-            while let Some((domain, result)) = attempts.next().await {
+            while let Some((address, result)) = attempts.next().await {
+                pending.remove(&address);
                 match result {
-                    Ok(ws) => return Some(ws),
-                    Err(e) => tracing::debug!("Telegram DC{dc}: {domain} WSS unavailable: {e}"),
+                    Ok(ws) => {
+                        tracing::debug!("Telegram DC{dc}: WSS {domain} connected via {address}");
+                        return Some(ws);
+                    }
+                    Err(error) => {
+                        let reason = ws_failure(&error);
+                        tracing::debug!("Telegram DC{dc}: WSS {domain} via {address}: {reason}");
+                        failures.push(format!("WSS {domain} via {address}: {reason}"));
+                    }
                 }
             }
             None
@@ -127,46 +186,40 @@ impl Routes {
         {
             Ok(result) => result,
             Err(_) => {
-                tracing::debug!("Telegram DC{dc}: WSS connection timed out");
+                for address in pending {
+                    failures.push(format!("WSS {domain} via {address}: timed out"));
+                }
+                tracing::debug!("Telegram DC{dc}: WSS {domain} connection timed out");
                 None
             }
         }
     }
 
-    fn wss_override(&self, dc: i16) -> Option<Ipv4Addr> {
+    fn wss_route(&self, dc: i16) -> Option<(String, SocketAddr)> {
         let id = dc.unsigned_abs();
-        (id != 203)
+        let ip = (id != 203)
             .then(|| self.overrides.get(&id).copied())
-            .flatten()
+            .flatten()?;
+        // The suffix selects a different Telegram backend role, not an
+        // interchangeable hostname. Never race media and regular sessions.
+        let suffix = if dc < 0 { "-1" } else { "" };
+        Some((
+            format!("kws{id}{suffix}.web.telegram.org"),
+            SocketAddr::new(IpAddr::V4(ip), 443),
+        ))
     }
 
     async fn connect(&self, dc: i16) -> Result<Upstream> {
         let id = dc.unsigned_abs();
+        let mut failures = Vec::new();
         // The official WebSocket relay for DC2 must not be used as a relay for
         // DC203. Other DCs need an explicit matching route; otherwise try their
         // own TCP endpoint immediately instead of stalling on WSS guesses.
-        if let Some(override_ip) = self.wss_override(dc) {
-            let names = if dc < 0 {
-                [
-                    format!("kws{id}-1.web.telegram.org"),
-                    format!("kws{id}.web.telegram.org"),
-                ]
-            } else {
-                [
-                    format!("kws{id}.web.telegram.org"),
-                    format!("kws{id}-1.web.telegram.org"),
-                ]
-            };
-            let candidates = names
-                .iter()
-                .map(|domain| {
-                    (
-                        domain.clone(),
-                        SocketAddr::new(IpAddr::V4(override_ip), 443),
-                    )
-                })
-                .collect();
-            if let Some(ws) = self.race_ws(dc, candidates).await {
+        if let Some((domain, address)) = self.wss_route(dc) {
+            if let Some(ws) = self
+                .race_ws(dc, &domain, vec![address], &mut failures)
+                .await
+            {
                 self.failure_logs.lock().await.remove(&dc);
                 tracing::debug!("Telegram DC{dc}: WSS connected");
                 return Ok(Upstream::WebSocket(Box::new(ws)));
@@ -174,49 +227,62 @@ impl Routes {
 
             // DNS may have moved to another Telegram IP. Do not retry the same
             // IP after it has already consumed the connection timeout.
-            let mut alternate = Vec::new();
-            let resolved = timeout(self.timeout, async {
-                tokio::join!(
-                    lookup_host((names[0].as_str(), 443)),
-                    lookup_host((names[1].as_str(), 443))
-                )
-            })
-            .await;
-            if let Ok((first, second)) = resolved {
-                for (domain, result) in names.iter().zip([first, second]) {
-                    let Ok(addresses) = result else { continue };
-                    if let Some(address) = addresses
-                        .into_iter()
-                        .find(|a| a.ip() != IpAddr::V4(override_ip))
-                    {
-                        alternate.push((domain.clone(), address));
+            let resolved = timeout(self.timeout, lookup_host((domain.as_str(), 443))).await;
+            let alternate = match resolved {
+                Ok(Ok(addresses)) => {
+                    let addresses = alternate_ws_addresses(addresses, address.ip());
+                    if addresses.is_empty() {
+                        failures.push(format!("DNS {domain}: no alternate addresses"));
                     }
+                    addresses
                 }
-            }
+                Ok(Err(error)) => {
+                    failures.push(format!("DNS {domain}: {}", io_failure(&error)));
+                    Vec::new()
+                }
+                Err(_) => {
+                    failures.push(format!("DNS {domain}: timed out"));
+                    Vec::new()
+                }
+            };
             if !alternate.is_empty() {
-                if let Some(ws) = self.race_ws(dc, alternate).await {
+                if let Some(ws) = self.race_ws(dc, &domain, alternate, &mut failures).await {
                     self.failure_logs.lock().await.remove(&dc);
                     tracing::debug!("Telegram DC{dc}: WSS connected via DNS");
                     return Ok(Upstream::WebSocket(Box::new(ws)));
                 }
             }
+        } else {
+            failures.push("WSS not configured for this DC".into());
         }
         if self.fallback {
             if let Some(ip) = dc_ip(id) {
-                if let Ok(Ok(socket)) = timeout(self.timeout, connect_tcp((ip, 443))).await {
-                    socket.set_nodelay(true)?;
-                    self.failure_logs.lock().await.remove(&dc);
-                    tracing::debug!("Telegram DC{dc}: using TCP fallback");
-                    return Ok(Upstream::Tcp(socket));
+                let address = SocketAddr::new(IpAddr::V4(ip), 443);
+                match timeout(self.timeout, connect_tcp(address)).await {
+                    Ok(Ok(socket)) => {
+                        socket.set_nodelay(true)?;
+                        self.failure_logs.lock().await.remove(&dc);
+                        tracing::debug!("Telegram DC{dc}: using TCP fallback");
+                        return Ok(Upstream::Tcp(socket));
+                    }
+                    Ok(Err(error)) => {
+                        failures.push(format!("TCP {address}: {}", io_failure(&error)));
+                    }
+                    Err(_) => failures.push(format!("TCP {address}: timed out")),
                 }
+            } else {
+                failures.push("TCP endpoint not configured for this DC".into());
             }
+        } else {
+            failures.push("TCP fallback disabled".into());
         }
         let mut logs = self.failure_logs.lock().await;
         if logs
             .get(&dc)
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(30))
         {
-            tracing::warn!("Telegram DC{dc}: no reachable upstream");
+            let reasons = failures.join("; ");
+            tracing::warn!("Telegram DC{dc}: no reachable upstream; {reasons}");
             logs.insert(dc, Instant::now());
         }
         Err(UpstreamUnavailable.into())

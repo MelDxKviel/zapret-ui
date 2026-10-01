@@ -261,6 +261,28 @@ fn settings_normalize_validate_and_never_print_secret() {
 #[tokio::test]
 #[ignore = "requires a reachable Telegram WebSocket endpoint"]
 async fn live_telegram_wss_mtproto_roundtrip() {
+    live_telegram_roundtrip(2).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a reachable Telegram media WebSocket endpoint"]
+async fn live_telegram_wss_media_mtproto_roundtrip() {
+    live_telegram_roundtrip(-2).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a reachable Telegram DC4 WebSocket endpoint"]
+async fn live_telegram_wss_dc4_mtproto_roundtrip() {
+    live_telegram_roundtrip(4).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a reachable Telegram DC4 media WebSocket endpoint"]
+async fn live_telegram_wss_dc4_media_mtproto_roundtrip() {
+    live_telegram_roundtrip(-4).await;
+}
+
+async fn live_telegram_roundtrip(dc: i16) {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .with_test_writer()
@@ -292,7 +314,7 @@ async fn live_telegram_wss_mtproto_roundtrip() {
         let mut init = [0; 64];
         getrandom::fill(&mut init).unwrap();
         init[56..60].fill(0xdd);
-        init[60..62].copy_from_slice(&2i16.to_le_bytes());
+        init[60..62].copy_from_slice(&dc.to_le_bytes());
         let key = Sha256::digest([&init[8..40], &secret].concat());
         let mut encrypt = protocol::Cipher::new_from_slices(&key, &init[40..56]).unwrap();
         let mut reverse = init[8..56].to_vec();
@@ -325,7 +347,7 @@ async fn live_telegram_wss_mtproto_roundtrip() {
                 .await
                 .unwrap()
                 .unwrap();
-        assert!(response.len() >= 44, "short MTProto response");
+        assert!(response.len() >= 44, "DC{dc}: short MTProto response");
         assert_eq!(&response[4..12], &[0; 8]);
         assert_eq!(&response[24..28], &0x05162463u32.to_le_bytes()); // resPQ
         assert_eq!(&response[28..44], &nonce);

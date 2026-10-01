@@ -17,22 +17,74 @@ fn cipher(seed: u8) -> Cipher {
 }
 
 #[test]
-fn websocket_route_never_substitutes_another_dc() {
+fn websocket_routes_keep_regular_and_media_backends_distinct() {
     let routes = Routes::new(&TelegramProxySettings {
         dc_overrides: "2:149.154.167.220 4:149.154.167.220 203:91.105.192.100".into(),
         ..Default::default()
     })
     .unwrap();
+    for (dc, domain) in [
+        (2, "kws2.web.telegram.org"),
+        (-2, "kws2-1.web.telegram.org"),
+        (4, "kws4.web.telegram.org"),
+        (-4, "kws4-1.web.telegram.org"),
+    ] {
+        assert_eq!(
+            routes.wss_route(dc),
+            Some((domain.into(), "149.154.167.220:443".parse().unwrap()))
+        );
+    }
+    for dc in [1, -1, 3, -3, 5, -5, 203, -203] {
+        assert_eq!(routes.wss_route(dc), None, "DC{dc}");
+    }
+}
+
+#[test]
+fn websocket_dns_candidates_include_distinct_ipv4_and_ipv6_addresses() {
+    let addresses = [
+        "149.154.167.220:443",
+        "149.154.167.99:443",
+        "149.154.167.99:443",
+        "[2001:67c:4e8:f002::a]:443",
+        "149.154.167.100:443",
+        "[2001:67c:4e8:f002::a]:443",
+    ]
+    .map(|address| address.parse().unwrap());
     assert_eq!(
-        routes.wss_override(2),
-        Some(Ipv4Addr::new(149, 154, 167, 220))
+        alternate_ws_addresses(addresses, "149.154.167.220".parse().unwrap()),
+        [addresses[1], addresses[3], addresses[4]]
     );
+
+    let many = (1..=100).map(|last| SocketAddr::from(([10, 0, 0, last], 443)));
+    let bounded = alternate_ws_addresses(many, "149.154.167.220".parse().unwrap());
+    assert_eq!(bounded.len(), MAX_WSS_ADDRESSES);
+    assert_eq!(bounded[0], SocketAddr::from(([10, 0, 0, 1], 443)));
+    assert_eq!(bounded[15], SocketAddr::from(([10, 0, 0, 16], 443)));
+}
+
+#[test]
+fn connection_diagnostics_report_safe_categories_without_upstream_text() {
+    let io = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "private secret and proxy link must not be logged",
+    );
+    assert_eq!(io_failure(&io), "I/O PermissionDenied");
     assert_eq!(
-        routes.wss_override(-4),
-        Some(Ipv4Addr::new(149, 154, 167, 220))
+        ws_failure(&tokio_tungstenite::tungstenite::Error::Io(io).into()),
+        "I/O PermissionDenied"
     );
-    assert_eq!(routes.wss_override(1), None);
-    assert_eq!(routes.wss_override(203), None);
+    let refused = std::io::Error::from_raw_os_error(10061);
+    assert!(io_failure(&refused).contains("OS 10061"));
+
+    let response = tokio_tungstenite::tungstenite::http::Response::builder()
+        .status(403)
+        .header("private", "secret")
+        .body(Some(b"private upstream response".to_vec()))
+        .unwrap();
+    assert_eq!(
+        ws_failure(&tokio_tungstenite::tungstenite::Error::Http(Box::new(response)).into()),
+        "HTTP 403"
+    );
 }
 
 #[cfg(windows)]
