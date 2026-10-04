@@ -36,7 +36,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 В обычном терминале Apple Silicon, без Rosetta:
 
 ```sh
-git clone --branch codex/macos-release-ready https://github.com/MelDxKviel/zapret-ui.git
+git clone https://github.com/MelDxKviel/zapret-ui.git
 cd zapret-ui
 cargo test --locked
 sh scripts/build-macos.sh

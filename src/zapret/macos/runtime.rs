@@ -114,9 +114,11 @@ pub async fn engine_process() -> Option<(u32, u64)> {
 }
 
 fn engine_child(supervisor: u32, executable: &Path) -> Option<(u32, u64)> {
-    use std::ffi::c_void;
+    use std::ffi::{c_void, OsStr};
+    use std::os::unix::ffi::OsStrExt;
     unsafe extern "C" {
         fn proc_listpids(kind: u32, typeinfo: u32, buffer: *mut c_void, size: i32) -> i32;
+        fn proc_pidpath(pid: i32, buffer: *mut c_void, size: u32) -> i32;
     }
     // PROC_PPID_ONLY (libproc.h/sys/proc_info.h) asks the kernel for children of
     // this launchd supervisor. Avoid reading paths, CPU, memory and disk usage
@@ -129,25 +131,73 @@ fn engine_child(supervisor: u32, executable: &Path) -> Option<(u32, u64)> {
     if bytes <= 0 || bytes as usize > capacity {
         return None;
     }
-    let pids = children[..bytes as usize / std::mem::size_of::<i32>()]
+    children[..bytes as usize / std::mem::size_of::<i32>()]
         .iter()
         .filter(|pid| **pid > 0)
-        .map(|pid| sysinfo::Pid::from_u32(*pid as u32))
-        .collect::<Vec<_>>();
-    if pids.is_empty() {
+        .find_map(|&pid| {
+            // PROC_PIDPATHINFO_MAXSIZE is 4 * MAXPATHLEN on macOS. Unlike
+            // PROC_PIDTBSDINFO (used by sysinfo for parent/start time), this
+            // query works after utunws drops its root UID to 2147483647.
+            let mut path = [0u8; 4096];
+            // SAFETY: the initialized buffer has exactly the supplied capacity.
+            let length = unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+            if length <= 0 || length as usize >= path.len() {
+                return None;
+            }
+            let path = std::ffi::CStr::from_bytes_until_nul(&path).ok()?;
+            if Path::new(OsStr::from_bytes(path.to_bytes())) != executable {
+                return None;
+            }
+            // ps uses KERN_PROC_PID, whose parent/start-time metadata remains
+            // available across UIDs. Ask only about the matching child, never
+            // enumerate all processes. Rechecking PPID also rejects PID reuse.
+            let (parent, uptime) = process_parent_and_uptime(pid as u32)?;
+            (parent == supervisor).then_some((pid as u32, uptime))
+        })
+}
+
+fn process_parent_and_uptime(pid: u32) -> Option<(u32, u64)> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "ppid=,etime="])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()?;
+    if !output.status.success() {
         return None;
     }
-    let mut sys = sysinfo::System::new();
-    sys.refresh_processes_specifics(
-        sysinfo::ProcessesToUpdate::Some(&pids),
-        true,
-        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
-    );
-    sys.processes().iter().find_map(|(pid, p)| {
-        // Recheck the parent after lookup to reject a reused PID.
-        (p.parent().map(|p| p.as_u32()) == Some(supervisor) && p.exe() == Some(executable))
-            .then(|| (pid.as_u32(), p.run_time()))
-    })
+    let text = std::str::from_utf8(&output.stdout).ok()?;
+    let mut fields = text.split_whitespace();
+    let parent = fields.next()?.parse().ok()?;
+    let uptime = parse_elapsed(fields.next()?)?;
+    fields.next().is_none().then_some((parent, uptime))
+}
+
+/// BSD ps etime is [[days-]hours:]minutes:seconds, independent of wall-clock
+/// formatting, so it also survives GUI restarts and locale changes.
+fn parse_elapsed(value: &str) -> Option<u64> {
+    let (days, clock) = match value.split_once('-') {
+        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+        None => (0, value),
+    };
+    let parts = clock
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    let (hours, minutes, seconds) = match parts.as_slice() {
+        [minutes, seconds] if days == 0 => (0, *minutes, *seconds),
+        [hours, minutes, seconds] => (*hours, *minutes, *seconds),
+        _ => return None,
+    };
+    if hours >= 24 || minutes >= 60 || seconds >= 60 {
+        return None;
+    }
+    days.checked_mul(24)?
+        .checked_add(hours)?
+        .checked_mul(60)?
+        .checked_add(minutes)?
+        .checked_mul(60)?
+        .checked_add(seconds)
 }
 
 async fn await_engine() -> Result<u32> {
@@ -301,6 +351,42 @@ impl Runner for ProcessRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_bsd_elapsed_time_and_rejects_invalid_values() {
+        for (input, expected) in [
+            ("00:00", 0),
+            ("59:59", 3599),
+            ("01:00:00", 3600),
+            ("23:59:59", 86399),
+            ("1-00:00:00", 86400),
+            ("365-23:59:59", 31_622_399),
+        ] {
+            assert_eq!(parse_elapsed(input), Some(expected), "{input}");
+        }
+        for invalid in [
+            "",
+            "5",
+            "abc",
+            "00:60",
+            "60:00",
+            "24:00:00",
+            "1-00:00",
+            "1-2-00:00:00",
+            "18446744073709551615-00:00:00",
+        ] {
+            assert_eq!(parse_elapsed(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn reads_root_process_parent_and_uptime_without_privileges() {
+        // launchd is always PID 1 and owned by root. PROC_PIDTBSDINFO can be
+        // denied to our login user even though ps can read these public fields.
+        let (parent, uptime) = process_parent_and_uptime(1).expect("launchd metadata");
+        assert_eq!(parent, 0);
+        assert!(uptime > 0);
+    }
 
     #[test]
     fn detects_only_matching_child_without_network_or_privileges() {

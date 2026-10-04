@@ -39,7 +39,10 @@ export component LogsPage inherits Rectangle {
             // page-head
             HorizontalLayout {
                 padding-bottom: 20px;
+                spacing: 16px;
                 VerticalLayout {
+                    horizontal-stretch: 1;
+                    min-width: 0px;
                     spacing: 2px;
                     alignment: end;
                     Text {
@@ -54,10 +57,12 @@ export component LogsPage inherits Rectangle {
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-13;
                         color: ThemePalette.text-3;
+                        min-width: 0px;
+                        wrap: word-wrap;
                     }
                 }
-                Rectangle { }
                 VerticalLayout {
+                    horizontal-stretch: 0;
                     alignment: end;
                     HorizontalLayout {
                         spacing: 8px;
