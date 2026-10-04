@@ -1,6 +1,37 @@
 //! Native macOS desktop integration (the module name is kept for existing callers).
 use std::{io::Write, path::Path, process::Command};
 
+fn native_theme(theme: &str) -> Option<slint::winit_030::winit::window::Theme> {
+    use slint::winit_030::winit::window::Theme;
+    match theme {
+        "dark" => Some(Theme::Dark),
+        "light" => Some(Theme::Light),
+        _ => None,
+    }
+}
+
+/// Configure native decorations before Slint creates any windows. Slint's
+/// transparent default leaves the macOS title bar without an opaque background.
+pub fn init_window_backend(theme: &str) -> Result<(), slint::PlatformError> {
+    let theme = native_theme(theme);
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .with_winit_window_attributes_hook(move |attributes| {
+            attributes.with_transparent(false).with_theme(theme)
+        })
+        .select()
+}
+
+/// Keep the native title bar in sync with the app's selected appearance.
+/// Must run on the UI thread; this needs no timer or extra rendering loop.
+pub fn apply_window_theme(window: &slint::Window, theme: &str) {
+    use slint::winit_030::WinitWindowAccessor;
+    window.with_winit_window(|native| {
+        native.set_transparent(false);
+        native.set_theme(native_theme(theme));
+    });
+}
+
 /// Bring an already shown Slint window to the foreground, including a window
 /// restored from the menu bar or a second app launch. Must run on the UI thread.
 pub fn focus_window(window: &slint::Window) {

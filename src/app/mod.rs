@@ -101,7 +101,10 @@ fn show_main_window(ui: &MainWindow, cmd_tx: &mpsc::Sender<BackendCmd>) {
     #[cfg(windows)]
     crate::winicon::restore_and_focus_window("zapret-ui");
     #[cfg(target_os = "macos")]
-    crate::winenv::focus_window(ui.window());
+    {
+        crate::winenv::apply_window_theme(ui.window(), &ui.get_theme());
+        crate::winenv::focus_window(ui.window());
+    }
     let _ = cmd_tx.try_send(BackendCmd::RefreshStatus);
 }
 
@@ -374,6 +377,14 @@ impl App {
         &mut self,
         _guard: tracing_appender::non_blocking::WorkerGuard,
     ) -> anyhow::Result<()> {
+        #[cfg(target_os = "macos")]
+        crate::winenv::init_window_backend(
+            self.config
+                .try_read()
+                .map(|c| c.theme)
+                .unwrap_or_default()
+                .slug(),
+        )?;
         let ui = MainWindow::new()?;
         let preferences = preferences::Controller::new(self.config.clone());
         let telegram = telegram::bind(
@@ -815,7 +826,13 @@ impl App {
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
+            #[cfg(target_os = "macos")]
+            let ui_weak = ui.as_weak();
             ui.on_set_theme(move |theme| {
+                #[cfg(target_os = "macos")]
+                if let Some(ui) = ui_weak.upgrade() {
+                    crate::winenv::apply_window_theme(ui.window(), &theme);
+                }
                 let _ = cmd_tx_c.try_send(BackendCmd::SetTheme(theme.to_string()));
             });
         }

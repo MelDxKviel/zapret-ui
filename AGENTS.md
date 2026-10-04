@@ -216,6 +216,9 @@ Slint compiled by `build.rs` (`slint_build::compile("ui/main_window.slint")`);
 Keep `std-widgets` `Palette.color-scheme` synchronized with `ThemePalette`.
 The native TextEdit used for logs/hosts otherwise retains the OS theme and
 can render unreadable text when the app theme differs.
+On macOS, initialize the winit backend with `with_transparent(false)` before
+creating windows and synchronize the native window theme through `winenv`.
+Slint's transparent default can leave the system title bar empty/transparent.
 
 **Callback and property names in `main_window.slint` are a hand-maintained
 contract with both `src/app/mod.rs` and `examples/ui_only.rs`.** Add/rename a

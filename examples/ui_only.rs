@@ -137,6 +137,10 @@ fn main() -> anyhow::Result<()> {
     // Simple console logging for the example
     tracing_subscriber::fmt::init();
 
+    #[cfg(target_os = "macos")]
+    zapret_ui::winenv::init_window_backend(
+        &std::env::var("ZAPRET_UI_PREVIEW_THEME").unwrap_or_else(|_| "system".into()),
+    )?;
     let ui = MainWindow::new()?;
     ui.set_window_visible(true);
     ui.global::<I18n>().set_macos(cfg!(target_os = "macos"));
@@ -584,12 +588,23 @@ fn main() -> anyhow::Result<()> {
     ui.set_minimize_to_tray(true);
     ui.set_autoengage(false);
     ui.set_theme("system".into());
+    ui.set_system_is_dark(zapret_ui::winenv::system_is_dark());
     ui.on_set_notifications(|on| println!("UI: Set notifications: {}", on));
     ui.on_set_autostart(|on| println!("UI: Set autostart: {}", on));
     ui.on_set_autoupdate_check(|on| println!("UI: Set autoupdate check: {}", on));
     ui.on_set_minimize_to_tray(|on| println!("UI: Set minimize to tray: {}", on));
     ui.on_set_autoengage(|on| println!("UI: Set autoengage: {}", on));
-    ui.on_set_theme(|theme| println!("UI: Set theme: {}", theme));
+    {
+        #[cfg(target_os = "macos")]
+        let ui_weak = ui.as_weak();
+        ui.on_set_theme(move |theme| {
+            #[cfg(target_os = "macos")]
+            if let Some(ui) = ui_weak.upgrade() {
+                zapret_ui::winenv::apply_window_theme(ui.window(), &theme);
+            }
+            println!("UI: Set theme: {}", theme);
+        });
+    }
 
     // Admin gating preview. Elevated by default so the simple-mode dial shows
     // its happy path (off → connecting → active); flip to `false` to preview the
