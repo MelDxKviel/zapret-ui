@@ -29,26 +29,22 @@ pub async fn ensure_tcp_timestamps_enabled() -> anyhow::Result<()> {
 #[cfg(windows)]
 async fn enable_tcp_timestamps() -> anyhow::Result<()> {
     use anyhow::Context;
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
-    use std::path::PathBuf;
+    let netsh = crate::zapret::paths::system_executable("netsh.exe")?;
 
-    extern "system" {
-        fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    // `dump` emits stable command tokens even on localized Windows. Query first:
+    // an unelevated development build can use an already-enabled setting without
+    // attempting a privileged SET.
+    let mut query = tokio::process::Command::new(&netsh);
+    query.args(["interface", "tcp", "dump"]);
+    query.creation_flags(0x08000000);
+    if let Ok(output) = query.output().await {
+        if output.status.success()
+            && timestamps_enabled_from_dump(&String::from_utf8_lossy(&output.stdout))
+        {
+            tracing::info!("TCP timestamps are already enabled");
+            return Ok(());
+        }
     }
-
-    // Resolve System32 through the Win32 API instead of PATH or environment
-    // variables: the release binary is elevated, so executable search-order
-    // hijacking here would otherwise become a privilege-escalation vector.
-    let mut buffer = vec![0u16; 32_768];
-    let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
-    if len == 0 || len >= buffer.len() {
-        return Err(anyhow::anyhow!(
-            "Failed to resolve the Windows system directory: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let netsh = PathBuf::from(OsString::from_wide(&buffer[..len])).join("netsh.exe");
 
     let mut command = tokio::process::Command::new(&netsh);
     command.args(["interface", "tcp", "set", "global", "timestamps=enabled"]);
@@ -77,7 +73,41 @@ async fn enable_tcp_timestamps() -> anyhow::Result<()> {
     ))
 }
 
+#[cfg(any(windows, test))]
+fn timestamps_enabled_from_dump(dump: &str) -> bool {
+    dump.lines().any(|line| {
+        let mut tokens = line.split_whitespace();
+        matches!(tokens.next(), Some(token) if token.eq_ignore_ascii_case("set"))
+            && matches!(tokens.next(), Some(token) if token.eq_ignore_ascii_case("global"))
+            && tokens.any(|token| token.eq_ignore_ascii_case("timestamps=enabled"))
+    })
+}
+
 #[cfg(not(windows))]
 async fn enable_tcp_timestamps() -> anyhow::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_query_only_accepts_enabled_global_setting() {
+        assert!(timestamps_enabled_from_dump(
+            "# TCP configuration\r\nset global rss=enabled timestamps=enabled initialrto=1000\r\n"
+        ));
+        assert!(timestamps_enabled_from_dump(
+            "SET GLOBAL TIMESTAMPS=ENABLED"
+        ));
+        assert!(!timestamps_enabled_from_dump(
+            "set global timestamps=disabled"
+        ));
+        assert!(!timestamps_enabled_from_dump(
+            "# set global timestamps=enabled"
+        ));
+        assert!(!timestamps_enabled_from_dump(
+            "set supplemental timestamps=enabled"
+        ));
+    }
 }

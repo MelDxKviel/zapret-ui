@@ -15,6 +15,7 @@ pub mod selfupdate;
 #[cfg_attr(target_os = "macos", path = "platform/macos/single_instance.rs")]
 pub mod single_instance;
 pub mod state;
+pub mod telegram;
 pub mod tray;
 #[cfg_attr(target_os = "macos", path = "platform/macos/winenv.rs")]
 pub mod winenv;
@@ -69,7 +70,7 @@ async fn run_elevated_task(
     strategy_id: Option<String>,
     install_dir: std::path::PathBuf,
 ) -> anyhow::Result<()> {
-    use ports::ServiceCtl;
+    use ports::{Maintenance, ServiceCtl};
 
     match task {
         "service-install" => {
@@ -92,6 +93,14 @@ async fn run_elevated_task(
             let service_ctl = zapret::service::WindowsServiceCtl::new(install_dir);
             service_ctl.stop().await?;
         }
+        "hosts-update" => {
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .read_timeout(std::time::Duration::from_secs(30))
+                .build()?;
+            let maintenance = zapret::maintenance::ZapretMaintenance::new(install_dir, client);
+            maintenance.update_hosts_file().await?;
+        }
         _ => return Err(anyhow::anyhow!("Unknown elevated task: {}", task)),
     }
     Ok(())
@@ -100,7 +109,8 @@ async fn run_elevated_task(
 #[cfg(windows)]
 fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let out = std::process::Command::new("icacls")
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new(zapret::paths::system_executable("icacls.exe")?)
         .arg(dir)
         .args([
             "/inheritance:r",
@@ -114,6 +124,7 @@ fn lock_elevation_result_dir(dir: &std::path::Path) -> anyhow::Result<()> {
             "/C",
             "/Q",
         ])
+        .creation_flags(0x0800_0000)
         .output()?;
     if out.status.success() {
         Ok(())
@@ -255,22 +266,11 @@ async fn main() -> anyhow::Result<()> {
     let (event_tx, _event_rx) = broadcast::channel::<UiEvent>(256);
 
     // Initialize logging (broadcast to event_tx)
-    let (log_tx, mut log_rx) = broadcast::channel::<String>(256);
+    let (log_tx, log_rx) = broadcast::channel::<String>(256);
     let guard = log::init_logging(log_tx)?;
 
     // Forward log lines from log_rx to event_tx
-    let event_tx_c = event_tx.clone();
-    tokio::spawn(async move {
-        loop {
-            match log_rx.recv().await {
-                Ok(line) => {
-                    let _ = event_tx_c.send(UiEvent::LogLine(line));
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
+    tokio::spawn(log::forward_logs(log_rx, event_tx.clone()));
 
     // Load config and state
     let config = config::AppConfig::load();
@@ -320,6 +320,7 @@ async fn main() -> anyhow::Result<()> {
         tester,
         maintenance,
         self_updater,
+        Arc::new(telegram::LocalTelegramProxy::default()),
         config,
         state,
         event_tx,

@@ -1,9 +1,8 @@
 //! In-app port of the `service.bat` SETTINGS / UPDATES menu items.
 //!
 //! Covers the game filter, the ipset filter, "Update IPSet List" and "Update
-//! Hosts File". Every operation touches files under the install dir (or, for the
-//! hosts check, only *reads* the system hosts file), so none of them require
-//! elevation — unlike the SCM service operations.
+//! Hosts File". The Windows hosts update needs elevation; other operations
+//! remain confined to the user-writable install dir.
 
 use anyhow::{Context, Result};
 use reqwest::header::USER_AGENT;
@@ -15,6 +14,8 @@ use crate::contracts::{
 use crate::ports::Maintenance;
 #[cfg(not(target_os = "macos"))]
 use crate::zapret::batparse;
+#[cfg(windows)]
+use crate::zapret::hosts;
 
 /// The Discord cache subfolders `service.bat` deletes under `%appdata%\discord`.
 const DISCORD_CACHE_DIRS: [&str; 3] = ["Cache", "Code Cache", "GPUCache"];
@@ -119,9 +120,11 @@ impl Maintenance for ZapretMaintenance {
         }
         match mode {
             // No flag file == disabled (matches service.bat).
-            GameFilterMode::Disabled => {
-                let _ = std::fs::remove_file(&flag);
-            }
+            GameFilterMode::Disabled => match std::fs::remove_file(&flag) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).context("removing game_filter.enabled"),
+            },
             other => {
                 std::fs::write(&flag, format!("{}\n", other.slug()))
                     .context("writing game_filter.enabled")?;
@@ -215,16 +218,11 @@ impl Maintenance for ZapretMaintenance {
     }
 
     async fn update_hosts_file(&self) -> Result<HostsCheck> {
-        #[cfg(not(target_os = "macos"))]
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
-        #[cfg(not(target_os = "macos"))]
-        let hosts_dir = PathBuf::from(system_root)
-            .join("System32")
-            .join("drivers")
-            .join("etc");
-        #[cfg(target_os = "macos")]
-        let hosts_dir = PathBuf::from("/etc");
-        let hosts_path = hosts_dir.join("hosts");
+        #[cfg(windows)]
+        let hosts_path = hosts::system_hosts_path()?;
+        #[cfg(not(windows))]
+        let hosts_path = PathBuf::from("/etc/hosts");
+        let hosts_dir = hosts_path.parent().context("hosts path has no parent")?;
 
         tracing::info!("Checking hosts file against {}", HOSTS_URL);
         let resp = self
@@ -238,28 +236,26 @@ impl Maintenance for ZapretMaintenance {
             anyhow::bail!("hosts download returned HTTP {}", resp.status());
         }
         let repo = resp.text().await.context("reading hosts response")?;
-        let repo_lines: Vec<&str> = repo
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
-        let (first, last) = match (repo_lines.first(), repo_lines.last()) {
-            (Some(f), Some(l)) => (*f, *l),
-            _ => anyhow::bail!("the downloaded hosts file was empty"),
-        };
-
-        let system = std::fs::read_to_string(&hosts_path).unwrap_or_default();
-        let up_to_date = system.contains(first) && system.contains(last);
+        #[cfg(windows)]
+        let updated = hosts::update_system_hosts(&hosts_path, &repo)?;
+        #[cfg(not(windows))]
+        let updated = false;
+        #[cfg(windows)]
+        let up_to_date = !updated;
+        #[cfg(not(windows))]
+        let up_to_date = hosts_entries_present(
+            &std::fs::read_to_string(&hosts_path).context("reading system hosts file")?,
+            &repo,
+        )?;
         if up_to_date {
             tracing::info!("Hosts file is up to date");
         } else {
-            tracing::warn!("Hosts file is out of date — review window available");
+            tracing::info!("Hosts file needed an update");
         }
 
-        // Writing the system hosts file needs admin, so we hand the content back
-        // to the UI for an in-app review/copy window instead of editing it here.
         Ok(HostsCheck {
             up_to_date,
+            updated,
             content: repo,
             hosts_path: hosts_path.display().to_string(),
             hosts_dir: hosts_dir.display().to_string(),
@@ -325,13 +321,36 @@ impl Maintenance for ZapretMaintenance {
     }
 }
 
+/// macOS keeps system hosts edits explicit in the review dialog. Compare all
+/// supplied entries instead of only the first and last lines.
+#[cfg(not(windows))]
+fn hosts_entries_present(system: &str, proposed: &str) -> Result<bool> {
+    fn entries(text: &str) -> std::collections::HashSet<String> {
+        text.lines()
+            .map(|line| line.split('#').next().unwrap_or_default())
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+    let required = entries(proposed);
+    anyhow::ensure!(!required.is_empty(), "the downloaded hosts file was empty");
+    Ok(required.is_subset(&entries(system)))
+}
+
 /// Force-close every `Discord.exe`, returning whether any process was running.
 /// Uses `taskkill` (like `service.bat`) with the no-window flag so no console
 /// flashes; the exit code distinguishes "killed" (0) from "not found" (128).
 #[cfg(not(target_os = "macos"))]
 fn kill_discord() -> bool {
     use std::process::Command;
-    let mut cmd = Command::new("taskkill");
+    let taskkill = match crate::zapret::paths::system_executable("taskkill.exe") {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!("Could not resolve taskkill.exe: {e:#}");
+            return false;
+        }
+    };
+    let mut cmd = Command::new(taskkill);
     cmd.args(["/IM", "Discord.exe", "/F"]);
     #[cfg(windows)]
     {
@@ -400,5 +419,24 @@ mod tests {
         // Disabling removes the flag file (back to the default).
         m.set_game_filter(GameFilterMode::Disabled).await.unwrap();
         assert_eq!(m.status().await.game_filter, GameFilterMode::Disabled);
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod hosts_review_tests {
+    use super::hosts_entries_present;
+
+    #[test]
+    fn review_checks_every_entry_and_ignores_comments_and_spacing() {
+        let proposed = "# Upstream\n127.0.0.1 first.example\n127.0.0.2 middle.example\n127.0.0.3 last.example\n";
+        assert!(!hosts_entries_present(
+            "127.0.0.1 first.example\n127.0.0.3 last.example\n",
+            proposed
+        )
+        .unwrap());
+        assert!(hosts_entries_present(
+            "127.0.0.1\tfirst.example # custom comment\n127.0.0.2 middle.example\n127.0.0.3 last.example\n", proposed
+        ).unwrap());
+        assert!(hosts_entries_present("", "# no entries\n").is_err());
     }
 }

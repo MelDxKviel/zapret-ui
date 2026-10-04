@@ -1,43 +1,44 @@
 import { ThemePalette, AppStatus, StrategyItem } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { PowerDial } from "../components/power_dial.slint";
+import { ScrollView } from "std-widgets.slint";
 
-// One live-detail chip (strategy / time / core) shown only while active.
+// Stable, bounded live details: long strategy names never push the time or
+// core version outside the card.
 component Chip inherits Rectangle {
     in property <string> k;
     in property <string> v;
     in property <bool> dot: false;
-    horizontal-stretch: 0;
-    height: 32px;
-    width: clay.preferred-width;
-    border-radius: ThemePalette.r-full;
-    background: ThemePalette.surface;
-    border-width: 1px;
-    border-color: ThemePalette.border;
-    clay := HorizontalLayout {
-        padding-left: 13px;
-        padding-right: 13px;
-        spacing: 8px;
+    horizontal-stretch: 1;
+    height: 60px;
+    background: transparent;
+    VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 5px;
         alignment: center;
-        if root.dot : VerticalLayout {
-            alignment: center;
-            Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: ThemePalette.accent; }
-        }
-        Text {
-            text: root.k;
-            vertical-alignment: center;
-            font-family: ThemePalette.font-mono;
-            font-size: ThemePalette.fs-10;
-            color: ThemePalette.text-4;
-            letter-spacing: 0.6px;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 6px;
+            if root.dot : VerticalLayout {
+                alignment: center;
+                Rectangle { width: 6px; height: 6px; border-radius: 3px; background: ThemePalette.accent-text; }
+            }
+            Text {
+                text: root.k;
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-10;
+                color: ThemePalette.text-3;
+                letter-spacing: 0.5px;
+            }
         }
         Text {
             text: root.v;
-            vertical-alignment: center;
-            font-family: ThemePalette.font-sans;
+            font-family: ThemePalette.font-mono;
             font-size: ThemePalette.fs-12;
-            font-weight: 600;
+            font-weight: 500;
             color: ThemePalette.text;
+            overflow: elide;
         }
     }
 }
@@ -50,10 +51,10 @@ component LinkBtn inherits Rectangle {
     in property <color> tint: ThemePalette.text-3;
     callback clicked();
     horizontal-stretch: 0;
-    height: 28px;
+    height: 32px;
     width: l.preferred-width;
     border-radius: ThemePalette.r-6;
-    background: ta.has-hover ? ThemePalette.surface : transparent;
+    background: ta.has-hover && root.enabled ? ThemePalette.surface-hover : transparent;
     animate background { duration: 120ms; }
     l := HorizontalLayout {
         padding-left: 8px;
@@ -63,7 +64,7 @@ component LinkBtn inherits Rectangle {
             vertical-alignment: center;
             horizontal-alignment: center;
             font-family: ThemePalette.font-sans;
-            font-size: ThemePalette.fs-12;
+            font-size: ThemePalette.fs-13;
             color: (ta.has-hover && root.enabled) ? ThemePalette.text : root.tint;
             animate color { duration: 120ms; }
         }
@@ -171,107 +172,140 @@ export component SimpleModePage inherits Rectangle {
         : root.update_checked ? I18n.t(I18n.lang, "simple.upd_none")
         : I18n.t(I18n.lang, "simple.foot_update");
     property <color> update-tint:
-        root.update_available ? ThemePalette.accent
-        : root.update_checking ? ThemePalette.text-4
+        root.update_available ? ThemePalette.accent-text
+        : root.update_checking ? ThemePalette.text-3
         : ThemePalette.text-3;
 
-    VerticalLayout {
-        // ── stage (vertically centred) ──
-        Rectangle {
-            vertical-stretch: 1;
+    // Keep the stage centered when it fits, and leave every footer action
+    // reachable when banners reduce the available height.
+    sv := ScrollView {
+        viewport-width: sv.visible-width;
+        // An explicit viewport extent is needed here: setting min-height on
+        // the layout replaces the implicit content minimum used by Flickable.
+        viewport-height: max(sv.visible-height, scroll-content.preferred-height);
+        scroll-content := VerticalLayout {
+            width: sv.visible-width;
+            height: sv.viewport-height;
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-top: 16px;
+            padding-bottom: 16px;
+            spacing: 16px;
+            alignment: center;
+
+            // One quiet control surface keeps the main action clearly anchored.
             HorizontalLayout {
                 alignment: center;
-                VerticalLayout {
-                    width: 480px;
-                    alignment: center;
-                    spacing: 28px;
+                Rectangle {
+                    width: min(sv.visible-width - 48px, 620px);
+                    horizontal-stretch: 0;
+                    vertical-stretch: 0;
+                    height: stage-content.preferred-height;
+                    border-radius: ThemePalette.r-16;
+                    border-width: 1px;
+                    border-color: ThemePalette.border;
+                    background: ThemePalette.surface;
 
-                    // dial
-                    HorizontalLayout {
+                    stage-content := VerticalLayout {
+                        padding-left: 32px;
+                        padding-right: 32px;
+                        padding-top: 28px;
+                        padding-bottom: 28px;
                         alignment: center;
-                        PowerDial {
-                            state: root.dial-state;
-                            tag: root.tag;
-                            clicked => {
-                                if (root.state == "error_admin") { root.restart_admin(); }
-                                else if (root.state == "stopping") { /* already winding down */ }
-                                else if (root.state == "connecting") { root.cancel_clicked(); }
-                                else if (root.state == "active") { root.stop_clicked(); }
-                                else if (root.state == "off_install") { root.install_clicked(); }
-                                else { root.engage_clicked(); }
+                        spacing: 20px;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            PowerDial {
+                                state: root.dial-state;
+                                tag: root.tag;
+                                enabled: !root.installing && root.state != "stopping";
+                                clicked => {
+                                    if (root.state == "error_admin") { root.restart_admin(); }
+                                    else if (root.state == "stopping") { /* already winding down */ }
+                                    else if (root.state == "connecting") { root.cancel_clicked(); }
+                                    else if (root.state == "active") { root.stop_clicked(); }
+                                    else if (root.state == "off_install") { root.install_clicked(); }
+                                    else { root.engage_clicked(); }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: root.title;
+                                horizontal-alignment: center;
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-28;
+                                font-weight: 600;
+                                color: ThemePalette.text;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: root.sub;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-14;
+                                color: ThemePalette.text-2;
+                            }
+                        }
+
+                        if root.state == "active" : Rectangle {
+                            height: 60px;
+                            border-radius: ThemePalette.r-10;
+                            background: ThemePalette.surface-2;
+                            HorizontalLayout {
+                                Chip {
+                                    horizontal-stretch: 14;
+                                    dot: true;
+                                    k: I18n.t(I18n.lang, "simple.chip_strategy");
+                                    v: root.chosen_item.alt != ""
+                                        ? root.chosen_item.pretty + " (" + root.chosen_item.alt + ")"
+                                        : (root.chosen_item.pretty != "" ? root.chosen_item.pretty : "—");
+                                }
+                                Rectangle { width: 1px; y: 12px; height: 36px; background: ThemePalette.border; }
+                                Chip {
+                                    horizontal-stretch: 10;
+                                    k: I18n.t(I18n.lang, "simple.chip_time");
+                                    v: root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s);
+                                }
+                                Rectangle { width: 1px; y: 12px; height: 36px; background: ThemePalette.border; }
+                                Chip {
+                                    horizontal-stretch: 8;
+                                    k: I18n.t(I18n.lang, "simple.chip_core");
+                                    v: root.status.installed_version != "" ? root.status.installed_version : "—";
+                                }
                             }
                         }
                     }
-
-                    // headline + sub
-                    VerticalLayout {
-                        spacing: 10px;
-                        Text {
-                            text: root.title;
-                            horizontal-alignment: center;
-                            font-family: ThemePalette.font-sans;
-                            font-size: ThemePalette.fs-28;
-                            font-weight: 600;
-                            color: ThemePalette.text;
-                        }
-                        Text {
-                            text: root.sub;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                            font-family: ThemePalette.font-sans;
-                            font-size: ThemePalette.fs-14;
-                            color: ThemePalette.text-2;
-                        }
-                    }
-
-                    // live chips — active only
-                    if root.state == "active" : HorizontalLayout {
-                        alignment: center;
-                        spacing: 8px;
-                        Chip {
-                            dot: true;
-                            k: I18n.t(I18n.lang, "simple.chip_strategy");
-                            v: root.chosen_item.alt != ""
-                                ? root.chosen_item.pretty + " (" + root.chosen_item.alt + ")"
-                                : (root.chosen_item.pretty != "" ? root.chosen_item.pretty : "—");
-                        }
-                        Chip {
-                            k: I18n.t(I18n.lang, "simple.chip_time");
-                            v: root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s);
-                        }
-                        Chip {
-                            k: I18n.t(I18n.lang, "simple.chip_core");
-                            v: root.status.installed_version != "" ? root.status.installed_version : "—";
-                        }
-                    }
                 }
             }
-        }
 
-        // ── low-priority footer ──
-        HorizontalLayout {
-            alignment: center;
-            spacing: 14px;
-            padding-top: 8px;
-            padding-bottom: 22px;
-            VerticalLayout {
+            // ── low-priority footer ──
+            HorizontalLayout {
                 alignment: center;
-                LinkBtn {
-                    label: root.update-label;
-                    tint: root.update-tint;
-                    enabled: !root.update_checking;
-                    clicked => { root.check_update_clicked(); }
+                spacing: 14px;
+                VerticalLayout {
+                    alignment: center;
+                    LinkBtn {
+                        label: root.update-label;
+                        tint: root.update-tint;
+                        enabled: !root.update_checking;
+                        clicked => { root.check_update_clicked(); }
+                    }
                 }
-            }
-            VerticalLayout {
-                alignment: center;
-                Rectangle { width: 3px; height: 3px; border-radius: 1.5px; background: ThemePalette.text-4; }
-            }
-            VerticalLayout {
-                alignment: center;
-                LinkBtn {
-                    label: I18n.t(I18n.lang, "simple.foot_advanced") + " →";
-                    clicked => { root.open_advanced(); }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle { width: 3px; height: 3px; border-radius: 1.5px; background: ThemePalette.text-4; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    LinkBtn {
+                        label: I18n.t(I18n.lang, "simple.foot_advanced") + " →";
+                        clicked => { root.open_advanced(); }
+                    }
                 }
             }
         }

@@ -3,6 +3,9 @@
 /.bundle-ref/
 /dist/
 
+# Local upstream distribution (binaries and drivers)
+/.bundle-ref/
+
 # Backed-up / generated config
 *.bak
 

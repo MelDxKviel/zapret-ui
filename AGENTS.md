@@ -26,6 +26,9 @@ connectivity probes. Root operations use `osascript` authorization and upstream
 install/stop scripts. There is no user-process mode or GameFilter on Mac.
 Upstream owns `/Library/Application Support/ZapretMac` and its launchd label;
 user lists stay in `~/Library/Application Support/ZapretMac` across core updates.
+Detect its child through `proc_listpids`/`proc_pidpath` and read PPID/uptime with
+a targeted `ps` query. `sysinfo` cannot read these fields after utunws drops UID,
+so using it here falsely reports a healthy engine as stopped.
 Do not run networking/service integration tests on CI. `cargo test` must remain
 unprivileged and offline; Windows SCM/process tests are platform-gated.
 Build on Apple Silicon with `sh scripts/build-macos.sh`; see `docs/macos.md`.
@@ -58,9 +61,9 @@ Do not commit `.bundle-ref/` (local upstream tree with `winws.exe` / WinDivert).
 
 ## Architecture
 
-**Ports-and-adapters.** `src/ports.rs` defines seven traits — `Installer`,
+**Ports-and-adapters.** `src/ports.rs` defines eight traits — `Installer`,
 `SelfUpdater`, `Runner`, `ServiceCtl`, `StrategyCatalog`, `StrategyTester`,
-`Maintenance`. `src/contracts.rs` holds the shared types (`Strategy`,
+`Maintenance`, `TelegramProxy`. `src/contracts.rs` holds the shared types (`Strategy`,
 `RuntimeStatus`, `BackendCmd`, `UiEvent`). Concrete adapters live under
 `src/zapret/` (plus `src/selfupdate.rs` for the app binary itself).
 
@@ -106,7 +109,9 @@ successful core install (or a check that finds no newer version) emit
   `ensure_user_lists` recreates `lists\*-user.txt` that `winws.exe` refuses
   to start without.
 - **`maintenance.rs`** — in-app port of `service.bat` SETTINGS/UPDATES: game
-  filter, IPSet filter, Update IPSet List, Update Hosts File. No admin.
+  filter, IPSet filter, Update IPSet List, Update Hosts File. The Windows hosts
+  update uses the existing one-shot UAC helper, preserves unrelated entries,
+  and leaves a backup next to the system hosts file.
   Surfaced as **DPI bypass tuning** on Settings; applies on next start /
   service reinstall.
 - **`catalog.rs`** — strategies are discovered at runtime by scanning `.bat`
@@ -139,10 +144,51 @@ successful core install (or a check that finds no newer version) emit
 - **`elevation.rs`** — `check_elevation()` → `Err(anyhow!("NeedsElevation"))`
   when not admin.
 - **`src/selfupdate.rs`** (`GithubSelfUpdater`) — updates **zapret-ui itself**,
-  not the core. Latest tag from `releases.atom` (no `api.github.com`),
-  downloads `zapret-ui.exe` + `.sha256`, verifies, Windows rename-self swap.
+  not the core. Candidates from `releases.atom` (no `api.github.com`); bare tags
+  and incomplete releases are skipped until `zapret-ui.exe` + a valid `.sha256`
+  are available. Downloads and verifies the exe, then Windows rename-self swap.
   `cleanup_old_binary()` at startup. After a successful swap the orchestrator
   calls `relaunch_after_update()` (`--relaunch`) and `process::exit(0)`.
+
+### Telegram proxy
+
+`src/telegram/` is a native, local-only MTProto → Telegram WSS bridge inspired
+by Flowseal/tg-ws-proxy, not a bundled Python subprocess. `LocalTelegramProxy`
+implements the `TelegramProxy` port. It is stopped on app launch by default; no
+listener, TLS context, connection pool, polling or task is created until Start.
+An explicit opt-in `telegram_autostart` preference starts it when the app opens,
+independently of the core and the app's separate Windows startup preference.
+Hiding Telegram disables its startup preference as well as stopping the proxy.
+Stop joins the listener and every connection task. Keep it independent of the
+zapret core, strategy testing and elevation.
+
+`src/app/telegram.rs` serializes user actions with an on-demand task + mutex,
+outside the core command queue so a download cannot block Stop. UI updates still
+go through `UiEvent`. Settings are saved before Start; edit only while stopped.
+Hiding the blue entry in the sidebar footer, immediately above the status pill,
+also stops the proxy. Its page is instantiated only while selected
+(`ui/pages/telegram.slint`); keep mocks in `ui_only` synced.
+
+`protocol.rs` implements MTProxy SHA256/AES-256-CTR key derivation and stream
+translation, retaining MTProto payload encryption. `transport.rs` sends complete
+transport packets as WS binary messages, validates TLS names even for IP
+overrides, retries official domains, and optionally falls back to direct TCP.
+Buffers/connection count are bounded. Never log secrets or proxy links. No CF
+relay domains, public listen addresses, certificate bypass or keepalive pool.
+
+Create Telegram listeners and outbound connections through `TcpSocket`, which
+sets non-inheritable Windows handles atomically. Direct Mio-backed
+`TcpListener::bind` / `TcpStream::connect` can leak sockets into a spawned winws
+or helper process and keep the proxy port occupied after Stop. Do not work around
+that Windows handle leak with `SO_REUSEADDR`. On Unix, enable `SO_REUSEADDR` on
+the listener (as Tokio/Mio normally does) so TIME_WAIT does not block a restart;
+never enable `SO_REUSEPORT`. A live exact-address or wildcard listener must
+still prevent another proxy from binding the port.
+
+`cargo test --lib telegram` runs local protocol/lifecycle/bridge tests. The
+ignored `live_telegram_wss_mtproto_roundtrip` test sends an unauthenticated
+req_pq_multi to Telegram (no account or client config), and must be explicitly
+opted into with `-- --ignored` when network access is available.
 
 ### Elevation model
 
@@ -166,6 +212,10 @@ Slint compiled by `build.rs` (`slint_build::compile("ui/main_window.slint")`);
 
 `tokens.slint` (palettes + `StrategyItem` / `AppStatus` / `LogLineItem`) →
 `components/` → `pages/` → `main_window.slint`.
+
+Keep `std-widgets` `Palette.color-scheme` synchronized with `ThemePalette`.
+The native TextEdit used for logs/hosts otherwise retains the OS theme and
+can render unreadable text when the app theme differs.
 
 **Callback and property names in `main_window.slint` are a hand-maintained
 contract with both `src/app/mod.rs` and `examples/ui_only.rs`.** Add/rename a
@@ -224,4 +274,6 @@ and fires `set_language` to persist. `examples/ui_only.rs` must register
 - CI (`.github/workflows/release.yml`) runs Windows checks on `windows-2022`
   and reuses `macos.yml` for native Apple Silicon checks on `macos-15`.
   Tag `v*` publishes `zapret-ui.exe`, macOS ARM64 ZIP/DMG, and their checksums
-  only after both platforms pass. Mac builds use an ad-hoc signature by default.
+  only after both platforms pass: upload all assets to a draft, then publish.
+  The release workflow runs on tags and PRs; the standalone macOS workflow
+  also checks macOS development branches. Mac builds use an ad-hoc signature.

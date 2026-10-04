@@ -146,12 +146,14 @@ pub struct DiscordCacheResult {
     pub cleared: u32,
 }
 
-/// Result of the "Update Hosts File" check.
+/// Result of the "Update Hosts File" action.
 #[derive(Clone, Debug, Default)]
 pub struct HostsCheck {
-    /// Whether the system hosts file already contains the repo's entries.
+    /// Whether the system hosts file already had the repo's entries.
     pub up_to_date: bool,
-    /// The repository hosts file content (for the in-app review window).
+    /// Whether the system hosts file was updated by this action.
+    pub updated: bool,
+    /// The repository hosts content (retained for the review dialog).
     pub content: String,
     /// Absolute path to the system hosts file.
     pub hosts_path: String,
@@ -197,7 +199,7 @@ pub enum BackendCmd {
     SetIpsetMode(IpsetMode),
     /// Download the latest ipset list into `lists\ipset-all.txt`.
     UpdateIpsetList,
-    /// Compare the system hosts file to the repo hosts and open it for merge if stale.
+    /// Update the system hosts file from the repo.
     UpdateHostsFile,
     /// Close Discord (if running) and clear its Cache/Code Cache/GPUCache folders.
     ClearDiscordCache,
@@ -250,6 +252,11 @@ pub struct StrategyTestResult {
 
 #[derive(Clone, Debug)]
 pub enum UiEvent {
+    TelegramStatus(TelegramProxyStatus),
+    TelegramSettings(TelegramProxySettings),
+    TelegramError(String),
+    TelegramVisibility(bool),
+    TelegramAutostart(bool),
     Status(RuntimeStatus),
     DownloadProgress {
         bytes: u64,
@@ -375,4 +382,69 @@ pub enum InstallStage {
     Extracting,
     Verifying,
     Done,
+}
+
+/// Persisted options only: a stopped proxy owns no listener or background task.
+/// The secret is generated on first use, never while loading the application.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TelegramProxySettings {
+    pub port: u16,
+    pub secret: String,
+    /// Optional WS endpoint overrides, e.g. "2:149.154.167.220 4:149.154.167.220".
+    pub dc_overrides: String,
+    pub tcp_fallback: bool,
+    pub connect_timeout_secs: u16,
+    pub max_connections: u16,
+}
+
+// Avoid accidentally disclosing the secret when logging config/commands.
+impl std::fmt::Debug for TelegramProxySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramProxySettings")
+            .field("port", &self.port)
+            .field("secret", &"[redacted]")
+            .field("dc_overrides", &self.dc_overrides)
+            .field("tcp_fallback", &self.tcp_fallback)
+            .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field("max_connections", &self.max_connections)
+            .finish()
+    }
+}
+
+impl Default for TelegramProxySettings {
+    fn default() -> Self {
+        Self {
+            port: 1443,
+            secret: String::new(),
+            dc_overrides: "2:149.154.167.220 4:149.154.167.220".into(),
+            tcp_fallback: true,
+            connect_timeout_secs: 5,
+            max_connections: 64,
+        }
+    }
+}
+
+impl TelegramProxySettings {
+    /// Padded intermediate MTProto. Always local; never advertise a LAN proxy.
+    pub fn link(&self) -> String {
+        if self.port == 0
+            || self.secret.len() != 32
+            || !self.secret.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            return String::new();
+        }
+        format!(
+            "tg://proxy?server=127.0.0.1&port={}&secret=dd{}",
+            self.port, self.secret
+        )
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TelegramProxyStatus {
+    pub running: bool,
+    pub connections: u32,
+    /// Localizable error key (technical diagnostics go to the log).
+    pub error: String,
 }

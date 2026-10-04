@@ -55,15 +55,6 @@ pub struct ConnectivityTester {
 }
 
 impl ConnectivityTester {
-    async fn stop_for_test(&self) -> anyhow::Result<()> {
-        let result = self.runner.stop().await;
-        if cfg!(target_os = "macos") {
-            result
-        } else {
-            Ok(())
-        }
-    }
-
     pub fn new(runner: Arc<dyn Runner>, install_dir: PathBuf) -> Self {
         Self {
             runner,
@@ -99,7 +90,7 @@ impl ConnectivityTester {
     }
 
     /// Probe every target concurrently; return (ok_count, avg_latency_ms).
-    async fn probe(&self, targets: &[String]) -> (u32, u32) {
+    async fn probe(&self, targets: &[String], cancel: &AtomicBool) -> (u32, u32) {
         // A fresh client per strategy so connections aren't reused across the
         // winws restart that happens between strategies.
         let client = match reqwest::Client::builder()
@@ -135,7 +126,7 @@ impl ConnectivityTester {
         let mut latency_sum = 0u64;
         loop {
             tokio::select! {
-                _ = wait_cancelled(&self.cancel) => {
+                _ = wait_cancelled(cancel) => {
                     set.abort_all();
                     while set.join_next().await.is_some() {}
                     break;
@@ -188,10 +179,13 @@ impl StrategyTester for ConnectivityTester {
 
             let index = i as u32 + 1;
             on_progress(index, total, &strategy.id);
+            if self.cancel.load(Ordering::SeqCst) {
+                break;
+            }
             tracing::info!("[{index}/{total}] testing strategy: {}", strategy.id);
 
             // Clean slate, then start this preset.
-            self.stop_for_test().await?;
+            self.runner.stop().await?;
             if let Err(e) = self.runner.start(strategy).await {
                 if e.downcast_ref::<crate::contracts::AuthorizationCancelled>()
                     .is_some()
@@ -215,13 +209,13 @@ impl StrategyTester for ConnectivityTester {
             // Let the desync engine settle (honour cancellation while we wait).
             let waited = wait_cancellable(INIT_WAIT, &self.cancel).await;
             if !waited {
-                self.stop_for_test().await?;
+                self.runner.stop().await?;
                 tracing::info!("Strategy test cancelled by user");
                 break;
             }
 
-            let (ok, avg_latency_ms) = self.probe(&targets).await;
-            self.stop_for_test().await?;
+            let (ok, avg_latency_ms) = self.probe(&targets, &self.cancel).await;
+            self.runner.stop().await?;
 
             tracing::info!(
                 "[{index}/{total}] {} → {}/{} reachable, avg {} ms",
@@ -244,7 +238,7 @@ impl StrategyTester for ConnectivityTester {
         }
 
         // Make sure nothing is left running after a test.
-        self.stop_for_test().await?;
+        self.runner.stop().await?;
 
         // Rank: most endpoints reachable first, ties broken by lower latency.
         results.sort_by(|a, b| {
@@ -299,14 +293,18 @@ impl StrategyTester for ConnectivityTester {
 
         for (i, strategy) in candidates.iter().enumerate() {
             if self.cancel.load(Ordering::SeqCst) {
-                self.stop_for_test().await?;
+                self.runner.stop().await?;
                 return Ok(AutoEngageOutcome::Cancelled);
             }
             let index = i as u32 + 1;
             on_progress(index, total, &strategy.id);
+            if self.cancel.load(Ordering::SeqCst) {
+                self.runner.stop().await?;
+                return Ok(AutoEngageOutcome::Cancelled);
+            }
             tracing::info!("[{index}/{total}] auto-engage trying: {}", strategy.id);
 
-            self.stop_for_test().await?;
+            self.runner.stop().await?;
             if let Err(e) = self.runner.start(strategy).await {
                 if e.downcast_ref::<crate::contracts::AuthorizationCancelled>()
                     .is_some()
@@ -318,12 +316,12 @@ impl StrategyTester for ConnectivityTester {
             }
             // Let the desync engine settle (honouring cancellation).
             if !wait_cancellable(INIT_WAIT, &self.cancel).await {
-                self.stop_for_test().await?;
+                self.runner.stop().await?;
                 return Ok(AutoEngageOutcome::Cancelled);
             }
-            let (ok, avg) = self.probe(&targets).await;
+            let (ok, avg) = self.probe(&targets, &self.cancel).await;
             if self.cancel.load(Ordering::SeqCst) {
-                self.stop_for_test().await?;
+                self.runner.stop().await?;
                 return Ok(AutoEngageOutcome::Cancelled);
             }
             tracing::info!(
@@ -347,7 +345,7 @@ impl StrategyTester for ConnectivityTester {
             if best.is_none_or(|(bok, _)| ok > bok) {
                 best = Some((ok, i));
             }
-            self.stop_for_test().await?;
+            self.runner.stop().await?;
         }
 
         // Nothing crossed the threshold. If a candidate had partial reachability,
@@ -355,7 +353,7 @@ impl StrategyTester for ConnectivityTester {
         if let Some((bok, idx)) = best {
             if bok > 0 {
                 let strategy = &candidates[idx];
-                self.stop_for_test().await?;
+                self.runner.stop().await?;
                 match self.runner.start(strategy).await {
                     Ok(_) => {
                         tracing::info!(
@@ -379,17 +377,19 @@ impl StrategyTester for ConnectivityTester {
             }
         }
 
-        self.stop_for_test().await?;
+        self.runner.stop().await?;
         Ok(AutoEngageOutcome::NoneWorking)
     }
 
     async fn verify(&self) -> anyhow::Result<bool> {
         // The bypass is already running the strategy under test — we don't touch
         // the runner, just let it settle, then probe the same endpoints.
-        self.cancel.store(false, Ordering::SeqCst);
+        // A delayed background verification may overlap a newly started scan.
+        // It must neither clear nor consume that scan's cancellation flag.
+        let verification_cancel = AtomicBool::new(false);
         let targets = self.load_targets();
         tokio::time::sleep(INIT_WAIT).await;
-        let (ok, avg) = self.probe(&targets).await;
+        let (ok, avg) = self.probe(&targets, &verification_cancel).await;
         let need = ((targets.len() as u32 * AUTO_ENGAGE_MIN_PCT) / 100).max(1);
         tracing::info!(
             "Background verify: {}/{} reachable (need {}), avg {} ms",
@@ -422,4 +422,190 @@ async fn wait_cancellable(dur: Duration, cancel: &AtomicBool) -> bool {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     !cancel.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::{Category, RuntimeStatus};
+    use futures_util::FutureExt;
+    use std::sync::atomic::AtomicUsize;
+
+    struct StopFailingRunner {
+        starts: AtomicUsize,
+    }
+
+    struct CancelAuthorizationRunner {
+        starts: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Runner for CancelAuthorizationRunner {
+        async fn start(&self, _: &Strategy) -> anyhow::Result<u32> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            Err(crate::contracts::AuthorizationCancelled.into())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn detect_running(&self) -> RuntimeStatus {
+            RuntimeStatus::default()
+        }
+    }
+
+    struct NeverStartRunner;
+
+    #[async_trait::async_trait]
+    impl Runner for NeverStartRunner {
+        async fn start(&self, _: &Strategy) -> anyhow::Result<u32> {
+            panic!("cancelled scan must not start winws")
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn detect_running(&self) -> RuntimeStatus {
+            RuntimeStatus::default()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Runner for StopFailingRunner {
+        async fn start(&self, _: &Strategy) -> anyhow::Result<u32> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            Ok(1)
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            anyhow::bail!("previous winws could not be stopped")
+        }
+
+        async fn detect_running(&self) -> RuntimeStatus {
+            RuntimeStatus::default()
+        }
+    }
+
+    fn strategy() -> Strategy {
+        Strategy {
+            id: "test".into(),
+            display_name: "test".into(),
+            category: Category::Other,
+            description: String::new(),
+            winws_args: Vec::new(),
+            requires_lists: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_authorization_stops_scans_without_prompting_for_the_next_strategy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = Arc::new(CancelAuthorizationRunner {
+            starts: AtomicUsize::new(0),
+        });
+        let tester = ConnectivityTester::new(runner.clone(), tmp.path().to_path_buf());
+        let error = tester
+            .test_all(
+                vec![strategy(), strategy()],
+                Box::new(|_| panic!("cancelled authorization must not report a score")),
+                Box::new(|_, _, _| {}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error
+            .downcast_ref::<crate::contracts::AuthorizationCancelled>()
+            .is_some());
+        assert_eq!(runner.starts.load(Ordering::SeqCst), 1);
+        let error = tester
+            .auto_engage(vec![strategy(), strategy()], Box::new(|_, _, _| {}))
+            .await
+            .unwrap_err();
+        assert!(error
+            .downcast_ref::<crate::contracts::AuthorizationCancelled>()
+            .is_some());
+        assert_eq!(runner.starts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_all_does_not_start_or_score_after_stop_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = Arc::new(StopFailingRunner {
+            starts: AtomicUsize::new(0),
+        });
+        let tester = ConnectivityTester::new(runner.clone(), tmp.path().to_path_buf());
+        let results = Arc::new(AtomicUsize::new(0));
+        let observed = results.clone();
+        let error = tester
+            .test_all(
+                vec![strategy()],
+                Box::new(move |_| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }),
+                Box::new(|_, _, _| {}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("could not be stopped"));
+        assert_eq!(runner.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(results.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn auto_engage_does_not_start_after_stop_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = Arc::new(StopFailingRunner {
+            starts: AtomicUsize::new(0),
+        });
+        let tester = ConnectivityTester::new(runner.clone(), tmp.path().to_path_buf());
+        let error = tester
+            .auto_engage(vec![strategy()], Box::new(|_, _, _| {}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("could not be stopped"));
+        assert_eq!(runner.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn background_verify_does_not_clear_scan_cancellation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = Arc::new(StopFailingRunner {
+            starts: AtomicUsize::new(0),
+        });
+        let tester = ConnectivityTester::new(runner, tmp.path().to_path_buf());
+        tester.cancel();
+        // Poll until the initial sleep, then drop before any network probe.
+        assert!(tester.verify().now_or_never().is_none());
+        assert!(tester.cancel.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancellation_from_progress_prevents_the_first_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tester = Arc::new(ConnectivityTester::new(
+            Arc::new(NeverStartRunner),
+            tmp.path().to_path_buf(),
+        ));
+        let progress_tester = tester.clone();
+        let results = tester
+            .test_all(
+                vec![strategy()],
+                Box::new(|_| panic!("cancelled scan must not report a score")),
+                Box::new(move |_, _, _| progress_tester.cancel()),
+            )
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+
+        let progress_tester = tester.clone();
+        let outcome = tester
+            .auto_engage(
+                vec![strategy()],
+                Box::new(move |_, _, _| progress_tester.cancel()),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, AutoEngageOutcome::Cancelled));
+    }
 }

@@ -20,7 +20,7 @@ export component StarToggle inherits Rectangle {
         width: 16px;
         height: 16px;
         colorize: root.favorite
-            ? ThemePalette.accent
+            ? ThemePalette.accent-text
             : (ta.has-hover ? ThemePalette.text-2 : ThemePalette.text-4);
         animate colorize { duration: 120ms; }
     }

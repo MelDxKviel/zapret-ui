@@ -20,35 +20,36 @@ export component LogsPage inherits Rectangle {
     background: transparent;
 
     property <int> count: root.log_lines.length;
-    changed count => {
+    // The bounded log buffer keeps a constant count once full, while its text
+    // keeps changing. Follow the text and the viewport layout in both cases.
+    function scroll-to-end() {
         if (root.autoscroll) {
-            term.viewport-y = -(term.viewport-height - term.visible-height);
+            term.viewport-y = -max(term.viewport-height - term.visible-height, 0px);
         }
     }
+    changed log_text => { root.scroll-to-end(); }
+    init => { root.scroll-to-end(); }
 
     HorizontalLayout {
         VerticalLayout {
             horizontal-stretch: 0;
-            width: min(parent.width - 64px, 980px);
-            padding-left: 32px;
-            padding-top: 28px;
-            padding-right: 32px;
-            padding-bottom: 28px;
+            width: min(parent.width, 1044px);
+            padding: 32px;
             spacing: 0px;
 
             // page-head
             HorizontalLayout {
-                padding-bottom: 20px;
+                padding-bottom: 24px;
                 spacing: 16px;
                 VerticalLayout {
                     horizontal-stretch: 1;
                     min-width: 0px;
-                    spacing: 2px;
+                    spacing: 8px;
                     alignment: end;
                     Text {
                         text: I18n.t(I18n.lang, "logs.title");
                         font-family: ThemePalette.font-sans;
-                        font-size: ThemePalette.fs-22;
+                        font-size: ThemePalette.fs-28;
                         font-weight: 600;
                         color: ThemePalette.text;
                     }
@@ -56,7 +57,7 @@ export component LogsPage inherits Rectangle {
                         text: I18n.t(I18n.lang, "logs.subtitle");
                         font-family: ThemePalette.font-sans;
                         font-size: ThemePalette.fs-13;
-                        color: ThemePalette.text-3;
+                        color: ThemePalette.text-2;
                         min-width: 0px;
                         wrap: word-wrap;
                     }
@@ -80,30 +81,26 @@ export component LogsPage inherits Rectangle {
                     }
                 }
             }
-            Rectangle { height: 1px; background: ThemePalette.divider; }
-            Rectangle { height: 16px; }
-
             // logs shell
             Rectangle {
                 vertical-stretch: 1;
                 border-width: 1px;
                 border-color: ThemePalette.border;
-                border-radius: ThemePalette.r-12;
+                border-radius: ThemePalette.r-16;
                 background: ThemePalette.surface;
                 clip: true;
 
                 VerticalLayout {
+                    spacing: 0px;
                     // toolbar
                     Rectangle {
-                        height: 48px;
-                        background: ThemePalette.bg-2;
+                        height: 116px;
+                        background: ThemePalette.surface;
                         VerticalLayout {
-                          height: 100%;
-                          alignment: center;
+                          padding: 18px;
+                          spacing: 12px;
                           HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            spacing: 10px;
+                            spacing: 12px;
 
                             // streaming stat — elides first when the toolbar
                             // gets tight, so the filter and autoscroll controls
@@ -114,7 +111,7 @@ export component LogsPage inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     Rectangle {
-                                        width: 6px; height: 6px; border-radius: 3px;
+                                        width: 7px; height: 7px; border-radius: 4px;
                                         background: ThemePalette.accent;
                                     }
                                 }
@@ -122,19 +119,36 @@ export component LogsPage inherits Rectangle {
                                     text: I18n.t(I18n.lang, "logs.streaming_a") + root.count + I18n.t(I18n.lang, "logs.streaming_b");
                                     font-family: ThemePalette.font-mono;
                                     font-size: ThemePalette.fs-11;
-                                    color: ThemePalette.text-3;
+                                    color: ThemePalette.text-2;
                                     vertical-alignment: center;
                                     min-width: 0px;
                                     overflow: elide;
                                 }
                             }
 
+                            Rectangle { horizontal-stretch: 1; }
+
+                            AppButton {
+                                text: I18n.t(I18n.lang, "logs.auto");
+                                size: "sm";
+                                variant: root.autoscroll ? "primary" : "default";
+                                icon: @image-url("../../assets/icons/pin.svg");
+                                clicked => {
+                                    root.autoscroll = !root.autoscroll;
+                                    root.scroll-to-end();
+                                }
+                            }
+                          }
+
+                          HorizontalLayout {
+                            spacing: 12px;
+
                             // grep — fills the middle of the toolbar and grows
                             // with the window instead of a fixed pinned-right box.
                             AppInput {
                                 horizontal-stretch: 1;
                                 min-width: 110px;
-                                field-height: 28px;
+                                field-height: 36px;
                                 font-size: ThemePalette.fs-12;
                                 icon: @image-url("../../assets/icons/search.svg");
                                 placeholder: I18n.t(I18n.lang, "logs.grep_placeholder");
@@ -144,35 +158,21 @@ export component LogsPage inherits Rectangle {
 
                             // level filter
                             Segmented {
-                                seg-height: 22px;
-                                seg-pad: 6px;
+                                seg-height: 32px;
+                                seg-pad: 9px;
                                 seg-fs: ThemePalette.fs-11;
                                 selected: root.level;
                                 options: [
-                                    { value: "ALL",   label: "ALL" },
+                                    { value: "ALL",   label: I18n.t(I18n.lang, "logs.level_all") },
                                     { value: "INFO",  label: "INFO" },
                                     { value: "WARN",  label: "WARN" },
                                     { value: "ERROR", label: "ERROR" },
                                 ];
                                 changed(v) => { root.level = v; root.query_changed(root.query, v); }
                             }
-
-                            // autoscroll
-                            AppButton {
-                                text: I18n.t(I18n.lang, "logs.auto");
-                                size: "sm";
-                                variant: root.autoscroll ? "primary" : "default";
-                                icon: @image-url("../../assets/icons/pin.svg");
-                                clicked => {
-                                    root.autoscroll = !root.autoscroll;
-                                    if (root.autoscroll) {
-                                        term.viewport-y = -(term.viewport-height - term.visible-height);
-                                    }
-                                }
-                            }
                           }
                         }
-                        Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.border; }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
                     }
 
                     // terminal body — a real TextEdit so the log can be
@@ -208,6 +208,8 @@ export component LogsPage inherits Rectangle {
                             font-family: ThemePalette.font-mono;
                             font-size: ThemePalette.fs-12;
                             wrap: word-wrap;
+                            changed viewport-height => { root.scroll-to-end(); }
+                            changed visible-height => { root.scroll-to-end(); }
                         }
                     }
                 }

@@ -32,7 +32,7 @@ pub fn is_valid_install_dir(path: &Path) -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        path.join("bin").join("winws.exe").exists() || path.join("winws.exe").exists()
+        path.join("bin").join("winws.exe").is_file() || path.join("winws.exe").is_file()
     }
 }
 
@@ -47,5 +47,63 @@ pub fn lists_dir(install_dir: &Path) -> PathBuf {
     #[cfg(not(target_os = "macos"))]
     {
         install_dir.join("lists")
+    }
+}
+
+/// Resolve a Windows utility without searching the working directory, PATH or
+/// environment variables. These callers can run elevated.
+pub fn system_executable(name: &str) -> anyhow::Result<PathBuf> {
+    if name.is_empty() || name.contains(['/', '\\', ':']) || name == "." || name == ".." {
+        anyhow::bail!("Expected a system executable basename, got {name:?}");
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        extern "system" {
+            fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+        }
+        let mut buffer = vec![0u16; 32_768];
+        let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+        if len == 0 || len >= buffer.len() {
+            anyhow::bail!(
+                "Failed to resolve the Windows system directory: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        Ok(PathBuf::from(OsString::from_wide(&buffer[..len])).join(name))
+    }
+    #[cfg(not(windows))]
+    {
+        anyhow::bail!("Windows system utilities are unavailable on this platform")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_directory_named_winws_is_not_an_installation() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("winws.exe")).unwrap();
+        assert!(!is_valid_install_dir(tmp.path()));
+    }
+
+    #[test]
+    fn system_executable_rejects_paths() {
+        for name in ["", "..", "../sc.exe", r"C:\sc.exe", r"sub\sc.exe"] {
+            assert!(system_executable(name).is_err());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_executable_resolves_an_absolute_system_path() {
+        let exe = system_executable("sc.exe").unwrap();
+        assert!(exe.is_absolute());
+        assert!(exe.is_file());
+        assert_eq!(exe.file_name().unwrap(), "sc.exe");
     }
 }

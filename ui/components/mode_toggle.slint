@@ -9,7 +9,7 @@ component ToggleBtn inherits Rectangle {
     callback clicked();
 
     horizontal-stretch: 0;
-    height: 30px;
+    height: 32px;
     width: t.preferred-width + 40px;
     border-radius: ThemePalette.r-8;
     background: root.active ? ThemePalette.accent
@@ -46,12 +46,12 @@ export component ModeToggle inherits Rectangle {
 
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    height: 38px;
+    height: 40px;
     width: row.preferred-width;
     border-radius: ThemePalette.r-10;
     border-width: 1px;
     border-color: ThemePalette.border;
-    background: ThemePalette.surface;
+    background: ThemePalette.surface-2;
 
     row := HorizontalLayout {
         padding: 3px;

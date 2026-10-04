@@ -6,9 +6,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::header::USER_AGENT;
 use sha2::{Digest, Sha256};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// Hard ceiling on the compressed archive we will download (600 MB). The real
 /// zapret distribution is a few MB; this only fires on a corrupt/hostile server.
@@ -17,8 +16,6 @@ const MAX_DOWNLOAD_BYTES: u64 = 600 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Hard ceiling on the number of entries in the archive.
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
-/// A lock this old is stale even if its PID cannot be parsed.
-const INSTALL_LOCK_STALE_AFTER: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// Optional pinned SHA-256 of the upstream archive. When `Some`, the download is
 /// rejected unless its digest matches — turning the otherwise trust-on-transport
@@ -243,12 +240,10 @@ impl ZapretInstaller {
         }
 
         // Handle possible single root subdirectory inside the extracted files
-        let mut entries = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(temp_extract_dir) {
-            for entry in rd.flatten() {
-                entries.push(entry);
-            }
-        }
+        let entries = std::fs::read_dir(temp_extract_dir)
+            .context("Failed to enumerate extracted files")?
+            .collect::<std::io::Result<Vec<_>>>()
+            .context("Failed to enumerate extracted files")?;
 
         if entries.len() == 1 && entries[0].file_type().map(|t| t.is_dir()).unwrap_or(false) {
             let sub_dir = entries[0].path();
@@ -256,15 +251,16 @@ impl ZapretInstaller {
                 "Promoting single root directory contents from {:?}",
                 sub_dir
             );
-            if let Ok(rd) = std::fs::read_dir(&sub_dir) {
-                for entry in rd.flatten() {
-                    let from = entry.path();
-                    let to = temp_extract_dir.join(entry.file_name());
-                    std::fs::rename(&from, &to)
-                        .context("Failed to promote file out of root subdirectory")?;
-                }
+            for entry in
+                std::fs::read_dir(&sub_dir).context("Failed to enumerate archive root directory")?
+            {
+                let entry = entry.context("Failed to enumerate archive root directory")?;
+                let from = entry.path();
+                let to = temp_extract_dir.join(entry.file_name());
+                std::fs::rename(&from, &to)
+                    .context("Failed to promote file out of root subdirectory")?;
             }
-            let _ = std::fs::remove_dir(&sub_dir);
+            std::fs::remove_dir(&sub_dir).context("Failed to remove promoted archive root")?;
         }
 
         #[cfg(target_os = "macos")]
@@ -296,6 +292,18 @@ impl ZapretInstaller {
                 .unwrap_or_else(|| release.tag_name.clone());
         std::fs::write(temp_extract_dir.join("version.txt"), &version)
             .context("Failed to write version.txt")?;
+
+        // Carry over user-maintained data before committing the replacement.
+        // A failed copy or user-list creation must leave the live install and
+        // its backup untouched.
+        #[cfg(not(target_os = "macos"))]
+        {
+            if self.install_dir.is_dir() {
+                preserve_user_state(&self.install_dir, temp_extract_dir)?;
+            }
+            crate::zapret::batparse::ensure_user_lists(temp_extract_dir)
+                .context("Failed to create winws user list files")?;
+        }
 
         // 4. Verifying stage
         on_progress(InstallStage::Verifying, 0, None);
@@ -361,15 +369,66 @@ impl ZapretInstaller {
             }
         }
 
-        // Create the user list files winws.exe expects (service.bat:load_user_lists).
-        #[cfg(not(target_os = "macos"))]
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir)
-            .context("Failed to create winws user list files")?;
-
         // 5. Done stage
         on_progress(InstallStage::Done, 1, Some(1));
         Ok(())
     }
+}
+
+/// Retain explicit user lists and tuning while accepting updated upstream
+/// presets and standard host lists from the archive.
+#[cfg(any(not(target_os = "macos"), test))]
+fn preserve_user_state(current: &Path, staged: &Path) -> Result<()> {
+    fn copy_regular_file(src: &Path, dst: &Path) -> Result<()> {
+        let metadata = std::fs::symlink_metadata(src)
+            .with_context(|| format!("Failed to inspect user data {}", src.display()))?;
+        if !metadata.file_type().is_file() {
+            anyhow::bail!("User data must be a regular file: {}", src.display());
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .context("Failed to create staged user-data directory")?;
+        }
+        std::fs::copy(src, dst)
+            .with_context(|| format!("Failed to preserve user data {}", src.display()))?;
+        Ok(())
+    }
+
+    let lists = current.join("lists");
+    match std::fs::read_dir(&lists) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.context("Failed to enumerate user lists")?;
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.ends_with("-user.txt")
+                    || matches!(name.as_str(), "ipset-all.txt" | "ipset-all.txt.backup")
+                {
+                    copy_regular_file(
+                        &entry.path(),
+                        &staged.join("lists").join(entry.file_name()),
+                    )?;
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).context("Failed to enumerate user lists"),
+    }
+
+    let flag = current.join("utils").join("game_filter.enabled");
+    let staged_flag = staged.join("utils").join("game_filter.enabled");
+    match std::fs::symlink_metadata(&flag) {
+        Ok(_) => copy_regular_file(&flag, &staged_flag)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Absence means Disabled; do not enable a flag shipped by an archive.
+            match std::fs::remove_file(&staged_flag) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).context("Failed to preserve disabled game filter"),
+            }
+        }
+        Err(e) => return Err(e).context("Failed to inspect game filter setting"),
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -401,9 +460,8 @@ impl Installer for ZapretInstaller {
         std::fs::create_dir_all(&parent_dir)
             .context("Failed to create parent directory for installation")?;
 
-        // Serialize install/update against itself: a single lock file in the
-        // parent dir, removed when this guard drops. Prevents two concurrent
-        // runs from clobbering each other's temp data or the install swap.
+        // Serialize install/update against itself with a kernel-owned lock.
+        // A crash releases the lock, so later runs can reuse the lock file.
         let _lock = InstallLock::acquire(&parent_dir.join("zapret-ui.install.lock"))?;
 
         // Unique per-run working directory (auto-removed on drop) instead of
@@ -421,71 +479,65 @@ impl Installer for ZapretInstaller {
     }
 }
 
-/// A best-effort cross-process lock implemented as an exclusively-created file.
-/// Removed on drop so a crash leaves at most a stale empty file (which the next
-/// run will recreate-or-fail on — acceptable for a desktop installer).
+/// A cross-process lock held by an open file, rather than a PID/age heuristic.
+/// The kernel releases Windows exclusive handles and Unix advisory locks on
+/// crash. Unix keeps the file in place to avoid an unlink/reopen race.
 struct InstallLock {
+    #[cfg(windows)]
     path: PathBuf,
+    file: Option<std::fs::File>,
 }
 
 impl InstallLock {
     fn acquire(path: &Path) -> Result<Self> {
         match Self::create(path) {
             Ok(lock) => Ok(lock),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && lock_is_stale(path) => {
-                let _ = std::fs::remove_file(path);
-                Self::create(path).context("Failed to recreate stale install lock file")
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::WouldBlock
+                ) || (cfg!(windows) && e.raw_os_error() == Some(32)) =>
+            {
+                Err(anyhow::anyhow!(
+                    "Another install/update is already in progress (lock file present)"
+                ))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(anyhow::anyhow!(
-                "Another install/update is already in progress (lock file present)"
-            )),
             Err(e) => Err(e).context("Failed to create install lock file"),
         }
     }
 
     fn create(path: &Path) -> std::io::Result<Self> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)?;
-        writeln!(file, "pid={}", std::process::id())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.create(true).share_mode(0);
+        }
+        #[cfg(not(windows))]
+        options.create(true).truncate(false);
+        let file = options.open(path)?;
+        #[cfg(not(windows))]
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                std::io::Error::from(std::io::ErrorKind::WouldBlock)
+            }
+            std::fs::TryLockError::Error(error) => error,
+        })?;
         Ok(Self {
+            #[cfg(windows)]
             path: path.to_path_buf(),
+            file: Some(file),
         })
     }
 }
 
-fn lock_is_stale(path: &Path) -> bool {
-    if let Ok(meta) = std::fs::metadata(path) {
-        if let Ok(modified) = meta.modified() {
-            if SystemTime::now()
-                .duration_since(modified)
-                .map(|age| age > INSTALL_LOCK_STALE_AFTER)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-    }
-
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Some(pid) = content
-        .lines()
-        .find_map(|line| line.strip_prefix("pid="))
-        .and_then(|pid| pid.trim().parse::<u32>().ok())
-    else {
-        return false;
-    };
-
-    let mut sys = sysinfo::System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    !sys.processes().keys().any(|p| p.as_u32() == pid)
-}
-
 impl Drop for InstallLock {
     fn drop(&mut self) {
+        drop(self.file.take());
+        // If another installer opened it between close and remove, its exclusive
+        // Windows handle makes this deletion fail rather than unlinking its lock.
+        #[cfg(windows)]
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -512,10 +564,114 @@ mod tests {
     }
 
     #[test]
-    fn stale_install_lock_with_dead_pid_is_replaced() {
+    fn stale_install_lock_does_not_block_a_new_update() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("x.lock");
         std::fs::write(&path, "pid=999999999\n").unwrap();
         assert!(InstallLock::acquire(&path).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_lock_reuses_the_same_inode_across_acquisitions() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("x.lock");
+        let first = InstallLock::acquire(&path).unwrap();
+        let inode = std::fs::metadata(&path).unwrap().ino();
+        assert!(InstallLock::acquire(&path).is_err());
+        drop(first);
+        // Keeping the inode prevents a waiting installer from holding a lock
+        // on an unlinked file while another installer creates a new one.
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+        let _second = InstallLock::acquire(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+        assert!(InstallLock::acquire(&path).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_open_install_lock_cannot_be_deleted_or_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("x.lock");
+        let lock = InstallLock::acquire(&path).unwrap();
+        assert!(std::fs::remove_file(&path).is_err());
+        assert!(std::fs::write(&path, "pid=999999999\n").is_err());
+        assert!(InstallLock::acquire(&path).is_err());
+        drop(lock);
+        assert!(InstallLock::acquire(&path).is_ok());
+    }
+
+    #[test]
+    fn core_update_preserves_user_lists_filters_and_saved_ipset() {
+        let current = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        for dir in [current.path(), staged.path()] {
+            std::fs::create_dir_all(dir.join("lists")).unwrap();
+            std::fs::create_dir_all(dir.join("utils")).unwrap();
+        }
+        for (name, content) in [
+            ("list-general-user.txt", "my.example\n"),
+            ("list-exclude-user.txt", "exclude.example\n"),
+            ("ipset-exclude-user.txt", "192.0.2.1/32\n"),
+            ("ipset-all.txt", "203.0.113.113/32\n"),
+            ("ipset-all.txt.backup", "192.0.2.2/32\n"),
+        ] {
+            std::fs::write(current.path().join("lists").join(name), content).unwrap();
+            std::fs::write(staged.path().join("lists").join(name), "archive defaults\n").unwrap();
+        }
+        std::fs::write(
+            current.path().join("lists/list-general.txt"),
+            "old upstream\n",
+        )
+        .unwrap();
+        std::fs::write(
+            staged.path().join("lists/list-general.txt"),
+            "new upstream\n",
+        )
+        .unwrap();
+        std::fs::write(current.path().join("utils/game_filter.enabled"), "tcp\n").unwrap();
+        preserve_user_state(current.path(), staged.path()).unwrap();
+
+        for name in [
+            "list-general-user.txt",
+            "list-exclude-user.txt",
+            "ipset-exclude-user.txt",
+            "ipset-all.txt",
+            "ipset-all.txt.backup",
+        ] {
+            assert_eq!(
+                std::fs::read(staged.path().join("lists").join(name)).unwrap(),
+                std::fs::read(current.path().join("lists").join(name)).unwrap()
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(staged.path().join("utils/game_filter.enabled")).unwrap(),
+            "tcp\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(staged.path().join("lists/list-general.txt")).unwrap(),
+            "new upstream\n"
+        );
+    }
+
+    #[test]
+    fn core_update_keeps_game_filter_disabled() {
+        let current = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(staged.path().join("utils")).unwrap();
+        std::fs::write(staged.path().join("utils/game_filter.enabled"), "all\n").unwrap();
+        preserve_user_state(current.path(), staged.path()).unwrap();
+        assert!(!staged.path().join("utils/game_filter.enabled").exists());
+    }
+
+    #[test]
+    fn invalid_user_list_does_not_modify_live_installation() {
+        let current = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        let invalid = current.path().join("lists/list-general-user.txt");
+        std::fs::create_dir_all(&invalid).unwrap();
+        assert!(preserve_user_state(current.path(), staged.path()).is_err());
+        assert!(invalid.is_dir());
     }
 }

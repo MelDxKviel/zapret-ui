@@ -4,6 +4,8 @@ pub mod catalog;
 #[cfg(windows)]
 pub mod elevation;
 pub mod github;
+#[cfg(windows)]
+pub mod hosts;
 pub mod installer;
 pub mod macos_bundle;
 pub mod maintenance;

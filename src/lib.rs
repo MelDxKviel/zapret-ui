@@ -9,6 +9,7 @@ pub mod selfupdate;
 #[cfg_attr(target_os = "macos", path = "platform/macos/single_instance.rs")]
 pub mod single_instance;
 pub mod state;
+pub mod telegram;
 pub mod tray;
 #[cfg_attr(target_os = "macos", path = "platform/macos/winenv.rs")]
 pub mod winenv;

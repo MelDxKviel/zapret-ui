@@ -7,10 +7,12 @@ import "assets/fonts/GeistMono-Regular.ttf";
 import "assets/fonts/GeistMono-Medium.ttf";
 
 import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem } from "tokens.slint";
+import { Palette } from "std-widgets.slint";
 import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
+import { TelegramPage } from "pages/telegram.slint";
 import { AdminBanner } from "components/admin_banner.slint";
 import { UpdateBanner } from "components/update_banner.slint";
 import { ModeToggle } from "components/mode_toggle.slint";
@@ -26,6 +28,8 @@ export { StrategyItem, AppStatus, LogLineItem, TestResultItem, I18n }
 
 // ── Sidebar nav row ──
 component NavItem inherits Rectangle {
+    in property <bool> branded: false;
+    in property <color> accent: ThemePalette.accent;
     in property <string> label;
     in property <image> icon;
     in property <bool> active;
@@ -34,20 +38,13 @@ component NavItem inherits Rectangle {
     in property <bool> attention: false;
     callback clicked;
 
-    height: 32px;
+    height: 42px;
     border-radius: ThemePalette.r-8;
-    background: root.active ? ThemePalette.surface : (ta.has-hover ? ThemePalette.surface : transparent);
+    border-width: root.active ? 1px : 0px;
+    border-color: root.branded ? ThemePalette.info-soft : ThemePalette.accent-border;
+    background: root.active ? (root.branded ? ThemePalette.info-soft : ThemePalette.accent-surface)
+        : (ta.has-hover ? ThemePalette.surface-hover : transparent);
     animate background { duration: 120ms; }
-
-    // active 2px lime bar at x = -12px
-    if root.active : Rectangle {
-        x: -12px;
-        y: 9px;
-        width: 2px;
-        height: parent.height - 18px;
-        border-radius: ThemePalette.r-2;
-        background: ThemePalette.accent;
-    }
 
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -55,9 +52,9 @@ component NavItem inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 10px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
         VerticalLayout {
             alignment: center;
             width: 16px;
@@ -65,7 +62,7 @@ component NavItem inherits Rectangle {
                 source: root.icon;
                 width: 16px;
                 height: 16px;
-                colorize: root.active ? ThemePalette.accent : ThemePalette.text-2;
+                colorize: root.branded ? root.accent : root.active ? ThemePalette.accent-text : ThemePalette.text-3;
                 animate colorize { duration: 120ms; }
             }
         }
@@ -74,7 +71,7 @@ component NavItem inherits Rectangle {
             font-family: ThemePalette.font-sans;
             font-size: ThemePalette.fs-13;
             font-weight: root.active ? 600 : 500;
-            color: root.active ? ThemePalette.text : ThemePalette.text-2;
+            color: root.branded ? root.accent : (root.active ? ThemePalette.accent-text : ThemePalette.text-2);
             vertical-alignment: center;
             animate color { duration: 120ms; }
         }
@@ -85,7 +82,7 @@ component NavItem inherits Rectangle {
                 width: 7px;
                 height: 7px;
                 border-radius: 3.5px;
-                background: ThemePalette.accent;
+                background: root.accent;
             }
         }
     }
@@ -100,44 +97,34 @@ component ThemeToggleBtn inherits Rectangle {
     // No fixed height: fill the toolbar row so the icon stays vertically centered
     // (a HorizontalLayout top-aligns fixed-height children — see BrandMark).
     border-radius: ThemePalette.r-6;
-    background: root.active ? ThemePalette.surface-2 : transparent;
+    border-width: root.active ? 1px : 0px;
+    border-color: ThemePalette.border;
+    background: root.active ? ThemePalette.surface : (theme-ta.has-hover ? ThemePalette.surface-hover : transparent);
     animate background { duration: 120ms; }
     Image {
         source: root.icon;
-        width: 13px; height: 13px;
+        width: 15px; height: 15px;
         colorize: root.active ? ThemePalette.text : ThemePalette.text-3;
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    theme-ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
-// ── Fade-in wrapper (200ms on page change) ──
+// Lightweight page containers: no opacity layers or page-sized animations.
 component Fade inherits Rectangle {
     width: 100%;
     height: 100%;
     background: transparent;
-    property <bool> shown: false;
-    opacity: root.shown ? 1.0 : 0.0;
-    animate opacity { duration: 200ms; easing: ease-out; }
-    init => { root.shown = true; }
     @children
 }
 
-// ── Mode-switch transition: the incoming dashboard mode fades in while rising a
-//    few px into place. The `if` swap re-creates this on every switch, so `init`
-//    replays the animation each time (the outgoing mode is removed instantly).
+// The inactive dashboard is removed by the parent's conditional item.
 component ModeFade inherits Rectangle {
     background: transparent;
-    property <bool> shown: false;
     inner := Rectangle {
         width: 100%;
         height: 100%;
-        y: root.shown ? 0px : 12px;
-        opacity: root.shown ? 1.0 : 0.0;
-        animate y { duration: 280ms; easing: ease-out; }
-        animate opacity { duration: 220ms; easing: ease-out; }
         @children
     }
-    init => { root.shown = true; }
 }
 
 export component MainWindow inherits Window {
@@ -196,12 +183,49 @@ export component MainWindow inherits Window {
     // Windows toast notifications on bypass start/stop (Settings → Application).
     in-out property <bool> notifications: true;
 
+    // Telegram is independent of the core's busy/running state.
+    in-out property <bool> show_telegram_proxy: true;
+    in-out property <bool> telegram_autostart: false;
+    in-out property <bool> telegram_settings_open: false;
+    changed current_page => {
+        if (root.current_page != "telegram") { root.telegram_settings_open = false; }
+    }
+    in-out property <bool> telegram_running: false;
+    in-out property <bool> telegram_busy: false;
+    in-out property <string> telegram_error: "";
+    in-out property <string> telegram_port: "1443";
+    in-out property <string> telegram_secret: "";
+    in-out property <string> telegram_dc_overrides: "2:149.154.167.220 4:149.154.167.220";
+    in-out property <bool> telegram_fallback: true;
+    in-out property <string> telegram_timeout: "5";
+    in-out property <string> telegram_limit: "64";
+    in-out property <string> telegram_link: "";
+    changed show_telegram_proxy => {
+        if (!root.show_telegram_proxy) {
+            root.telegram_autostart = false;
+            root.telegram_settings_open = false;
+            if (root.current_page == "telegram") { root.current_page = "home"; }
+        }
+    }
+    callback telegram_start();
+    callback telegram_stop();
+    callback telegram_save(string, string, string, bool, string, string);
+    callback telegram_connect();
+    callback set_telegram_visible(bool);
+    callback set_telegram_autostart(bool);
+
     // ── Data ──
     in-out property <[StrategyItem]> strategies: [];
+    // Full catalog size; search only changes the visible strategies model.
+    in-out property <int> total_strategy_count: 0;
     in-out property <string> selected_strategy: "";
     in-out property <string> strategies_query: "";
     in-out property <[LogLineItem]> log_lines: [];
     in-out property <string> log_text: "";
+    // Keep log controls and the backend filter aligned across page navigation.
+    in-out property <string> logs_query: "";
+    in-out property <string> logs_level: "ALL";
+    in-out property <bool> logs_autoscroll: true;
 
     // ── Strategy tester ──
     in-out property <[TestResultItem]> test_results: [];
@@ -351,9 +375,15 @@ export component MainWindow inherits Window {
     function resolve_dark() -> bool {
         return root.theme == "light" ? false : (root.theme == "dark" ? true : root.system_is_dark);
     }
-    init => { ThemePalette.is-dark = root.resolve_dark(); }
-    changed theme => { ThemePalette.is-dark = root.resolve_dark(); }
-    changed system_is_dark => { ThemePalette.is-dark = root.resolve_dark(); }
+    function apply-theme() {
+        ThemePalette.is-dark = root.resolve_dark();
+        // Standard TextEdit/scrollbar widgets otherwise keep the OS palette,
+        // making log text unreadable when the app uses the opposite theme.
+        Palette.color-scheme = ThemePalette.is-dark ? ColorScheme.dark : ColorScheme.light;
+    }
+    init => { root.apply-theme(); }
+    changed theme => { root.apply-theme(); }
+    changed system_is_dark => { root.apply-theme(); }
 
     HorizontalLayout {
         width: 100%;
@@ -362,7 +392,7 @@ export component MainWindow inherits Window {
 
         // ════════ SIDEBAR ════════
         Rectangle {
-            width: 232px;
+            width: 224px;
             background: ThemePalette.bg-2;
             Rectangle { x: parent.width - 1px; width: 1px; background: ThemePalette.border; }
 
@@ -373,12 +403,18 @@ export component MainWindow inherits Window {
                     vertical-stretch: 0;
                     padding-left: 18px;
                     padding-right: 18px;
-                    padding-top: 20px;
-                    padding-bottom: 18px;
+                    padding-top: 24px;
+                    padding-bottom: 30px;
                     spacing: 12px;
                     VerticalLayout {
                         alignment: center;
-                        BrandMark { size: 22px; }
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            border-radius: ThemePalette.r-10;
+                            background: ThemePalette.accent;
+                            BrandMark { size: 27px; tint: ThemePalette.accent-ink; }
+                        }
                     }
                     VerticalLayout {
                         spacing: 4px;
@@ -386,7 +422,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: "zapret-ui";
                             font-family: ThemePalette.font-sans;
-                            font-size: ThemePalette.fs-14;
+                            font-size: ThemePalette.fs-16;
                             font-weight: 700;
                             color: ThemePalette.text;
                         }
@@ -395,7 +431,7 @@ export component MainWindow inherits Window {
                             font-family: ThemePalette.font-mono;
                             font-size: ThemePalette.fs-10;
                             color: ThemePalette.text-3;
-                            letter-spacing: 1.2px;
+                            letter-spacing: 1px;
                         }
                     }
                     Rectangle { }
@@ -404,18 +440,18 @@ export component MainWindow inherits Window {
                 // workspace section
                 VerticalLayout {
                     vertical-stretch: 0;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 1px;
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 5px;
                     Text {
                         text: I18n.t(I18n.lang, "nav.workspace");
                         font-family: ThemePalette.font-mono;
                         font-size: ThemePalette.fs-10;
                         color: ThemePalette.text-4;
-                        letter-spacing: 1.4px;
+                        letter-spacing: 1px;
                         // padding via a wrapper
                     }
-                    Rectangle { height: 6px; }
+                    Rectangle { height: 4px; }
                     NavItem {
                         label: I18n.t(I18n.lang, "nav.dashboard");
                         icon: @image-url("../assets/icons/home.svg");
@@ -464,14 +500,25 @@ export component MainWindow inherits Window {
                 // footer
                 VerticalLayout {
                     vertical-stretch: 0;
-                    padding: 12px;
-                    spacing: 8px;
+                    padding: 14px;
+                    spacing: 10px;
                     Rectangle { height: 1px; background: ThemePalette.border; }
                     Rectangle { height: 4px; }
 
+                    // Keep Telegram in the footer, just above the bypass status.
+                    if root.show_telegram_proxy : NavItem {
+                        label: I18n.t(I18n.lang, "telegram.title");
+                        icon: @image-url("../assets/icons/telegram.svg");
+                        branded: true;
+                        accent: ThemePalette.is-dark ? #67bfe9 : #1377a8;
+                        active: root.current_page == "telegram";
+                        attention: root.telegram_running;
+                        clicked => { root.current_page = "telegram"; }
+                    }
+
                     // status pill (click → refresh)
                     Rectangle {
-                        height: 40px;
+                        height: 44px;
                         border-radius: ThemePalette.r-8;
                         border-width: 1px;
                         border-color: ThemePalette.border;
@@ -508,7 +555,7 @@ export component MainWindow inherits Window {
                                 font-family: ThemePalette.font-sans;
                                 font-size: ThemePalette.fs-12;
                                 font-weight: 500;
-                                color: root.test_running ? ThemePalette.info : ThemePalette.text-2;
+                                color: root.test_running ? ThemePalette.info-text : ThemePalette.text-2;
                                 vertical-alignment: center;
                             }
                             // Variant chip — right-aligned, takes the slack and elides so long
@@ -531,14 +578,14 @@ export component MainWindow inherits Window {
 
                     // theme toggle
                     Rectangle {
-                        height: 32px;
+                        height: 38px;
                         border-radius: ThemePalette.r-8;
                         border-width: 1px;
                         border-color: ThemePalette.border;
-                        background: ThemePalette.surface;
+                        background: ThemePalette.surface-2;
                         HorizontalLayout {
-                            padding: 2px;
-                            spacing: 2px;
+                            padding: 3px;
+                            spacing: 3px;
                             // Order matches the Settings → Appearance segmented control.
                             ThemeToggleBtn {
                                 icon: @image-url("../assets/icons/moon.svg");
@@ -557,6 +604,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+
                 }
             }
         }
@@ -592,8 +640,8 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         vertical-stretch: 0;
                         alignment: center;
-                        padding-top: 18px;
-                        padding-bottom: 6px;
+                        padding-top: 24px;
+                        padding-bottom: 12px;
                         ModeToggle {
                             mode: root.ui_mode;
                             simple-label: I18n.t(I18n.lang, "mode.simple");
@@ -661,7 +709,7 @@ export component MainWindow inherits Window {
                     is_busy: root.is_busy;
                     pending_op: root.pending_op;
                     is_admin: root.is_admin;
-                    strategy_count: root.strategies.length;
+                    strategy_count: root.total_strategy_count;
                     app_version: root.app_version;
                     uptime: root.uptime;
                     game_filter <=> root.game_filter;
@@ -726,11 +774,36 @@ export component MainWindow inherits Window {
                     best_id: root.test_best_id;
                     selected_strategy: root.selected_item.id;
                     installed: root.status_installed;
-                    strategy_count: root.strategies.length;
+                    strategy_count: root.total_strategy_count;
                     start_clicked => { root.test_start_clicked(); }
                     cancel_clicked => { root.test_cancel_clicked(); }
                     use_strategy(id) => { root.test_use_strategy(id); }
                     toggle_favorite(id) => { root.toggle_favorite(id); }
+                }
+            }
+
+            if root.current_page == "telegram" && root.show_telegram_proxy : Fade {
+                TelegramPage {
+                    settings-open <=> root.telegram_settings_open;
+                    running: root.telegram_running;
+                    busy: root.telegram_busy;
+                    error: root.telegram_error;
+                    port: root.telegram_port;
+                    secret: root.telegram_secret;
+                    dc-overrides: root.telegram_dc_overrides;
+                    fallback: root.telegram_fallback;
+                    timeout: root.telegram_timeout;
+                    limit: root.telegram_limit;
+                    link: root.telegram_link;
+                    start-clicked => { root.telegram_busy = true; root.telegram_error = ""; root.telegram_start(); }
+                    stop-clicked => { root.telegram_busy = true; root.telegram_error = ""; root.telegram_stop(); }
+                    connect-clicked => { root.telegram_connect(); }
+                    copy-clicked => { root.copy_to_clipboard(root.telegram_link); }
+                    save-clicked(p, s, d, f, t, l) => {
+                        root.telegram_busy = true;
+                        root.telegram_error = "";
+                        root.telegram_save(p, s, d, f, t, l);
+                    }
                 }
             }
 
@@ -742,6 +815,10 @@ export component MainWindow inherits Window {
                     autoupdate_check <=> root.autoupdate_check;
                     minimize_to_tray <=> root.minimize_to_tray;
                     notifications <=> root.notifications;
+                    show_telegram_proxy <=> root.show_telegram_proxy;
+                    telegram_autostart <=> root.telegram_autostart;
+                    telegram_visibility_changed(v) => { root.set_telegram_visible(v); }
+                    telegram_autostart_changed(v) => { root.set_telegram_autostart(v); }
                     autoengage <=> root.autoengage;
                     compact <=> root.compact;
                     install_dir <=> root.install_dir;
@@ -794,6 +871,9 @@ export component MainWindow inherits Window {
                     height: 100%;
                     log_lines: root.log_lines;
                     log_text: root.log_text;
+                    query <=> root.logs_query;
+                    level <=> root.logs_level;
+                    autoscroll <=> root.logs_autoscroll;
                     open_file_clicked => { root.open_log_file_clicked(); }
                     clear_clicked => { root.logs_clear_clicked(); }
                     query_changed(g, l) => { root.logs_query_changed(g, l); }
@@ -820,7 +900,7 @@ export component MainWindow inherits Window {
     }
 
     // ── Hosts review modal (overlays everything when open) ──
-    HostsDialog {
+    if root.hosts_modal_open : HostsDialog {
         open: root.hosts_modal_open;
         content: root.hosts_content;
         hosts_path: root.hosts_path;

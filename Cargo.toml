@@ -1,6 +1,6 @@
 [package]
 name = "zapret-ui"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Native Windows and macOS GUI for Flowseal's zapret DPI-bypass cores."
 authors = ["meldxkviel"]
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 # Keep compiler and runtime aligned; native SystemTrayIcon shares Slint's
 # event loop without replacing its text-edit menu dispatcher.
 slint = { version = "=1.17.1", features = ["backend-winit", "renderer-skia", "unstable-winit-030"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time", "net"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 zip = "8"
 serde = { version = "1", features = ["derive"] }
@@ -33,13 +33,20 @@ async-trait = "0.1"
 sysinfo = "0.39"
 semver = "1"
 sha2 = "0.11"
+aes = "0.9"
+ctr = "0.10"
+getrandom = "0.4"
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 tempfile = "3"
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
 clipboard-win = "5"
-tauri-winrt-notification = "0.7"
+tauri-winrt-notification = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

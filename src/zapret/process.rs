@@ -132,7 +132,12 @@ impl Runner for ProcessRunner {
         // launch. That routine enables TCP timestamps; starting winws directly
         // without reproducing it can leave otherwise-valid strategies broken.
         if self.tcp_preflight {
-            crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+            if let Err(e) = crate::zapret::tcp::ensure_tcp_timestamps_enabled().await {
+                // Upstream warns on a failed netsh prerequisite but still starts
+                // winws. In particular, unelevated development builds cannot SET
+                // machine-wide TCP options.
+                tracing::warn!("TCP timestamps preflight failed; continuing process start: {e:#}");
+            }
         }
 
         let mut active_child = self.active_child.lock().await;
@@ -224,11 +229,10 @@ impl Runner for ProcessRunner {
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
-        let active_child_opt = self.active_child.lock().await.take();
-        *self.active_strategy_id.lock().await = None;
-        *self.active_started_at.lock().await = None;
-
-        if let Some(mut child) = active_child_opt {
+        // Retain the child and its metadata until termination is confirmed. If
+        // Stop is cancelled or killing fails, the next action can still own it.
+        let mut active_child = self.active_child.lock().await;
+        if let Some(child) = active_child.as_mut() {
             let pid = child.id();
             if let Some(pid) = pid {
                 #[cfg(windows)]
@@ -251,7 +255,9 @@ impl Runner for ProcessRunner {
                 }
                 _ => {
                     // Timeout or error, terminate it
-                    let _ = child.kill().await;
+                    child.kill().await.map_err(|e| {
+                        anyhow::anyhow!("Failed to terminate winws process {pid:?}: {e}")
+                    })?;
                 }
             }
         } else {
@@ -283,12 +289,30 @@ impl Runner for ProcessRunner {
                             }
                         }
                         tokio::time::sleep(Duration::from_millis(200)).await;
-                        let _ = process.kill();
+                        let killed = process.kill();
+                        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                        let mut confirmation = System::new();
+                        loop {
+                            confirmation
+                                .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[*pid]), true);
+                            if !confirmation.processes().contains_key(pid) {
+                                break;
+                            }
+                            if tokio::time::Instant::now() >= deadline {
+                                return Err(anyhow::anyhow!(
+                                    "Owned winws process {pid_val} did not terminate (kill accepted: {killed})"
+                                ));
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
                     }
                 }
             }
         }
 
+        active_child.take();
+        *self.active_strategy_id.lock().await = None;
+        *self.active_started_at.lock().await = None;
         Ok(())
     }
 
@@ -384,5 +408,49 @@ impl Runner for ProcessRunner {
             service_installed: false,
             uptime_secs,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::FutureExt;
+
+    #[tokio::test]
+    async fn cancelled_stop_keeps_the_child_handle_and_strategy_until_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = ProcessRunner::new(tmp.path().to_path_buf()).with_tcp_preflight(false);
+        let system_cmd = crate::zapret::paths::system_executable("cmd.exe").unwrap();
+        let powershell = system_cmd
+            .parent()
+            .unwrap()
+            .join("WindowsPowerShell/v1.0/powershell.exe");
+        let mut command = tokio::process::Command::new(powershell);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ]);
+        command.creation_flags(0x0800_0000 | 0x0000_0200);
+        command.kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let pid = child.id().unwrap();
+        *runner.active_child.lock().await = Some(child);
+        *runner.active_strategy_id.lock().await = Some("remembered".into());
+        *runner.active_started_at.lock().await = Some(Instant::now());
+
+        assert!(runner.stop().now_or_never().is_none());
+        let status = runner.detect_running().await;
+        assert_eq!(status.winws_pid, Some(pid));
+        assert_eq!(status.active_strategy.as_deref(), Some("remembered"));
+        timeout(Duration::from_secs(5), runner.stop())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            runner.detect_running().await.running_mode,
+            RunningMode::None
+        );
     }
 }

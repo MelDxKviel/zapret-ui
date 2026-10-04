@@ -1,6 +1,23 @@
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter, Registry};
 
+/// A burst of process output may overrun the UI channel. Resume at the oldest
+/// retained line after lag instead of permanently terminating the forwarder.
+pub async fn forward_logs(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    events: tokio::sync::broadcast::Sender<crate::contracts::UiEvent>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(line) => {
+                let _ = events.send(crate::contracts::UiEvent::LogLine(line));
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct UiWriter {
     file_writer: tracing_appender::non_blocking::NonBlocking,
@@ -76,4 +93,33 @@ pub fn log_dir() -> std::path::PathBuf {
     directories::BaseDirs::new()
         .map(|b| b.config_dir().join("zapret-ui/logs"))
         .unwrap_or_else(|| std::env::temp_dir().join("zapret-ui/logs"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_logs;
+    use crate::contracts::UiEvent;
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn log_forwarder_recovers_after_lag_and_closes_cleanly() {
+        let (logs, rx) = broadcast::channel(2);
+        let (events, mut received) = broadcast::channel(4);
+        for line in ["dropped", "retained 1", "retained 2"] {
+            logs.send(line.to_string()).unwrap();
+        }
+        let task = tokio::spawn(forward_logs(rx, events));
+        for expected in ["retained 1", "retained 2"] {
+            match received.recv().await.unwrap() {
+                UiEvent::LogLine(line) => assert_eq!(line, expected),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        logs.send("new output".into()).unwrap();
+        assert!(
+            matches!(received.recv().await.unwrap(), UiEvent::LogLine(line) if line == "new output")
+        );
+        drop(logs);
+        task.await.unwrap();
+    }
 }

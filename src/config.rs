@@ -73,6 +73,14 @@ impl Language {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default = "default_true")]
+    pub show_telegram_proxy: bool,
+    /// Start the Telegram proxy on app launch, independently of the core.
+    /// Older configs keep manual start; hiding Telegram also disables this.
+    #[serde(default)]
+    pub telegram_autostart: bool,
+    #[serde(default)]
+    pub telegram_proxy: crate::contracts::TelegramProxySettings,
     pub last_strategy: Option<String>,
     pub autostart: bool,
     pub autoupdate_check: bool,
@@ -129,6 +137,9 @@ pub fn default_install_dir() -> Option<PathBuf> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            show_telegram_proxy: true,
+            telegram_autostart: false,
+            telegram_proxy: crate::contracts::TelegramProxySettings::default(),
             last_strategy: None,
             autostart: false,
             autoupdate_check: true,
@@ -182,16 +193,25 @@ impl AppConfig {
             Ok(content) => match toml::from_str::<Self>(&content) {
                 Ok(config) => config,
                 Err(e) => {
+                    // TOML errors can print the offending source line, which
+                    // may contain a Telegram proxy secret. Log its location only.
                     tracing::error!(
-                            "Failed to parse config file: {}. Corrupted file will be backed up and replaced with defaults.",
-                            e
-                        );
+                        byte_span = ?e.span(),
+                        "Failed to parse config file. Corrupted file will be backed up and replaced with defaults."
+                    );
 
                     let mut backup_path = path.to_path_buf();
                     backup_path.set_extension("toml.bak");
 
                     if backup_path.exists() {
-                        let _ = std::fs::remove_file(&backup_path);
+                        if let Err(err) = std::fs::remove_file(&backup_path) {
+                            tracing::error!(
+                                "Failed to replace config backup at {:?}: {}. Preserving the original config.",
+                                backup_path,
+                                err
+                            );
+                            return Self::default();
+                        }
                     }
 
                     if let Err(err) = std::fs::rename(path, &backup_path) {
@@ -200,6 +220,9 @@ impl AppConfig {
                             backup_path,
                             err
                         );
+                        // Recovery must never overwrite the only copy of a
+                        // user's settings when the backup could not be created.
+                        return Self::default();
                     } else {
                         tracing::info!("Corrupted config backed up to {:?}", backup_path);
                     }

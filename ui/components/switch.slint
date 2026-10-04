@@ -1,26 +1,28 @@
 import { ThemePalette } from "../tokens.slint";
 
-// .switch — 36×20 track, 16×16 thumb, lime fill when on, 160ms ease-in-out.
+// Compact switch; motion only during a user toggle.
 export component AppSwitch inherits Rectangle {
     in-out property <bool> checked;
     in property <bool> enabled: true;
 
     callback toggled(bool);
 
-    width: 36px;
-    height: 20px;
+    width: 38px;
+    height: 22px;
     border-radius: ThemePalette.r-full;
-    background: root.checked ? ThemePalette.accent : ThemePalette.border-strong;
+    border-width: 1px;
+    border-color: root.checked ? ThemePalette.accent : ThemePalette.border-strong;
+    background: root.checked ? ThemePalette.accent : ThemePalette.surface-2;
     opacity: root.enabled ? 1.0 : 0.45;
     animate background { duration: 160ms; easing: ease-in-out; }
 
     Rectangle {
-        x: root.checked ? 18px : 2px;
-        y: 2px;
+        x: root.checked ? 19px : 3px;
+        y: 3px;
         width: 16px;
         height: 16px;
         border-radius: 8px;
-        background: root.checked ? ThemePalette.accent-ink : ThemePalette.surface;
+        background: root.checked ? ThemePalette.accent-ink : ThemePalette.text-3;
         animate x { duration: 160ms; easing: ease-in-out; }
         animate background { duration: 160ms; easing: ease-in-out; }
     }

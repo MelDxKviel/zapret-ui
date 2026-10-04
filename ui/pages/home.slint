@@ -7,8 +7,7 @@ import { Spinner } from "../components/spinner.slint";
 import { Segmented } from "../components/segmented.slint";
 import { ScrollView } from "std-widgets.slint";
 
-// ── Windows-service card: renders ONE of three states (absent / stopped /
-//    running) — see DESIGN.md "Service card — state machine".
+// Windows service keeps the same three operational states in a secondary card.
 component ServiceCard inherits Rectangle {
     in property <AppStatus> status;
     in property <bool> is_busy;
@@ -31,7 +30,7 @@ component ServiceCard inherits Rectangle {
     background: ThemePalette.surface;
     border-width: 1px;
     border-color: ThemePalette.border;
-    border-radius: ThemePalette.r-12;
+    border-radius: ThemePalette.r-16;
     clip: true;
     vertical-stretch: 0;
 
@@ -40,18 +39,17 @@ component ServiceCard inherits Rectangle {
 
         // card-head
         Rectangle {
-            height: 48px;
+            height: 52px;
             background: transparent;
             HorizontalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
+                padding-left: 20px;
+                padding-right: 20px;
                 Text {
                     text: I18n.t(I18n.lang, "service.header");
-                    font-family: ThemePalette.font-mono;
-                    font-size: ThemePalette.fs-12;
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-14;
                     font-weight: 600;
-                    color: ThemePalette.text-3;
-                    letter-spacing: 0.6px;
+                    color: ThemePalette.text;
                     vertical-alignment: center;
                 }
                 Rectangle { }
@@ -69,8 +67,8 @@ component ServiceCard inherits Rectangle {
                             : root.state == "stopped" ? I18n.t(I18n.lang, "service.installed_stopped")
                             : I18n.t(I18n.lang, "service.not_configured");
                         font-family: ThemePalette.font-mono;
-                        font-size: ThemePalette.fs-12;
-                        color: ThemePalette.text-2;
+                        font-size: ThemePalette.fs-11;
+                        color: root.state == "running" ? ThemePalette.accent-text : root.state == "stopped" ? ThemePalette.warning-text : ThemePalette.text-3;
                         vertical-alignment: center;
                     }
                 }
@@ -85,7 +83,7 @@ component ServiceCard inherits Rectangle {
 
         // card-body
         VerticalLayout {
-            padding: 18px;
+            padding: 20px;
             spacing: 14px;
             alignment: start;
 
@@ -102,7 +100,7 @@ component ServiceCard inherits Rectangle {
                     alignment: start;
                     AppButton {
                         text: I18n.t(I18n.lang, "service.install_btn");
-                        variant: "primary";
+                        variant: "default";
                         // Not gated on is_admin: the backend requests UAC on demand
                         // for service operations (one-shot elevated helper).
                         icon: @image-url("../../assets/icons/service.svg");
@@ -192,14 +190,17 @@ component Stat inherits Rectangle {
     horizontal-stretch: 1;
     background: transparent;
     VerticalLayout {
-        padding: 14px;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         spacing: 6px;
         alignment: center;
         Text {
             text: root.label;
             font-family: ThemePalette.font-mono;
             font-size: ThemePalette.fs-10;
-            color: ThemePalette.text-4;
+            color: ThemePalette.text-3;
             letter-spacing: 1px;
         }
         Text {
@@ -208,6 +209,7 @@ component Stat inherits Rectangle {
             font-size: ThemePalette.fs-14;
             font-weight: 500;
             color: root.value-color;
+            overflow: elide;
         }
     }
     if !root.last : Rectangle {
@@ -226,12 +228,12 @@ component ActionTile inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked();
     horizontal-stretch: 1;
-    height: 60px;
-    border-radius: ThemePalette.r-10;
+    height: 74px;
+    border-radius: ThemePalette.r-12;
     border-width: 1px;
-    border-color: root.highlight ? ThemePalette.accent-line : ThemePalette.border;
+    border-color: root.highlight ? ThemePalette.accent-border : ThemePalette.border;
     background: root.highlight
-        ? @linear-gradient(180deg, ThemePalette.accent-soft 0%, transparent 100%)
+        ? (ta.has-hover ? ThemePalette.surface-hover : ThemePalette.accent-surface)
         : (ta.has-hover ? ThemePalette.surface-hover : ThemePalette.surface);
     opacity: root.enabled ? 1.0 : 0.45;
     animate background, border-color { duration: 120ms; }
@@ -250,6 +252,8 @@ component ActionTile inherits Rectangle {
                     source: root.icon;
                     width: 16px;
                     height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                     colorize: root.highlight ? ThemePalette.accent-ink : ThemePalette.text-2;
                 }
             }
@@ -298,7 +302,7 @@ component DetailRow inherits Rectangle {
             horizontal-stretch: 0;
             font-family: ThemePalette.font-mono;
             font-size: ThemePalette.fs-11;
-            color: ThemePalette.text-4;
+            color: ThemePalette.text-3;
             letter-spacing: 0.8px;
             vertical-alignment: center;
         }
@@ -329,12 +333,12 @@ component FilterCard inherits Rectangle {
     background: ThemePalette.surface;
     border-width: 1px;
     border-color: ThemePalette.border;
-    border-radius: ThemePalette.r-12;
+    border-radius: ThemePalette.r-16;
     clip: true;
     vertical-stretch: 0;
     VerticalLayout {
-        padding: 16px;
-        spacing: 14px;
+        padding: 20px;
+        spacing: 16px;
         alignment: start;
         // header: icon badge + title / hint
         HorizontalLayout {
@@ -350,6 +354,8 @@ component FilterCard inherits Rectangle {
                         source: root.icon;
                         width: 16px;
                         height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                         colorize: ThemePalette.text-2;
                     }
                 }
@@ -361,7 +367,7 @@ component FilterCard inherits Rectangle {
                 Text {
                     text: root.title;
                     font-family: ThemePalette.font-sans;
-                    font-size: ThemePalette.fs-13;
+                    font-size: ThemePalette.fs-14;
                     font-weight: 600;
                     color: ThemePalette.text;
                 }
@@ -369,7 +375,7 @@ component FilterCard inherits Rectangle {
                     text: root.hint;
                     font-family: ThemePalette.font-sans;
                     font-size: ThemePalette.fs-12;
-                    color: ThemePalette.text-3;
+                    color: ThemePalette.text-2;
                     wrap: word-wrap;
                 }
             }
@@ -432,8 +438,8 @@ export component HomePage inherits Rectangle {
         : (root.running && root.status.running_mode == "WindowsService") ? I18n.t(I18n.lang, "home.state_service_active")
         : root.running ? I18n.t(I18n.lang, "home.state_active")
         : I18n.t(I18n.lang, "home.state_stopped");
-    property <color> state-color: !root.installed ? ThemePalette.danger
-        : root.running ? ThemePalette.accent : ThemePalette.text;
+    property <color> state-color: !root.installed ? ThemePalette.danger-text
+        : root.running ? ThemePalette.accent-text : ThemePalette.text;
     property <string> dot-variant: !root.installed ? "danger" : root.running ? "active" : "idle";
 
     // The blocked-IP list is in active use (loaded) and old enough to be worth
@@ -458,14 +464,15 @@ export component HomePage inherits Rectangle {
     sv := ScrollView {
         viewport-width: sv.visible-width;
         HorizontalLayout {
-            // left-aligned content column capped at 980px (matches .main-inner)
+            // The padding is included in the column width, including at the
+            // minimum window size.
             VerticalLayout {
                 horizontal-stretch: 0;
-                width: min(sv.visible-width - 64px, 980px);
-                padding-left: 32px;
-                padding-top: 28px;
-                padding-right: 32px;
-                padding-bottom: 60px;
+                width: min(sv.visible-width, 1040px);
+                padding-left: 28px;
+                padding-top: 20px;
+                padding-right: 28px;
+                padding-bottom: 36px;
                 spacing: 0px;
                 alignment: start;
 
@@ -475,12 +482,12 @@ export component HomePage inherits Rectangle {
                     spacing: 16px;
                     VerticalLayout {
                         horizontal-stretch: 1;
-                        spacing: 2px;
+                        spacing: 6px;
                         alignment: end;
                         Text {
                             text: I18n.t(I18n.lang, "home.title");
                             font-family: ThemePalette.font-sans;
-                            font-size: ThemePalette.fs-22;
+                            font-size: ThemePalette.fs-28;
                             font-weight: 600;
                             color: ThemePalette.text;
                         }
@@ -488,50 +495,43 @@ export component HomePage inherits Rectangle {
                             text: I18n.t(I18n.lang, "home.subtitle");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-13;
-                            color: ThemePalette.text-3;
+                            color: ThemePalette.text-2;
                             wrap: word-wrap;
                         }
                     }
                 }
 
-                // ── HERO ──
+                // ── STATUS + PRIMARY ACTION ──
                 Rectangle {
                     height: hero-content.preferred-height;
-                    background: @linear-gradient(180deg, ThemePalette.surface 0%, ThemePalette.bg-2 100%);
+                    background: ThemePalette.surface;
                     border-width: 1px;
-                    border-color: ThemePalette.border;
+                    border-color: root.running ? ThemePalette.accent-border : ThemePalette.border;
                     border-radius: ThemePalette.r-16;
-                    clip: true;
-
-                    // accent glow (radial fallback → top linear tint)
-                    Rectangle {
-                        y: 0;
-                        height: 50%;
-                        background: @linear-gradient(180deg, ThemePalette.accent-soft 0%, transparent 100%);
-                    }
 
                     hero-content := VerticalLayout {
-                        padding: 28px;
-                        spacing: 28px;
+                        padding: 24px;
+                        spacing: 20px;
 
-                        // hero-top
                         HorizontalLayout {
+                            spacing: 20px;
                             VerticalLayout {
-                                spacing: 6px;
-                                alignment: start;
+                                horizontal-stretch: 1;
+                                spacing: 8px;
+                                alignment: center;
                                 Text {
                                     text: I18n.t(I18n.lang, "home.bypass_status");
                                     font-family: ThemePalette.font-mono;
                                     font-size: ThemePalette.fs-10;
-                                    color: ThemePalette.text-4;
-                                    letter-spacing: 1.4px;
+                                    color: ThemePalette.text-3;
+                                    letter-spacing: 1px;
                                 }
                                 HorizontalLayout {
                                     spacing: 10px;
                                     alignment: start;
                                     VerticalLayout {
                                         alignment: center;
-                                        StatusDot { variant: root.dot-variant; dot-size: 10px; }
+                                        StatusDot { variant: root.dot-variant; dot-size: 9px; }
                                     }
                                     Text {
                                         text: root.state-label;
@@ -539,163 +539,30 @@ export component HomePage inherits Rectangle {
                                         font-size: ThemePalette.fs-28;
                                         font-weight: 600;
                                         color: root.state-color;
+                                        overflow: elide;
                                     }
                                 }
                             }
-                            Rectangle { }
                             VerticalLayout {
-                                spacing: 6px;
-                                alignment: start;
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: end;
-                                    Text {
-                                        text: I18n.t(I18n.lang, "home.mode");
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-10;
-                                        color: ThemePalette.text-4;
-                                        letter-spacing: 1px;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: !root.running ? "—" : root.status.running_mode == "WindowsService" ? I18n.t(I18n.lang, "home.mode_service") : I18n.t(I18n.lang, "home.mode_user");
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-12;
-                                        color: ThemePalette.text;
-                                    }
-                                }
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: end;
-                                    Text {
-                                        text: I18n.t(I18n.lang, "home.pid");
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-10;
-                                        color: ThemePalette.text-4;
-                                        letter-spacing: 1px;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: root.status.winws_pid > 0 ? "\{root.status.winws_pid}" : "—";
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-12;
-                                        color: ThemePalette.text;
-                                    }
-                                }
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: end;
-                                    Text {
-                                        text: I18n.t(I18n.lang, "home.uptime");
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-10;
-                                        color: ThemePalette.text-4;
-                                        letter-spacing: 1px;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: root.running ? root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s) : "—";
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-12;
-                                        color: ThemePalette.text;
-                                    }
-                                }
-                            }
-                        }
-
-                        // power-bar
-                        Rectangle {
-                            height: max(76px, pb.preferred-height);
-                            border-radius: ThemePalette.r-12;
-                            border-width: 1px;
-                            border-color: ThemePalette.border-strong;
-                            background: ThemePalette.bg-2;
-                            clip: true;
-
-                            pb := HorizontalLayout {
-                                // info column
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    padding-left: 20px;
-                                    padding-right: 20px;
-                                    padding-top: 14px;
-                                    padding-bottom: 14px;
-                                    spacing: 6px;
-                                    alignment: center;
-                                    Text {
-                                        text: root.running ? I18n.t(I18n.lang, "home.currently_running") : I18n.t(I18n.lang, "home.ready_to_engage");
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-10;
-                                        color: ThemePalette.text-3;
-                                        letter-spacing: 1.4px;
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 10px;
-                                        alignment: start;
-                                        Text {
-                                            text: root.has_strategy ? root.chosen_item.pretty : I18n.t(I18n.lang, "home.no_strategy");
-                                            font-family: ThemePalette.font-sans;
-                                            font-size: ThemePalette.fs-16;
-                                            font-weight: 600;
-                                            color: root.has_strategy ? ThemePalette.text : ThemePalette.text-3;
-                                            overflow: elide;
-                                            vertical-alignment: center;
-                                        }
-                                        if root.has_strategy && root.chosen_item.alt != "" : Rectangle {
-                                            horizontal-stretch: 0;
-                                            width: alt-txt.preferred-width + 12px;
-                                            height: 20px;
-                                            border-radius: ThemePalette.r-4;
-                                            background: ThemePalette.surface;
-                                            border-width: 1px;
-                                            border-color: ThemePalette.border;
-                                            alt-txt := Text {
-                                                text: root.chosen_item.alt;
-                                                font-family: ThemePalette.font-mono;
-                                                font-size: ThemePalette.fs-12;
-                                                color: ThemePalette.text-2;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-                                    Text {
-                                        text: !root.installed ? I18n.t(I18n.lang, "home.hint_install")
-                                            : !root.has_strategy ? I18n.t(I18n.lang, "home.hint_pick")
-                                            : root.running ? I18n.t(I18n.lang, "home.hint_stop")
-                                            : I18n.t(I18n.lang, "home.hint_engage");
-                                        font-family: ThemePalette.font-sans;
-                                        font-size: ThemePalette.fs-12;
-                                        color: ThemePalette.text-3;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                                // action button cell
+                                alignment: center;
                                 pwr := Rectangle {
+                                    width: 184px;
+                                    height: 54px;
                                     horizontal-stretch: 0;
-                                    width: 200px;
-                                    // Foreground (icon + label) colour, shared by both.
+                                    border-radius: ThemePalette.r-10;
                                     property <color> fg: root.transitioning ? (root.pending_op == "stop" ? #ffffff : ThemePalette.accent-ink)
-                                        : root.needs-install ? ThemePalette.accent-ink
-                                        : root.needs-strategy ? ThemePalette.accent-ink
+                                        : root.needs-install || root.needs-strategy ? ThemePalette.accent-ink
                                         : root.running ? #ffffff
-                                        : (root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-4);
+                                        : root.can-engage ? ThemePalette.accent-ink : ThemePalette.text-3;
                                     background: root.transitioning ? (root.pending_op == "stop" ? ThemePalette.danger : ThemePalette.accent)
-                                        : root.needs-install ? (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent)
-                                        : root.needs-strategy ? (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent)
                                         : root.running ? (pbta.has-hover ? ThemePalette.danger-hover : ThemePalette.danger)
-                                        : !root.can-engage ? ThemePalette.surface-2
-                                        : (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent);
-                                    // Mid-transition (or mid-install) the button mutes slightly so it reads as "working".
-                                    opacity: (root.transitioning || (root.needs-install && root.is_busy)) ? 0.78 : 1.0;
+                                        : root.needs-install || root.needs-strategy || root.can-engage ? (pbta.has-hover ? ThemePalette.accent-hover : ThemePalette.accent)
+                                        : ThemePalette.surface-2;
+                                    opacity: (root.transitioning || (root.needs-install && root.is_busy)) ? 0.8 : 1.0;
                                     animate background, opacity { duration: 120ms; }
-                                    Rectangle {
-                                        x: 0; width: 1px;
-                                        background: ThemePalette.border-strong;
-                                    }
                                     HorizontalLayout {
                                         alignment: center;
-                                        spacing: 12px;
+                                        spacing: 10px;
                                         if root.transitioning : Spinner {
                                             size: 18px;
                                             tint: pwr.fg;
@@ -715,9 +582,8 @@ export component HomePage inherits Rectangle {
                                                 : root.running ? I18n.t(I18n.lang, "home.btn_stop")
                                                 : I18n.t(I18n.lang, "home.btn_engage");
                                             font-family: ThemePalette.font-sans;
-                                            font-size: ThemePalette.fs-16;
+                                            font-size: ThemePalette.fs-13;
                                             font-weight: 600;
-                                            letter-spacing: 0.3px;
                                             color: pwr.fg;
                                             vertical-alignment: center;
                                         }
@@ -739,37 +605,108 @@ export component HomePage inherits Rectangle {
                             }
                         }
 
-                        // stats-strip
                         Rectangle {
-                            height: 64px;
-                            border-radius: ThemePalette.r-12;
-                            border-width: 1px;
-                            border-color: ThemePalette.border;
-                            background: ThemePalette.surface;
-                            clip: true;
-                            HorizontalLayout {
-                                Stat { label: I18n.t(I18n.lang, "home.stat_app"); value: root.app_version; }
-                                Stat {
-                                    label: I18n.t(I18n.lang, "home.stat_core");
-                                    value: root.installed ? root.status.installed_version : I18n.t(I18n.lang, "common.not_installed");
-                                    value-color: root.installed ? ThemePalette.text : ThemePalette.text-3;
+                            height: strategy-content.preferred-height;
+                            border-radius: ThemePalette.r-10;
+                            background: ThemePalette.surface-2;
+                            strategy-content := VerticalLayout {
+                                padding: 16px;
+                                spacing: 8px;
+                                Text {
+                                    text: root.running ? I18n.t(I18n.lang, "home.currently_running") : I18n.t(I18n.lang, "home.ready_to_engage");
+                                    font-family: ThemePalette.font-mono;
+                                    font-size: ThemePalette.fs-10;
+                                    color: ThemePalette.text-3;
+                                    letter-spacing: 0.7px;
                                 }
-                                Stat {
-                                    label: I18n.t(I18n.lang, "home.stat_latest");
-                                    value: (root.status.latest_version != "" ? root.status.latest_version : "—") + (root.has-update ? " ↑" : "");
-                                    value-color: root.has-update ? ThemePalette.accent : ThemePalette.text;
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 10px;
+                                    Text {
+                                        text: root.has_strategy ? root.chosen_item.pretty : I18n.t(I18n.lang, "home.no_strategy");
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-16;
+                                        font-weight: 600;
+                                        color: root.has_strategy ? ThemePalette.text : ThemePalette.text-2;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                    if root.has_strategy && root.chosen_item.alt != "" : Rectangle {
+                                        horizontal-stretch: 0;
+                                        width: alt-txt.preferred-width + 14px;
+                                        height: 22px;
+                                        border-radius: ThemePalette.r-6;
+                                        background: ThemePalette.surface;
+                                        border-width: 1px;
+                                        border-color: ThemePalette.border;
+                                        alt-txt := Text {
+                                            text: root.chosen_item.alt;
+                                            font-family: ThemePalette.font-mono;
+                                            font-size: ThemePalette.fs-11;
+                                            color: ThemePalette.text-2;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
                                 }
-                                Stat { label: I18n.t(I18n.lang, "home.stat_strategies"); value: "\{root.strategy_count}"; last: true; }
+                                Text {
+                                    text: !root.installed ? I18n.t(I18n.lang, "home.hint_install")
+                                        : !root.has_strategy ? I18n.t(I18n.lang, "home.hint_pick")
+                                        : root.running ? I18n.t(I18n.lang, "home.hint_stop")
+                                        : I18n.t(I18n.lang, "home.hint_engage");
+                                    font-family: ThemePalette.font-sans;
+                                    font-size: ThemePalette.fs-12;
+                                    color: ThemePalette.text-2;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            height: 52px;
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.uptime");
+                                value: root.running ? root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s) : "—";
+                            }
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.mode");
+                                value: !root.running ? "—" : root.status.running_mode == "WindowsService" ? I18n.t(I18n.lang, "home.mode_service") : I18n.t(I18n.lang, "home.mode_user");
+                            }
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.pid");
+                                value: root.status.winws_pid > 0 ? "\{root.status.winws_pid}" : "—";
+                                last: true;
                             }
                         }
                     }
                 }
 
+                Rectangle { height: 16px; }
+
+                // Version metadata is secondary to the bypass action.
+                Rectangle {
+                    height: 64px;
+                    background: transparent;
+                    HorizontalLayout {
+                        Stat { label: I18n.t(I18n.lang, "home.stat_app"); value: root.app_version; }
+                        Stat {
+                            label: I18n.t(I18n.lang, "home.stat_core");
+                            value: root.installed ? root.status.installed_version : I18n.t(I18n.lang, "common.not_installed");
+                            value-color: root.installed ? ThemePalette.text : ThemePalette.text-3;
+                        }
+                        Stat {
+                            label: I18n.t(I18n.lang, "home.stat_latest");
+                            value: (root.status.latest_version != "" ? root.status.latest_version : "—") + (root.has-update ? " ↑" : "");
+                            value-color: root.has-update ? ThemePalette.accent-text : ThemePalette.text;
+                        }
+                        Stat { label: I18n.t(I18n.lang, "home.stat_strategies"); value: "\{root.strategy_count}"; last: true; }
+                    }
+                }
                 Rectangle { height: 24px; }
 
                 // ── SERVICE + STRATEGY ROW ──
                 HorizontalLayout {
-                    spacing: 12px;
+                    spacing: 16px;
 
                     ServiceCard {
                         horizontal-stretch: 14;
@@ -791,30 +728,29 @@ export component HomePage inherits Rectangle {
                         background: ThemePalette.surface;
                         border-width: 1px;
                         border-color: ThemePalette.border;
-                        border-radius: ThemePalette.r-12;
+                        border-radius: ThemePalette.r-16;
                         clip: true;
                         vertical-stretch: 0;
                         VerticalLayout {
                             alignment: start;
                             Rectangle {
-                                height: 48px;
+                                height: 52px;
                                 HorizontalLayout {
-                                    padding-left: 16px;
-                                    padding-right: 16px;
+                                    padding-left: 20px;
+                                    padding-right: 20px;
                                     Text {
                                         text: I18n.t(I18n.lang, "home.strategy_detail");
-                                        font-family: ThemePalette.font-mono;
-                                        font-size: ThemePalette.fs-12;
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-14;
                                         font-weight: 600;
-                                        color: ThemePalette.text-3;
-                                        letter-spacing: 0.6px;
+                                        color: ThemePalette.text;
                                         vertical-alignment: center;
                                     }
                                 }
                                 Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
                             }
                             VerticalLayout {
-                                padding: 16px;
+                                padding: 20px;
                                 spacing: 0px;
                                 DetailRow { key: I18n.t(I18n.lang, "home.detail_profile"); value: root.has_strategy ? root.chosen_item.pretty : "—"; }
                                 DetailRow { key: I18n.t(I18n.lang, "home.detail_variant"); value: root.chosen_item.alt != "" ? root.chosen_item.alt : I18n.t(I18n.lang, "home.variant_default"); }
@@ -838,7 +774,7 @@ export component HomePage inherits Rectangle {
 
                 // ── DPI FILTERS (game filter + ipset, side by side) ──
                 HorizontalLayout {
-                    spacing: 12px;
+                    spacing: 16px;
 
                     // GameFilter is absent from the macOS core.
                     if !I18n.macos : FilterCard {
@@ -908,7 +844,7 @@ export component HomePage inherits Rectangle {
                                             ? @image-url("../../assets/icons/warning.svg")
                                             : @image-url("../../assets/icons/download.svg");
                                         size: 14px;
-                                        tint: root.ipset-stale ? ThemePalette.warning : ThemePalette.text-3;
+                                        tint: root.ipset-stale ? ThemePalette.warning-text : ThemePalette.text-3;
                                     }
                                 }
                                 Text {
@@ -919,8 +855,8 @@ export component HomePage inherits Rectangle {
                                         : I18n.t(I18n.lang, "home.ipset_update_hint");
                                     font-family: ThemePalette.font-sans;
                                     font-size: ThemePalette.fs-12;
-                                    color: root.ipset_msg != "" ? (root.ipset_ok ? ThemePalette.text-2 : ThemePalette.danger)
-                                        : root.ipset-stale ? ThemePalette.warning
+                                    color: root.ipset_msg != "" ? (root.ipset_ok ? ThemePalette.text-2 : ThemePalette.danger-text)
+                                        : root.ipset-stale ? ThemePalette.warning-text
                                         : ThemePalette.text-3;
                                     vertical-alignment: center;
                                     wrap: word-wrap;
@@ -971,7 +907,7 @@ export component HomePage inherits Rectangle {
                     ActionTile {
                         icon: @image-url("../../assets/icons/folder.svg");
                         title: I18n.t(I18n.lang, "home.open_folder");
-                        sub: "…AppData\\Roaming\\zapret-ui";
+                        sub: I18n.t(I18n.lang, "home.folder_path");
                         enabled: root.installed;
                         clicked => { root.open_folder_clicked(); }
                     }

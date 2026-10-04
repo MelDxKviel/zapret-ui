@@ -11,6 +11,26 @@ pub type TestProgressCb = Box<dyn Fn(u32, u32, &str) + Send + Sync>;
 /// Called as a download streams: `(bytes_so_far, total_bytes_if_known)`.
 pub type DownloadProgressCb = Box<dyn Fn(u64, Option<u64>) + Send + Sync>;
 
+pub type TelegramStatusCb =
+    std::sync::Arc<dyn Fn(crate::contracts::TelegramProxyStatus) + Send + Sync>;
+
+#[async_trait::async_trait]
+pub trait TelegramProxy: Send + Sync {
+    /// Validate and normalize settings; generate a secret only when requested.
+    fn prepare_settings(
+        &self,
+        settings: crate::contracts::TelegramProxySettings,
+    ) -> anyhow::Result<crate::contracts::TelegramProxySettings>;
+    async fn start(
+        &self,
+        settings: crate::contracts::TelegramProxySettings,
+        on_status: TelegramStatusCb,
+    ) -> anyhow::Result<()>;
+    /// Cancels and joins the listener and every connection before returning.
+    async fn stop(&self) -> anyhow::Result<()>;
+    async fn is_running(&self) -> bool;
+}
+
 #[async_trait::async_trait]
 pub trait Installer: Send + Sync {
     async fn is_installed(&self) -> bool;
@@ -27,7 +47,8 @@ pub trait Installer: Send + Sync {
 pub trait SelfUpdater: Send + Sync {
     /// The version this running binary was built as (e.g. `"v0.1.0"`).
     fn current_version(&self) -> String;
-    /// Resolve the latest published release tag (e.g. `"v0.2.0"`).
+    /// Resolve a newer release with ready assets (e.g. `"v0.2.0"`), or return
+    /// the current version when no downloadable update is available.
     async fn latest_version(&self) -> anyhow::Result<String>;
     /// Download the latest `zapret-ui.exe`, verify its checksum, and atomically
     /// replace the running binary on disk. Does **not** relaunch or exit — the
@@ -102,7 +123,8 @@ pub type TestResultCb = Box<dyn Fn(StrategyTestResult) + Send + Sync>;
 
 /// The in-app port of the `service.bat` SETTINGS / UPDATES menu items: the game
 /// filter, the ipset filter, and the ipset-list / hosts-file updaters. All
-/// operations act on files inside the install dir (no elevation required).
+/// Most operations act on files inside the install dir. Updating Windows hosts
+/// requires elevation and is handled through the one-shot elevated helper.
 #[async_trait::async_trait]
 pub trait Maintenance: Send + Sync {
     /// Read the current game-filter + ipset state from the install dir.
@@ -114,8 +136,8 @@ pub trait Maintenance: Send + Sync {
     /// Download the latest ipset list into `lists\ipset-all.txt`. Returns the
     /// number of entries loaded (the caller builds the localized message).
     async fn update_ipset_list(&self) -> anyhow::Result<usize>;
-    /// Download the repo hosts file and compare it to the system hosts file.
-    /// Returns the comparison plus the downloaded content for in-app review.
+    /// Download the repo hosts file and apply it to the system hosts file on
+    /// Windows, preserving unrelated entries and making a backup first.
     async fn update_hosts_file(&self) -> anyhow::Result<HostsCheck>;
     /// Close Discord (if running) and delete its `Cache`/`Code Cache`/`GPUCache`
     /// folders under `%appdata%\discord`. Returns what was closed/cleared.

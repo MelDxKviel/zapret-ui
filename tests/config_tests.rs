@@ -27,6 +27,37 @@ fn test_config_default() {
     assert!(config.favorites.is_empty());
     assert!(config.notifications_enabled);
     assert!(!config.autoengage);
+    assert!(config.show_telegram_proxy);
+    assert!(!config.telegram_autostart);
+    assert!(config.telegram_proxy.secret.is_empty());
+}
+
+#[test]
+fn telegram_settings_persist_and_old_configs_keep_defaults() {
+    let config = AppConfig {
+        show_telegram_proxy: false,
+        telegram_autostart: true,
+        telegram_proxy: contracts::TelegramProxySettings {
+            port: 2443,
+            secret: "00112233445566778899aabbccddeeff".into(),
+            tcp_fallback: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let text = toml::to_string(&config).unwrap();
+    assert_eq!(toml::from_str::<AppConfig>(&text).unwrap(), config);
+    let mut old = toml::Value::try_from(config).unwrap();
+    old.as_table_mut().unwrap().remove("telegram_proxy");
+    old.as_table_mut().unwrap().remove("show_telegram_proxy");
+    old.as_table_mut().unwrap().remove("telegram_autostart");
+    let loaded: AppConfig = old.try_into().unwrap();
+    assert!(loaded.show_telegram_proxy);
+    assert!(!loaded.telegram_autostart);
+    assert_eq!(
+        loaded.telegram_proxy,
+        contracts::TelegramProxySettings::default()
+    );
 }
 
 #[test]
@@ -115,4 +146,67 @@ async fn test_state_get_and_set_status() {
     assert_eq!(updated.running_mode, RunningMode::UserProcess);
     assert_eq!(updated.active_strategy, Some("discord_alt4".to_string()));
     assert_eq!(updated.winws_pid, Some(1234));
+}
+
+#[test]
+fn config_recovery_preserves_source_when_backup_is_unavailable() {
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let backup_path = dir.path().join("config.toml.bak");
+    let corrupt = "not a valid toml = [[{";
+    fs::write(&config_path, corrupt).unwrap();
+    // A directory at the backup destination cannot be removed as a file.
+    fs::create_dir(&backup_path).unwrap();
+
+    assert_eq!(
+        AppConfig::load_from_path(&config_path),
+        AppConfig::default()
+    );
+    assert_eq!(fs::read_to_string(config_path).unwrap(), corrupt);
+    assert!(backup_path.is_dir());
+}
+
+#[test]
+fn corrupt_config_diagnostics_do_not_log_proxy_secrets() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+    impl Write for LogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let secret = "00112233445566778899aabbccddeeff";
+    // An unterminated secret makes TOML's Display include the secret source line.
+    fs::write(
+        &config_path,
+        format!("[telegram_proxy]\nsecret = \"{secret}"),
+    )
+    .unwrap();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let sink = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_writer(move || LogWriter(sink.clone()))
+        .finish();
+    // A single global subscriber keeps callsite interest stable while the other
+    // config tests log concurrently; a thread-local subscriber can lose events
+    // when tracing rebuilds its interest cache on another test thread.
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    assert_eq!(
+        AppConfig::load_from_path(&config_path),
+        AppConfig::default()
+    );
+    let logs = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("Failed to parse config file"));
+    assert!(!logs.contains(secret));
 }

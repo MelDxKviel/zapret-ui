@@ -13,7 +13,7 @@ export component Segmented inherits Rectangle {
     in property <[SegmentOption]> options;
     in-out property <string> selected;
     in property <bool> enabled: true;
-    in property <length> seg-height: 26px;
+    in property <length> seg-height: 28px;
     in property <length> seg-pad: 12px;
     in property <length> seg-fs: ThemePalette.fs-12;
     in property <length> icon-size: 13px;
@@ -29,7 +29,7 @@ export component Segmented inherits Rectangle {
     border-radius: ThemePalette.r-8;
     border-width: 1px;
     border-color: ThemePalette.border;
-    background: ThemePalette.bg-2;
+    background: ThemePalette.surface-2;
     opacity: root.enabled ? 1.0 : 0.45;
 
     track := HorizontalLayout {
@@ -42,7 +42,9 @@ export component Segmented inherits Rectangle {
             width: seg-lay.preferred-width;
             height: root.seg-height;
             border-radius: ThemePalette.r-6;
-            background: seg.active ? ThemePalette.surface : transparent;
+            border-width: seg.active ? 1px : 0px;
+            border-color: ThemePalette.border;
+            background: seg.active ? ThemePalette.surface : (seg-ta.has-hover ? ThemePalette.surface-hover : transparent);
             animate background { duration: 120ms; easing: ease-out; }
 
             seg-lay := HorizontalLayout {
@@ -60,13 +62,13 @@ export component Segmented inherits Rectangle {
                     text: opt.label;
                     font-family: ThemePalette.font-sans;
                     font-size: root.seg-fs;
-                    font-weight: 500;
+                    font-weight: seg.active ? 600 : 500;
                     color: seg.active ? ThemePalette.text : ThemePalette.text-3;
                     vertical-alignment: center;
                 }
             }
 
-            TouchArea {
+            seg-ta := TouchArea {
                 enabled: root.enabled;
                 mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
                 clicked => {

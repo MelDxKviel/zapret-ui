@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────────────────────────────────
 //  zapret-ui · design tokens
-//  Names map 1:1 to the CSS custom properties in design/styles.css.
-//  oklch() values are sampled to sRGB hex (Slint cannot parse oklch).
+//  Flat, theme-aware surfaces. Accent fills and readable accent text are
+//  separate so the electric lime identity also works on white backgrounds.
 // ──────────────────────────────────────────────────────────────────────────
 
 export struct AppStatus {
@@ -55,54 +55,60 @@ export global ThemePalette {
 
     // ───────── Accent — electric lime (--accent family) ─────────
     // Shared ink; brighter base used for soft fills in both themes.
-    out property <color> accent-ink: #0f1401;            // text on accent fill
-    property <color> accent-bright: #bce426;             // oklch(0.86 0.20 122)
+    out property <color> accent-ink: #172008;
+    property <color> accent-bright: #bce426;
 
-    out property <color> accent:         is-dark ? #bce426 : #a3c900;
-    out property <color> accent-hover:   is-dark ? #c8f227 : #94b900;
-    out property <color> accent-pressed: is-dark ? #a4c900 : #86a800;
-    out property <color> accent-soft:    is-dark ? #bce42624 : #bce4262e;   // 0.14 / 0.18
-    out property <color> accent-line:    is-dark ? #bce42666 : #a3c90080;   // 0.40 / 0.50
+    out property <color> accent:         is-dark ? #bce426 : #b6d936;
+    out property <color> accent-hover:   is-dark ? #c9ed49 : #a8ce24;
+    out property <color> accent-pressed: is-dark ? #a8ce24 : #9cc01e;
+    out property <color> accent-text:    is-dark ? #c2e64a : #486314;
+    out property <color> accent-surface: is-dark ? #252d18 : #edf4d9;
+    out property <color> accent-border:  is-dark ? #46562b : #d1e0a8;
+    out property <color> accent-soft:    accent-surface;
+    out property <color> accent-line:    accent-border;
 
     // ───────── Status semantics ─────────
-    out property <color> danger:       #f4514f;          // oklch(0.66 0.20 25)
-    out property <color> danger-hover: #de3b3d;          // oklch(0.60 0.20 25)
-    out property <color> danger-soft:  #f4514f24;        // /0.14
-    out property <color> danger-line:  #f4514f73;        // /0.45
-    out property <color> warning:      #fab72a;          // oklch(0.82 0.16 80)
-    out property <color> warning-soft: #fab72a24;        // /0.14
-    out property <color> info:         #61afda;          // oklch(0.72 0.10 235)
-    out property <color> info-soft:    #61afda24;        // /0.14
+    out property <color> danger:       is-dark ? #f47978 : #c53e43;
+    out property <color> danger-hover: is-dark ? #fa9090 : #af3036;
+    out property <color> danger-text:  danger;
+    out property <color> danger-soft:  is-dark ? #342022 : #fff0f0;
+    out property <color> danger-line:  is-dark ? #704044 : #efc4c7;
+    out property <color> warning:      is-dark ? #ebbc5f : #9a6410;
+    out property <color> warning-text: warning;
+    out property <color> warning-soft: is-dark ? #30291b : #fff5df;
+    out property <color> info:         is-dark ? #7abce3 : #1b719e;
+    out property <color> info-text:    info;
+    out property <color> info-soft:    is-dark ? #1d2b34 : #eaf3fb;
 
     // ───────── DARK palette ─────────
-    property <color> dark-bg:            #0b0c0e;
-    property <color> dark-bg-2:          #07080a;
-    property <color> dark-surface:       #151618;
-    property <color> dark-surface-2:     #1d1e21;
-    property <color> dark-surface-hover: #202225;
-    property <color> dark-border:        #2a2b2e;
-    property <color> dark-border-strong: #3c3d41;
-    property <color> dark-divider:       #202225;
-    property <color> dark-text:          #f2f3f5;
-    property <color> dark-text-2:        #abacb0;
-    property <color> dark-text-3:        #727376;
-    property <color> dark-text-4:        #4c4d50;
-    property <color> dark-scroll-thumb:  #343539;
+    property <color> dark-bg:            #0d1013;
+    property <color> dark-bg-2:          #111519;
+    property <color> dark-surface:       #171c21;
+    property <color> dark-surface-2:     #1e252c;
+    property <color> dark-surface-hover: #252d35;
+    property <color> dark-border:        #2c343d;
+    property <color> dark-border-strong: #414d58;
+    property <color> dark-divider:       #282f37;
+    property <color> dark-text:          #f2f5f7;
+    property <color> dark-text-2:        #b8c1ca;
+    property <color> dark-text-3:        #909da9;
+    property <color> dark-text-4:        #788592;
+    property <color> dark-scroll-thumb:  #485561;
 
     // ───────── LIGHT palette ─────────
-    property <color> light-bg:            #fbfaf8;
-    property <color> light-bg-2:          #f6f5f3;
+    property <color> light-bg:            #f3f5f7;
+    property <color> light-bg-2:          #ffffff;
     property <color> light-surface:       #ffffff;
-    property <color> light-surface-2:     #f7f7f4;
-    property <color> light-surface-hover: #f2f2ef;
-    property <color> light-border:        #e5e4e1;
-    property <color> light-border-strong: #d2d1cd;
-    property <color> light-divider:       #eae9e6;
-    property <color> light-text:          #101115;
-    property <color> light-text-2:        #4e5053;
-    property <color> light-text-3:        #797a7d;
-    property <color> light-text-4:        #9d9ea2;
-    property <color> light-scroll-thumb:  #cbcac7;
+    property <color> light-surface-2:     #f0f3f6;
+    property <color> light-surface-hover: #eaf0f4;
+    property <color> light-border:        #dce2e8;
+    property <color> light-border-strong: #b9c5cf;
+    property <color> light-divider:       #e5eaf0;
+    property <color> light-text:          #18222c;
+    property <color> light-text-2:        #465564;
+    property <color> light-text-3:        #5e6d7b;
+    property <color> light-text-4:        #667582;
+    property <color> light-scroll-thumb:  #b7c4ce;
 
     // ───────── Active (theme-switched) ─────────
     out property <color> bg:            is-dark ? dark-bg : light-bg;
@@ -145,11 +151,11 @@ export global ThemePalette {
     // ───────── Radii ─────────
     out property <length> r-2: 2px;
     out property <length> r-4: 4px;
-    out property <length> r-6: 6px;
-    out property <length> r-8: 8px;
-    out property <length> r-10: 10px;
-    out property <length> r-12: 12px;
-    out property <length> r-16: 16px;
+    out property <length> r-6: 7px;
+    out property <length> r-8: 9px;
+    out property <length> r-10: 11px;
+    out property <length> r-12: 14px;
+    out property <length> r-16: 18px;
     out property <length> r-full: 999px;
 
     // ───────── Spacing (4px base) ─────────
