@@ -5,7 +5,6 @@ use crate::zapret::paths;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::header::USER_AGENT;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -23,15 +22,6 @@ const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 /// upstream project publishes no checksum; `github.rs` still resolves `main` to
 /// an immutable commit SHA before building the codeload URL.
 const EXPECTED_ARCHIVE_SHA256: Option<&str> = None;
-
-/// Lower-case hex encoding of a byte slice (avoids pulling in a hex crate).
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
 
 pub struct ZapretInstaller {
     pub install_dir: PathBuf,
@@ -86,71 +76,30 @@ impl ZapretInstaller {
             ));
         }
 
-        // 2. Downloading stage
-        on_progress(InstallStage::Downloading, 0, Some(asset.size));
+        // 2. Downloading stage. Unknown release size must remain indeterminate,
+        // rather than report a zero-byte download while the archive arrives.
+        let asset_size = (asset.size > 0).then_some(asset.size);
+        on_progress(InstallStage::Downloading, 0, asset_size);
         tracing::info!("Downloading zip from: {}", asset.browser_download_url);
-
-        let response = self
-            .github_client
-            .client
-            .get(&asset.browser_download_url)
-            .header(USER_AGENT, "zapret-ui-updater")
-            .send()
-            .await
-            .context("Failed to send download request to GitHub")?;
-
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Failed to download asset: HTTP {}",
-                response.status()
-            ));
-        }
-
-        let total_size = response.content_length().unwrap_or(asset.size);
-
-        // Ensure parent directory exists for temp_zip_path
         if let Some(parent) = temp_zip_path.parent() {
             std::fs::create_dir_all(parent)
                 .context("Failed to create parent directory for temp download file")?;
         }
-
-        let mut file = tokio::fs::File::create(temp_zip_path)
-            .await
-            .context("Failed to create temporary download file")?;
-
-        let mut downloaded: u64 = 0;
-        let mut hasher = Sha256::new();
-        let mut response = response; // make mutable to use chunk()
-
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .context("Error occurred while reading download stream")?
-        {
-            downloaded += chunk.len() as u64;
-            if downloaded > MAX_DOWNLOAD_BYTES {
-                return Err(anyhow::anyhow!(
-                    "Download aborted: archive exceeds the {} MB safety limit",
-                    MAX_DOWNLOAD_BYTES / (1024 * 1024)
-                ));
-            }
-            hasher.update(&chunk);
-            use tokio::io::AsyncWriteExt;
-            file.write_all(&chunk)
-                .await
-                .context("Failed to write download chunk to disk")?;
-            on_progress(InstallStage::Downloading, downloaded, Some(total_size));
-        }
-
-        use tokio::io::AsyncWriteExt;
-        file.flush()
-            .await
-            .context("Failed to flush temporary file after download")?;
-        drop(file);
+        let digest = crate::download::to_file(
+            self.github_client
+                .client
+                .get(&asset.browser_download_url)
+                .header(USER_AGENT, "zapret-ui-updater"),
+            temp_zip_path,
+            MAX_DOWNLOAD_BYTES,
+            |downloaded, total| {
+                on_progress(InstallStage::Downloading, downloaded, total.or(asset_size));
+            },
+        )
+        .await?;
 
         // Integrity: record the archive digest (auditable) and, when a hash is
         // pinned, refuse to install anything that doesn't match it.
-        let digest = to_hex(&hasher.finalize());
         tracing::info!("Downloaded archive SHA-256 = {digest}");
         if let Some(expected) = EXPECTED_ARCHIVE_SHA256 {
             if !expected.eq_ignore_ascii_case(&digest) {
@@ -545,11 +494,6 @@ impl Drop for InstallLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn to_hex_encodes_lowercase() {
-        assert_eq!(to_hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
-    }
 
     #[test]
     fn install_lock_is_exclusive_and_released_on_drop() {

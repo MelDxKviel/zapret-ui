@@ -39,8 +39,7 @@ impl GithubClient {
             return self.cache_path.clone();
         }
         // Fallback to default config directory
-        if let Some(base) = directories::BaseDirs::new() {
-            let cache_dir = base.config_dir().join("zapret-ui");
+        if let Some(cache_dir) = crate::app_dirs::root() {
             let name = if cfg!(target_os = "macos") {
                 "release_cache_macos.json"
             } else {

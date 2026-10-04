@@ -90,8 +90,8 @@ pub fn init_logging(
 }
 
 pub fn log_dir() -> std::path::PathBuf {
-    directories::BaseDirs::new()
-        .map(|b| b.config_dir().join("zapret-ui/logs"))
+    crate::app_dirs::root()
+        .map(|root| root.join("logs"))
         .unwrap_or_else(|| std::env::temp_dir().join("zapret-ui/logs"))
 }
 

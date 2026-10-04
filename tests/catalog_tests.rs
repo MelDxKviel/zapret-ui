@@ -1,16 +1,12 @@
-#[path = "../src/contracts.rs"]
-pub mod contracts;
-
-#[path = "../src/ports.rs"]
-pub mod ports;
-
-#[path = "../src/zapret/batparse.rs"]
-pub mod batparse;
+pub use zapret_ui::{contracts, ports};
+// Exercise the Windows preset format on both platforms, just as
+// macos_core_tests exercises the macOS TSV format on either host.
 #[path = "../src/zapret/catalog.rs"]
 pub mod catalog;
 
 pub mod zapret {
-    pub use crate::{batparse, catalog};
+    pub use crate::catalog;
+    pub use zapret_ui::zapret::batparse;
 }
 
 use ports::StrategyCatalog;

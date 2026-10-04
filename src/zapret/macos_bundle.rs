@@ -20,14 +20,11 @@ pub const DEFAULT_LISTS: [&str; 8] = [
 ];
 
 pub fn release_tag(atom: &str) -> Option<String> {
-    let rest = atom.split_once("/releases/tag/")?.1;
-    let tag = rest.split(['"', '<', '/', '\'', ' ', '\n', '\r']).next()?;
     // Tags become URL path components, never commands or local paths.
-    (!tag.is_empty()
-        && tag
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)))
-    .then(|| tag.to_owned())
+    crate::release_feed::tags(atom).into_iter().find(|tag| {
+        tag.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+    })
 }
 
 pub fn valid_strategy_id(id: &str) -> bool {
@@ -199,7 +196,7 @@ mod tests {
     #[test]
     fn release_feed_and_untrusted_identifiers() {
         assert_eq!(
-            release_tag("<link href=\"https://github.com/o/r/releases/tag/v1.1.2\"/>"),
+            release_tag("<feed><entry><link href=\"https://github.com/o/r/releases/tag/v1.1.2\"/></entry></feed>"),
             Some("v1.1.2".into())
         );
         assert_eq!(release_tag("/releases/tag/$(evil)"), None);
@@ -213,6 +210,21 @@ mod tests {
         ] {
             assert!(!valid_strategy_id(s));
         }
+    }
+
+    #[test]
+    fn core_release_uses_entry_links_and_skips_unsafe_tags() {
+        let feed = r#"<feed>
+            <title>Notes: /releases/tag/v9.9.9</title>
+            <entry><link href="https://github.com/o/r/releases/tag/$(evil)"/></entry>
+            <entry><link href="https://github.com/o/r/releases/tag/v1.1.2"/>
+              <content>See /releases/tag/v0.1.0</content></entry>
+            </feed>"#;
+        assert_eq!(release_tag(feed).as_deref(), Some("v1.1.2"));
+        assert_eq!(
+            release_tag("<feed><entry><title>v1.1.2</title></entry></feed>"),
+            None
+        );
     }
     #[test]
     fn quotes_both_interpreters_and_validates_upstream_path() {

@@ -1,17 +1,8 @@
-#[path = "../src/contracts.rs"]
-pub mod contracts;
-
-#[path = "../src/config.rs"]
-pub mod config;
-
-#[path = "../src/state.rs"]
-pub mod state;
-
-use config::{AppConfig, Language, Theme};
-use contracts::{RunningMode, RuntimeStatus};
-use state::AppState;
 use std::fs;
 use tempfile::tempdir;
+use zapret_ui::config::{AppConfig, Language, Theme};
+use zapret_ui::contracts::{self, RunningMode, RuntimeStatus};
+use zapret_ui::state::AppState;
 
 #[test]
 fn test_config_default() {

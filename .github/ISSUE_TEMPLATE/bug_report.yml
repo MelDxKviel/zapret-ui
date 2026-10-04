@@ -25,14 +25,30 @@ body:
       placeholder: v1.2.3
     validations:
       required: true
-  - type: input
-    id: windows-version
+  - type: dropdown
+    id: platform
     attributes:
-      label: Версия Windows
-      description: Например, Windows 11 24H2 (сборка 26100).
-      placeholder: Windows 11 24H2
+      label: Платформа
+      options:
+        - Windows x64
+        - macOS Apple Silicon
     validations:
       required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: Версия ОС
+      description: Полная версия ОС; для Mac также укажите модель процессора.
+      placeholder: Windows 11 24H2 (26100) / macOS 14.7, M2
+    validations:
+      required: true
+  - type: input
+    id: core-version
+    attributes:
+      label: Версия ядра
+      description: Указана в приложении; напишите «не установлено», если ядра ещё нет.
+    validations:
+      required: false
   - type: input
     id: isp
     attributes:
@@ -49,6 +65,8 @@ body:
       options:
         - Discord
         - YouTube
+        - Telegram proxy
+        - Интерфейс / установка / обновление
         - Другое (опишите ниже)
     validations:
       required: false
@@ -57,8 +75,11 @@ body:
     attributes:
       label: Режим запуска
       options:
-        - Процесс (START)
-        - Служба Windows (Run as service)
+        - Простой режим (автоподбор)
+        - Процесс Windows
+        - Служба Windows (SCM)
+        - Служба macOS (launchd)
+        - Только Telegram proxy
         - Не дошёл до запуска (ошибка раньше)
     validations:
       required: true
@@ -92,9 +113,11 @@ body:
     attributes:
       label: Логи
       description: |
-        Вкладка «Логи» в приложении или файл
-        %APPDATA%\zapret-ui\logs\app.log. Текст будет отформатирован как код —
-        обрамлять в ``` не нужно.
+        Вкладка «Логи» в приложении или файл:
+        Windows — %APPDATA%\zapret-ui\logs\app.log;
+        macOS — ~/Library/Application Support/zapret-ui/logs/app.log.
+        Удалите секреты и ссылки подключения Telegram перед отправкой.
+        Текст будет отформатирован как код — обрамлять в ``` не нужно.
       render: text
     validations:
       required: false

@@ -16,8 +16,7 @@ pub struct SingleInstance {
 }
 
 fn app_dir() -> Result<PathBuf, &'static str> {
-    let home = directories::BaseDirs::new().ok_or("Cannot resolve home directory")?;
-    Ok(home.config_dir().join("zapret-ui"))
+    crate::app_dirs::root().ok_or("Cannot resolve user data directory")
 }
 
 impl SingleInstance {

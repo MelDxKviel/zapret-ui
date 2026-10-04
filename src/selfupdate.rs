@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use reqwest::header::USER_AGENT;
-use sha2::{Digest, Sha256};
 
 use crate::ports::{DownloadProgressCb, SelfUpdater};
+use crate::release_feed::tags as parse_release_tags;
 
 /// Hard ceiling on the binary we will download (200 MB). The real exe is a few
 /// MB; this only fires on a corrupt/hostile server.
@@ -171,52 +171,15 @@ impl GithubSelfUpdater {
             self.owner, self.repo, tag
         );
         tracing::info!("Downloading {url}");
-        let response = self
-            .client
-            .get(&url)
-            .header(USER_AGENT, "zapret-ui-selfupdate")
-            .send()
-            .await
-            .context("Failed to send download request")?;
-        if !response.status().is_success() {
-            bail!(
-                "Failed to download {ASSET_NAME}: HTTP {}",
-                response.status()
-            );
-        }
-
-        let total = response.content_length();
-        let mut file = tokio::fs::File::create(dest)
-            .await
-            .context("Failed to create temporary download file")?;
-        let mut downloaded: u64 = 0;
-        let mut hasher = Sha256::new();
-        let mut response = response;
-        on_progress(0, total);
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .context("Error reading download stream")?
-        {
-            downloaded += chunk.len() as u64;
-            if downloaded > MAX_DOWNLOAD_BYTES {
-                bail!(
-                    "Download aborted: binary exceeds the {} MB safety limit",
-                    MAX_DOWNLOAD_BYTES / (1024 * 1024)
-                );
-            }
-            hasher.update(&chunk);
-            use tokio::io::AsyncWriteExt;
-            file.write_all(&chunk)
-                .await
-                .context("Failed to write download chunk")?;
-            on_progress(downloaded, total);
-        }
-        use tokio::io::AsyncWriteExt;
-        file.flush().await.context("Failed to flush download")?;
-        drop(file);
-
-        Ok(to_hex(&hasher.finalize()))
+        crate::download::to_file(
+            self.client
+                .get(&url)
+                .header(USER_AGENT, "zapret-ui-selfupdate"),
+            dest,
+            MAX_DOWNLOAD_BYTES,
+            on_progress,
+        )
+        .await
     }
 }
 
@@ -331,31 +294,6 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
     Some((owner, repo))
 }
 
-/// Read candidates in feed order. Only entry links identify releases; titles
-/// and release-note links can reference unrelated versions.
-fn parse_release_tags(atom: &str) -> Vec<String> {
-    atom.split("<entry>")
-        .skip(1)
-        .filter_map(|entry| {
-            let (entry, _) = entry.split_once("</entry>")?;
-            entry.split("<link ").skip(1).find_map(|link| {
-                let (link, _) = link.split_once('>')?;
-                let (_, href) = link.split_once("href=")?;
-                let quote = href.chars().next()?;
-                if quote != '"' && quote != '\'' {
-                    return None;
-                }
-                let href = href[1..].split(quote).next()?;
-                let (_, tag) = href.split_once("/releases/tag/")?;
-                if tag.is_empty() || tag.contains(['/', '?', '#']) {
-                    return None;
-                }
-                Some(tag.to_string())
-            })
-        })
-        .collect()
-}
-
 fn asset_is_missing(status: reqwest::StatusCode) -> bool {
     matches!(
         status,
@@ -368,15 +306,6 @@ fn parse_sha256(body: &str) -> Option<String> {
         .next()
         .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .map(str::to_string)
-}
-
-/// Lower-case hex encoding (avoids pulling in a hex crate; mirrors installer.rs).
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 #[cfg(test)]

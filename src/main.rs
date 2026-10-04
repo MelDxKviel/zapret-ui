@@ -3,29 +3,13 @@
 // visible while developing (`cargo run`).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-pub mod app;
-pub mod config;
-pub mod contracts;
-pub mod i18n;
-pub mod log;
-#[cfg_attr(target_os = "macos", path = "platform/macos/notify.rs")]
-pub mod notify;
-pub mod ports;
-pub mod selfupdate;
-#[cfg_attr(target_os = "macos", path = "platform/macos/single_instance.rs")]
-pub mod single_instance;
-pub mod state;
-pub mod telegram;
-pub mod tray;
-#[cfg_attr(target_os = "macos", path = "platform/macos/winenv.rs")]
-pub mod winenv;
 #[cfg(windows)]
-pub mod winicon;
-pub mod zapret;
+use zapret_ui::ports;
+use zapret_ui::{app, config, log, notify, selfupdate, single_instance, state, telegram, zapret};
 
-use crate::contracts::UiEvent;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use zapret_ui::contracts::UiEvent;
 
 #[cfg(windows)]
 #[derive(Default)]

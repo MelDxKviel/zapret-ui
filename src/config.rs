@@ -103,12 +103,12 @@ pub struct AppConfig {
     /// keeps older configs loadable.
     #[serde(default)]
     pub favorites: Vec<String>,
-    /// Show a Windows toast when the bypass starts or stops. Defaults to on;
+    /// Show a native notification when the bypass starts or stops. Defaults to on;
     /// `#[serde(default = ...)]` keeps older configs loadable (and defaulting to on).
     #[serde(default = "default_true")]
     pub notifications_enabled: bool,
-    /// Automatically start the last-used strategy as a user process when the app
-    /// launches. `#[serde(default)]` keeps older configs loadable.
+    /// Automatically start the last-used strategy when the app launches, using
+    /// the platform's runner. `#[serde(default)]` keeps older configs loadable.
     #[serde(default)]
     pub autoengage: bool,
     /// Dashboard presentation mode (simple one-button dial vs. full dashboard).
@@ -127,11 +127,11 @@ fn default_true() -> bool {
     true
 }
 
-/// The per-user default zapret install dir, `%APPDATA%\zapret-ui\zapret`.
+/// The default downloaded core directory inside the per-user GUI data root.
 /// `None` only if the OS user directories can't be resolved. Canonical home for
 /// the default-path logic that callers reach via [`AppConfig::install_dir`].
 pub fn default_install_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("zapret-ui").join("zapret"))
+    crate::app_dirs::root().map(|root| root.join("zapret"))
 }
 
 impl Default for AppConfig {
@@ -160,9 +160,8 @@ impl Default for AppConfig {
 impl AppConfig {
     /// The effective zapret install dir: the explicit `install_dir_override` if
     /// set, else the per-user default ([`default_install_dir`]). Falls back to an
-    /// empty path only if the OS user directories can't be resolved (effectively
-    /// never on Windows). Single source of truth for every caller that needs the
-    /// install dir (app.rs, main.rs).
+    /// empty path only if the OS user directories can't be resolved. Single
+    /// source of truth for every caller that needs the install dir.
     pub fn install_dir(&self) -> PathBuf {
         self.install_dir_override
             .clone()
@@ -170,11 +169,11 @@ impl AppConfig {
             .unwrap_or_default()
     }
 
-    /// Returns the default config path under `%APPDATA%\zapret-ui\config.toml`
+    /// Returns `config.toml` inside the platform's per-user GUI data root.
     pub fn default_config_path() -> anyhow::Result<PathBuf> {
-        let base_dirs = directories::BaseDirs::new()
+        let root = crate::app_dirs::root()
             .ok_or_else(|| anyhow::anyhow!("Failed to retrieve user directories"))?;
-        Ok(base_dirs.config_dir().join("zapret-ui").join("config.toml"))
+        Ok(root.join("config.toml"))
     }
 
     /// Loads the configuration from the specified path.

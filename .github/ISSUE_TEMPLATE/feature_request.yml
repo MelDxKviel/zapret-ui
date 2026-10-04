@@ -13,6 +13,16 @@ body:
       options:
         - label: Я поискал среди [существующих issue](https://github.com/MelDxKviel/zapret-ui/issues) и не нашёл похожего предложения
           required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Для каких платформ нужно улучшение?
+      options:
+        - Windows и macOS
+        - Только Windows (особенность ОС или ядра)
+        - Только macOS (особенность ОС или ядра)
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:

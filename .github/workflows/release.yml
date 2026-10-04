@@ -2,156 +2,208 @@ name: CI / Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main, master, 'codex/**']
+    tags: ['v*']
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [main, master]
+  workflow_dispatch:
 
-# Least privilege by default: checks only need read access. The release job
-# below opts into `contents: write` and only runs on tag pushes, so PR code
-# (which runs in `checks`) never has a write-scoped token.
+# Build jobs (including fork PRs) never receive a write-scoped token.
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref (but never cancel a tag release).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  checks:
-    name: Lint & Test
-    runs-on: windows-2022
-
+  version:
+    name: Resolve shared version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v7
-        with:
-          # PR code runs here; don't leave a usable git credential around for it.
-          persist-credentials: false
-          # Full history so build.rs `git describe` resolves a meaningful version.
-          fetch-depth: 0
-
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: pwsh
-        run: |
-          $channel = ([regex]'channel\s*=\s*"([^"]+)"').Match((Get-Content rust-toolchain.toml -Raw)).Groups[1].Value
-          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Pinned toolchain: $channel"
-
-      - name: Install Rust
-        # Install the exact toolchain named in rust-toolchain.toml (single source
-        # of truth) so clippy lands on the same toolchain cargo actually uses.
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          components: clippy
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-
-      - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Run Tests
-        run: cargo test --verbose
-
-      - name: Build Release Binary
-        run: cargo build --release --verbose
-
-  macos:
-    name: macOS Apple Silicon
-    uses: ./.github/workflows/macos.yml
-
-  release:
-    name: Publish Release
-    needs: [checks, macos]
-    runs-on: windows-2022
-    # Only tag pushes publish; this is the only job granted write access.
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
-
-      - name: Resolve version from tag
-        id: ver
-        shell: pwsh
+      - name: Resolve version once for both platforms
+        id: version
         run: |
-          $tag = "${{ github.ref_name }}"          # e.g. v1.2.3 or v1.2.3-rc.1
-          $version = $tag.TrimStart('v')
-          $prerelease = if ($version -match '-') { 'true' } else { 'false' }
-          "version=$version"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Releasing $tag (version=$version, prerelease=$prerelease)"
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
 
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: pwsh
-        run: |
-          $channel = ([regex]'channel\s*=\s*"([^"]+)"').Match((Get-Content rust-toolchain.toml -Raw)).Groups[1].Value
-          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Pinned toolchain: $channel"
+          prerelease = False
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              tag = os.environ['GITHUB_REF_NAME']
+              match = re.fullmatch(
+                  r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+                  r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?'
+                  r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', tag)
+              if not match:
+                  raise SystemExit(f'Release tag must be vMAJOR.MINOR.PATCH[-prerelease][+build]: {tag}')
+              prerelease = match.group(4) is not None
+              if prerelease and any(p.isdigit() and len(p) > 1 and p[0] == '0'
+                                    for p in match.group(4).split('.')):
+                  raise SystemExit('Numeric prerelease identifiers must not have leading zeroes')
+              version = tag[1:]
+          else:
+              version = subprocess.check_output(
+                  ['git', 'describe', '--tags', '--always', '--dirty'], text=True).strip().removeprefix('v')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'version={version}\nprerelease={str(prerelease).lower()}\n')
+          print(f'Both platforms will report v{version}')
+          PY
+      - name: Test release asset validation
+        run: python3 -m unittest discover -s scripts -p 'test_release_assets.py' -v
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+  build:
+    name: ${{ matrix.name }}
+    needs: version
+    strategy:
+      # Report regressions on both platforms even if one fails first.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact: zapret-ui-windows-x64
+          - name: macOS Apple Silicon
+            os: macos-15
+            target: aarch64-apple-darwin
+            artifact: zapret-ui-macos-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      ZAPRET_UI_VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v7
         with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-
-      - name: Build Release Binary
-        # build.rs stamps this into the binary + About page, so the shipped exe
-        # reports exactly the tag it was built from.
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned Rust and check components
+        run: |
+          rustup show
+          rustup component add clippy rustfmt
+          rustup target add "$BUILD_TARGET"
         env:
-          ZAPRET_UI_VERSION: ${{ steps.ver.outputs.version }}
-        run: cargo build --release --verbose
-
-      - name: Generate SHA-256 checksum
+          BUILD_TARGET: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked --target "$BUILD_TARGET"
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+      - name: Verify native Apple Silicon and a single menu dependency
+        if: runner.os == 'macOS'
+        run: |
+          test "$(uname -m)" = arm64
+          # Multiple muda versions duplicate Objective-C classes and break LTO.
+          cargo tree --frozen --target aarch64-apple-darwin --invert muda
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --frozen --all-targets --all-features --target "$BUILD_TARGET" -- -D warnings
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+      - name: Test without core installation or network changes
+        # Live Telegram tests stay ignored. Do not set ZAPRET_UI_RUN_SERVICE_TESTS:
+        # hosted Windows runners are elevated, but SCM mutation remains opt-in.
+        run: cargo test --frozen --all-targets --all-features --target "$BUILD_TARGET"
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --frozen --release --target "$BUILD_TARGET"
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+      - name: Package Windows executable
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = "target/release/zapret-ui.exe"
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  zapret-ui.exe" | Out-File -FilePath "target/release/zapret-ui.exe.sha256" -Encoding ascii
-          Write-Host "SHA256: $hash"
-
-      - name: Download verified macOS distribution
-        uses: actions/download-artifact@v4
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/zapret-ui.exe dist/zapret-ui.exe
+          $hash = (Get-FileHash dist/zapret-ui.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  zapret-ui.exe" | Set-Content dist/zapret-ui.exe.sha256 -Encoding ascii
+      - name: Package signed macOS app, ZIP and DMG
+        if: runner.os == 'macOS'
+        # Reuse the binary built above with this exact ZAPRET_UI_VERSION.
+        run: sh scripts/build-macos.sh --package-only
+      - name: Upload checked distribution
+        uses: actions/upload-artifact@v4
         with:
-          name: zapret-ui-macos-arm64
-          path: dist
-
-      - name: Upload assets to draft release
-        uses: softprops/action-gh-release@v3
-        with:
-          name: zapret-ui ${{ github.ref_name }}
-          # Keep both stable releases and prereleases hidden until every asset
-          # is uploaded, so the updater never sees an unfinished release.
-          draft: true
-          prerelease: ${{ steps.ver.outputs.prerelease }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            target/release/zapret-ui.exe
-            target/release/zapret-ui.exe.sha256
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/zapret-ui.exe
+            dist/zapret-ui.exe.sha256
             dist/zapret-ui-macos-arm64.zip
             dist/zapret-ui-macos-arm64.zip.sha256
             dist/zapret-ui-macos-arm64.dmg
             dist/zapret-ui-macos-arm64.dmg.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
+  release:
+    name: Publish complete Windows + macOS release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    # Manual runs validate/package only, even if a tag was selected in the UI.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download checked Windows distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: zapret-ui-windows-x64
+          path: dist
+      - name: Download checked macOS distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: zapret-ui-macos-arm64
+          path: dist
+      - name: Verify complete release and all SHA-256 checksums
+        run: python3 scripts/release_assets.py dist
+      - name: Create or resume draft
+        run: |
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft); then
+            if [ "$draft" != true ]; then
+              echo '::error::This tag already has a published release. Use a new version; published assets are never overwritten.'
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "zapret-ui $RELEASE_TAG" --generate-notes --prerelease="$PRERELEASE"
+          fi
+      - name: Upload both platforms to the draft
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
+      - name: Verify uploaded assets before publishing
+        run: |
+          uploaded=$(mktemp -d)
+          trap 'rm -rf "$uploaded"' EXIT
+          gh release download "$RELEASE_TAG" --dir "$uploaded"
+          python3 scripts/release_assets.py "$uploaded" --reference dist
       - name: Publish complete release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release edit "$env:RELEASE_TAG" --draft=false
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"
+      - name: Explain failure recovery
+        if: failure()
+        run: |
+          echo '::error::Publication did not report success. Check release status, then retry failed jobs for an unpublished draft. Published releases must not be overwritten; do not publish an incomplete draft manually.'

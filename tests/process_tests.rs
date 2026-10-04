@@ -1,19 +1,10 @@
 #![cfg(windows)]
 
-#[path = "../src/contracts.rs"]
-pub mod contracts;
-
-#[path = "../src/ports.rs"]
-pub mod ports;
-
-#[path = "../src/zapret/mod.rs"]
-pub mod zapret;
-
-use crate::contracts::{Category, RunningMode, Strategy};
-use crate::ports::{Runner, ServiceCtl};
-use crate::zapret::elevation::is_elevated;
-use crate::zapret::process::ProcessRunner;
-use crate::zapret::service::WindowsServiceCtl;
+use zapret_ui::contracts::{Category, RunningMode, Strategy};
+use zapret_ui::ports::{Runner, ServiceCtl};
+use zapret_ui::zapret::elevation::is_elevated;
+use zapret_ui::zapret::process::ProcessRunner;
+use zapret_ui::zapret::service::WindowsServiceCtl;
 
 /// `MakeWriter` that forwards every formatted tracing line into a channel, so
 /// the test can assert on what `ProcessRunner` logs (winws stdout/stderr go

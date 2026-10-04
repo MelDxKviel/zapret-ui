@@ -2,10 +2,10 @@
 
 use std::rc::Rc;
 
+use slint::ComponentHandle;
+use zapret_ui::app::{I18n, LogLineItem, MainWindow, StrategyItem, TestResultItem};
 use zapret_ui::contracts::*;
 use zapret_ui::ports::*;
-
-slint::include_modules!();
 
 // --- Mock implementations of all ports ---
 

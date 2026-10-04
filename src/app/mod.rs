@@ -614,7 +614,7 @@ impl App {
             let ui_weak = ui.as_weak();
             ui.on_app_update_clicked(move || {
                 if cfg!(target_os = "macos") {
-                    open_external("https://github.com/MelDxKviel/zapret-ui/releases");
+                    open_external(concat!(env!("CARGO_PKG_REPOSITORY"), "/releases"));
                     return;
                 }
                 if let Some(ui) = ui_weak.upgrade() {
@@ -630,7 +630,7 @@ impl App {
             let ui_weak = ui.as_weak();
             ui.on_app_check_update_clicked(move || {
                 if cfg!(target_os = "macos") {
-                    open_external("https://github.com/MelDxKviel/zapret-ui/releases");
+                    open_external(concat!(env!("CARGO_PKG_REPOSITORY"), "/releases"));
                     return;
                 }
                 if let Some(ui) = ui_weak.upgrade() {

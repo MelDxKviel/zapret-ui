@@ -3,9 +3,12 @@ contact_links:
   - name: 💬 Вопросы и обсуждения
     url: https://github.com/MelDxKviel/zapret-ui/discussions
     about: Вопросы по использованию, помощь с подбором стратегии и общее обсуждение — сюда, а не в issue.
-  - name: 🔧 Не помогает ни одна стратегия (проблема с ядром обхода)
+  - name: 🔧 Не помогает ядро Windows
     url: https://github.com/Flowseal/zapret-discord-youtube/issues
-    about: zapret-ui — лишь оболочка. Если ни один пресет не работает у вашего провайдера, проблема обычно в самом zapret — сообщайте в апстрим.
+    about: Если проблема воспроизводится в оригинальном Windows-ядре без zapret-ui, сообщите его авторам.
+  - name: 🔧 Не помогает ядро macOS
+    url: https://github.com/Flowseal/zapret-mac-discord-youtube/issues
+    about: Если проблема воспроизводится в оригинальном ZapretMac без zapret-ui, сообщите его авторам.
   - name: 🔒 Сообщить об уязвимости
     url: https://github.com/MelDxKviel/zapret-ui/security/advisories/new
     about: Уязвимости НЕ публикуйте в публичных issue — используйте приватные Security Advisories.
