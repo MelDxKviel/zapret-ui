@@ -22,7 +22,7 @@ fn main() {
     slint_build::compile("ui/main_window.slint").unwrap();
 
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
-        embed_windows_resources();
+        embed_windows_resources(&version);
     }
 }
 
@@ -34,7 +34,7 @@ fn main() {
 /// prompt on launch). Dev builds (`cargo run`, `cargo run --example ui_only`,
 /// tests) keep `asInvoker` so the mock-backed UI iteration workflow doesn't fire
 /// a UAC prompt on every launch.
-fn embed_windows_resources() {
+fn embed_windows_resources(version: &str) {
     let require_admin = std::env::var("PROFILE").as_deref() == Ok("release");
 
     // Single source of truth is `assets/app.manifest` (asInvoker); for release we
@@ -52,6 +52,14 @@ fn embed_windows_resources() {
     std::fs::write(&manifest_path, manifest).expect("write generated manifest");
 
     let mut res = winresource::WindowsResource::new();
+    // Explorer and installers must see the same release as About and the
+    // updater, rather than winresource's default Cargo package version.
+    let display_version = version.trim_start_matches('v');
+    let numeric_version = windows_numeric_version(display_version);
+    res.set("FileVersion", display_version);
+    res.set("ProductVersion", display_version);
+    res.set_version_info(winresource::VersionInfo::FILEVERSION, numeric_version);
+    res.set_version_info(winresource::VersionInfo::PRODUCTVERSION, numeric_version);
     res.set_icon("assets/icon.ico");
     res.set_manifest_file(
         manifest_path
@@ -59,6 +67,25 @@ fn embed_windows_resources() {
             .expect("manifest path is valid UTF-8"),
     );
     res.compile().expect("compile Windows resources");
+}
+
+/// Windows stores four u16 components. Keep prerelease/git suffixes in the
+/// string fields; use the Cargo version when a local build has only a Git SHA.
+fn windows_numeric_version(version: &str) -> u64 {
+    fn parse(version: &str) -> Option<u64> {
+        let core = version.trim_start_matches('v').split(['-', '+']).next()?;
+        let mut parts = core.split('.');
+        let major = parts.next()?.parse::<u16>().ok()?;
+        let minor = parts.next()?.parse::<u16>().ok()?;
+        let patch = parts.next()?.parse::<u16>().ok()?;
+        parts.next().is_none().then_some(
+            (u64::from(major) << 48) | (u64::from(minor) << 32) | (u64::from(patch) << 16),
+        )
+    }
+
+    parse(version)
+        .or_else(|| parse(env!("CARGO_PKG_VERSION")))
+        .expect("Cargo package version must fit Windows version fields")
 }
 
 /// `git describe --tags --always --dirty`, or `None` if git is unavailable

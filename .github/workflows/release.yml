@@ -130,8 +130,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $exe = Get-Item target/x86_64-pc-windows-msvc/release/zapret-ui.exe
+          $expectedVersion = $env:ZAPRET_UI_VERSION.TrimStart('v')
+          $info = $exe.VersionInfo
+          if ($info.FileVersion -ne $expectedVersion -or $info.ProductVersion -ne $expectedVersion) {
+            throw "EXE version differs from $expectedVersion : file=$($info.FileVersion), product=$($info.ProductVersion)"
+          }
+          $coreVersion = ($expectedVersion -split '[-+]')[0]
+          if ($coreVersion -notmatch '^\d+\.\d+\.\d+$' -or
+              @($coreVersion.Split('.') | Where-Object { [uint64]$_ -gt 65535 }).Count -gt 0) {
+            $coreVersion = ([regex]'(?m)^version = "([^"]+)"').Match((Get-Content Cargo.toml -Raw)).Groups[1].Value
+          }
+          $expectedNumeric = "$coreVersion.0"
+          $fileNumeric = "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart).$($info.FilePrivatePart)"
+          $productNumeric = "$($info.ProductMajorPart).$($info.ProductMinorPart).$($info.ProductBuildPart).$($info.ProductPrivatePart)"
+          if ($fileNumeric -ne $expectedNumeric -or $productNumeric -ne $expectedNumeric) {
+            throw "EXE numeric version differs from $expectedNumeric : file=$fileNumeric, product=$productNumeric"
+          }
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/zapret-ui.exe dist/zapret-ui.exe
+          Copy-Item $exe.FullName dist/zapret-ui.exe
           $hash = (Get-FileHash dist/zapret-ui.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  zapret-ui.exe" | Set-Content dist/zapret-ui.exe.sha256 -Encoding ascii
       - name: Package signed macOS app, ZIP and DMG
