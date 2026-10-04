@@ -284,6 +284,8 @@ export component MainWindow inherits Window {
     // Owned by the window (not the page) so it survives page navigation. Seeded
     // from the OS-reported `status_uptime` on every poll, ticked locally each second.
     in-out property <int> uptime: 0;
+    // The hidden menu-bar app has no clock to redraw. Resync when shown.
+    in-out property <bool> window_visible: true;
     changed status_uptime => { root.uptime = root.status_uptime; }
     changed running => {
         if (!root.running) { root.uptime = 0; }
@@ -292,7 +294,7 @@ export component MainWindow inherits Window {
     }
     Timer {
         interval: 1s;
-        running: root.running;
+        running: root.running && root.window_visible;
         triggered => { root.uptime += 1; }
     }
 

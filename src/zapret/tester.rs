@@ -356,14 +356,25 @@ impl StrategyTester for ConnectivityTester {
             if bok > 0 {
                 let strategy = &candidates[idx];
                 self.stop_for_test().await?;
-                if self.runner.start(strategy).await.is_ok() {
-                    tracing::info!(
-                        "Auto-engage fell back to best candidate: {} ({}/{})",
-                        strategy.id,
-                        bok,
-                        targets.len()
-                    );
-                    return Ok(AutoEngageOutcome::Engaged(strategy.id.clone()));
+                match self.runner.start(strategy).await {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Auto-engage fell back to best candidate: {} ({}/{})",
+                            strategy.id,
+                            bok,
+                            targets.len()
+                        );
+                        return Ok(AutoEngageOutcome::Engaged(strategy.id.clone()));
+                    }
+                    Err(e)
+                        if e.downcast_ref::<crate::contracts::AuthorizationCancelled>()
+                            .is_some() =>
+                    {
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to restart best candidate {}: {e:#}", strategy.id)
+                    }
                 }
             }
         }

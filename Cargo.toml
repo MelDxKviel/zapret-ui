@@ -15,9 +15,9 @@ path = "src/lib.rs"
 
 
 [dependencies]
-# 1.17 aligns native menus with tray-icon's muda 0.19, avoiding duplicate
-# Objective-C classes in macOS release builds with LTO enabled.
-slint = { version = "=1.17.1", features = ["backend-winit", "renderer-skia"] }
+# Keep compiler and runtime aligned; native SystemTrayIcon shares Slint's
+# event loop without replacing its text-edit menu dispatcher.
+slint = { version = "=1.17.1", features = ["backend-winit", "renderer-skia", "unstable-winit-030"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs", "io-util", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 zip = "8"
@@ -33,7 +33,6 @@ async-trait = "0.1"
 sysinfo = "0.39"
 semver = "1"
 sha2 = "0.11"
-tray-icon = "0.24"
 tempfile = "3"
 image = { version = "0.25", default-features = false, features = ["ico", "png"] }
 
@@ -41,6 +40,11 @@ image = { version = "0.25", default-features = false, features = ["ico", "png"] 
 windows-service = "0.8"
 clipboard-win = "5"
 tauri-winrt-notification = "0.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
 
 [build-dependencies]
 slint-build = "=1.17.1"

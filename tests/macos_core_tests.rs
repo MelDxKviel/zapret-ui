@@ -17,6 +17,13 @@ mod mac_catalog;
 fn fixture_payload(path: &std::path::Path) {
     for name in [
         "bin/utunws",
+        "bin/ACTIVE_DISCORD_UDP.bin",
+        "bin/quic_initial_www_google_com.bin",
+        "bin/stun.bin",
+        "bin/stun2.bin",
+        "bin/tls_clienthello_4pda_to.bin",
+        "bin/tls_clienthello_max_ru.bin",
+        "bin/tls_clienthello_www_google_com.bin",
         "install.sh",
         "run.sh",
         "stop.sh",
@@ -35,6 +42,100 @@ fn fixture_payload(path: &std::path::Path) {
         std::fs::write(file, "fixture").unwrap();
     }
     std::fs::create_dir_all(path.join("default-lists")).unwrap();
+    for name in macos_bundle::DEFAULT_LISTS {
+        std::fs::write(path.join("default-lists").join(name), "fixture").unwrap();
+    }
+}
+
+#[test]
+fn incomplete_core_is_rejected_before_replacing_the_installed_version() {
+    for missing in [
+        "default-lists/list-general-user.txt",
+        "default-lists/ipset-exclude-user.txt",
+        "bin/tls_clienthello_max_ru.bin",
+        "bin/stun2.bin",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let payload = temp.path().join("ZapretMac.app/Contents/Resources/Payload");
+        fixture_payload(&payload);
+        std::fs::remove_file(payload.join(missing)).unwrap();
+        assert!(!macos_bundle::valid_payload(&payload), "{missing}");
+        assert!(macos_bundle::promote_payload(temp.path()).is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_install_cleans_up_in_the_same_shell_and_keeps_its_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("core ' with spaces");
+    std::fs::create_dir(&source).unwrap();
+    let data = temp.path().join("user ' data");
+    let marker = source.join("cleaned");
+    std::fs::write(
+        source.join("stop.sh"),
+        format!(
+            "printf cleaned > {}\nexit 0\n",
+            macos_bundle::shell_quote(marker.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    for exit_code in [23, 0] {
+        let _ = std::fs::remove_file(&marker);
+        std::fs::write(
+            source.join("install.sh"),
+            format!(
+                "test \"$1\" = {} || exit 24\ntest \"$2\" = {} || exit 25\nexit {exit_code}\n",
+                macos_bundle::shell_quote(source.to_str().unwrap()),
+                macos_bundle::shell_quote(data.to_str().unwrap()),
+            ),
+        )
+        .unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", &macos_bundle::install_command(&source, &data)])
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(exit_code));
+        assert_eq!(marker.exists(), exit_code != 0);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn user_data_rejects_symlinks_without_overwriting_their_targets() {
+    use std::os::unix::fs::symlink;
+    for linked in [
+        "lists",
+        "lists/list-general-user.txt",
+        "selected-strategy",
+        "ipset-mode",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let payload = temp.path().join("payload");
+        fixture_payload(&payload);
+        let data = temp.path().join("data");
+        macos_bundle::initialize_user_data(&payload, &data).unwrap();
+        let link = data.join(linked);
+        let outside = temp.path().join("outside");
+        if link.is_dir() {
+            std::fs::remove_dir_all(&link).unwrap();
+            std::fs::create_dir(&outside).unwrap();
+        } else {
+            std::fs::remove_file(&link).unwrap();
+            std::fs::write(&outside, "leave untouched").unwrap();
+        }
+        symlink(&outside, &link).unwrap();
+        assert!(
+            macos_bundle::initialize_user_data(&payload, &data).is_err(),
+            "{linked}"
+        );
+        if outside.is_file() {
+            assert_eq!(
+                std::fs::read_to_string(&outside).unwrap(),
+                "leave untouched"
+            );
+        }
+    }
 }
 
 #[test]

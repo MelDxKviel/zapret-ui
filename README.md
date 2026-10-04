@@ -13,6 +13,7 @@ Discord, YouTube и другие сервисы снова работают — 
 ![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white)
 ![Slint](https://img.shields.io/badge/UI-Slint-2379F4)
 ![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D6?logo=windows&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-14%2B%20Apple%20Silicon-000000?logo=apple&logoColor=white)
 [![CI](https://github.com/meldxkviel/zapret-ui/actions/workflows/release.yml/badge.svg)](https://github.com/meldxkviel/zapret-ui/actions/workflows/release.yml)
 [![Release](https://img.shields.io/github/v/release/meldxkviel/zapret-ui?logo=github&logoColor=white&color=bce426)](https://github.com/meldxkviel/zapret-ui/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -27,7 +28,7 @@ Discord, YouTube и другие сервисы снова работают — 
 
 ## 💡 Что это
 
-**macOS 14+ / Apple Silicon:** ядро [Flowseal/zapret-mac-discord-youtube](https://github.com/Flowseal/zapret-mac-discord-youtube), сборка `.app`, запуск через launchd. [Инструкция по сборке и тестированию на Mac](docs/macos.md). Windows-инструкции ниже остаются без изменений; возможности платформ перечислены в инструкции macOS.
+**macOS 14+ / Apple Silicon:** ядро [Flowseal/zapret-mac-discord-youtube](https://github.com/Flowseal/zapret-mac-discord-youtube), отдельная нативная сборка `.app` в DMG/ZIP, запуск через launchd. [Установка, сборка и диагностика на Mac](docs/macos.md).
 
 Графическая оболочка на основе [`Flowseal/zapret-discord-youtube`](https://github.com/Flowseal/zapret-discord-youtube) — популярного инструмента обхода DPI. Приложение само скачивает zapret, разбирает его пресеты и запускает нужную стратегию одной кнопкой.
 
@@ -39,12 +40,14 @@ Discord, YouTube и другие сервисы снова работают — 
 | ⬇️ **Авто-загрузка zapret** | Скачивает дистрибутив прямо из приложения, если его ещё нет на ПК. |
 | 🎯 **Все стратегии из коробки** | Пресеты читаются из самого zapret (`general`, варианты `ALT`, `FAKE TLS`, `SIMPLE` и т.д.). |
 | 🧪 **Автоподбор стратегии** | Встроенный тест прогоняет пресеты по заблокированным сайтам и сам выбирает лучший. |
-| ▶️ **Процесс или служба** | Запуск кнопкой START или как служба Windows с автозапуском при загрузке. |
-| 🔄 **Обновления в один клик** | Проверка и установка свежих версий zapret и самого приложения. |
-| ⚙️ **Тонкая настройка** | Игровой фильтр, фильтр IP-списков, обновление IPSet и hosts. |
-| 📋 **Живые логи** | Вывод `winws.exe` в реальном времени, тёмная/светлая тема, RU/EN, сворачивание в трей. |
+| ▶️ **Запуск одной кнопкой** | Windows: процесс или системная служба. macOS: системная служба launchd, которая продолжает работать после выхода из GUI. |
+| 🔄 **Обновления** | Ядро обновляется из приложения на обеих платформах. GUI: автоматически на Windows, заменой `.app` на macOS. |
+| ⚙️ **Тонкая настройка** | IPSet и пользовательские списки; на Windows также игровой фильтр и hosts. |
+| 📋 **Логи и интерфейс** | Тёмная/светлая тема, RU/EN, журнал событий, трей Windows и строка меню macOS. |
 
 ## 🚀 Установка
+
+### Windows
 
 1. Скачайте **`zapret-ui.exe`** из раздела [**Releases**](https://github.com/meldxkviel/zapret-ui/releases/latest).
 2. Запустите. Установка не требуется — всё в одном файле.
@@ -52,11 +55,19 @@ Discord, YouTube и другие сервисы снова работают — 
 > [!WARNING]
 > При запуске Windows запросит права администратора (UAC) — это необходимо: обходу нужен драйвер WinDivert, а тесту стратегий и работе со службой нужны права.
 
+### macOS 14+ (M1 или новее)
+
+1. Скачайте **`zapret-ui-macos-arm64.dmg`** из [Releases](https://github.com/meldxkviel/zapret-ui/releases), если он есть в выбранном релизе.
+2. Откройте образ, перетащите **Zapret UI** в **Applications** и запустите оттуда. Доступен также ZIP с тем же `.app`.
+3. Установите ядро и запустите стратегию из интерфейса. Подтвердите системный запрос администратора.
+
+Сборка имеет локальную подпись, без нотарификации Apple. Если macOS блокирует первый запуск, разрешите его через **Системные настройки → Конфиденциальность и безопасность → Открыть всё равно**. [Подробная инструкция и сборка из исходников](docs/macos.md).
+
 ## 🕹️ Как пользоваться
 
 1. На вкладке **Home** нажмите **Install zapret** (если ещё не установлен).
 2. Откройте **Strategies** и нажмите **Select** на нужном пресете — либо запустите **тест** и дайте приложению подобрать лучший автоматически.
-3. Нажмите **START** (запуск как процесс) или **Run as service** (как служба, переживёт перезагрузку).
+3. Нажмите **START**. На Windows можно также выбрать **Run as service**; на macOS ядро всегда запускается через системную службу.
 4. Не заработало у вашего провайдера? Попробуйте следующий вариант `ALT` — у разных операторов помогают разные стратегии.
 
 ## ❓ Частые вопросы
@@ -75,7 +86,7 @@ Discord, YouTube и другие сервисы снова работают — 
 
 <br/>
 
-У многих провайдеров `api.github.com` сам заблокирован DPI. Поэтому версия берётся с `raw.githubusercontent.com`, а архив — с `codeload.github.com`: они доступны там, где API уже недоступен.
+У многих провайдеров `api.github.com` сам заблокирован DPI. Для Windows версия ядра берётся с `raw.githubusercontent.com`, архив — с `codeload.github.com`. На Mac используются Atom-лента релизов и готовый release-архив Flowseal; GitHub API также не нужен.
 
 </details>
 
@@ -84,7 +95,7 @@ Discord, YouTube и другие сервисы снова работают — 
 
 <br/>
 
-Конфиг и установленный zapret лежат в `%APPDATA%\zapret-ui\`, логи — в `%APPDATA%\zapret-ui\logs\`.
+На Windows конфиг и установленный zapret лежат в `%APPDATA%\zapret-ui\`, логи — в `%APPDATA%\zapret-ui\logs\`. На macOS настройки GUI — в `~/Library/Application Support/zapret-ui/`, пользовательские списки ядра — в `~/Library/Application Support/ZapretMac/`. [Все пути macOS](docs/macos.md#пути-и-диагностика).
 
 </details>
 
@@ -93,6 +104,7 @@ Discord, YouTube и другие сервисы снова работают — 
 zapret-ui — самостоятельная оболочка и **не входит в состав** перечисленных проектов; она лишь скачивает и запускает их на вашем компьютере. Все права на ядро обхода принадлежат их авторам:
 
 - [**Flowseal/zapret-discord-youtube**](https://github.com/Flowseal/zapret-discord-youtube) — готовые стратегии и сборка, которые запускает это приложение.
+- [**Flowseal/zapret-mac-discord-youtube**](https://github.com/Flowseal/zapret-mac-discord-youtube) — ядро `utunws`, стратегии и системные скрипты для macOS.
 - [**bol-van/zapret**](https://github.com/bol-van/zapret) — сам движок обхода DPI (`winws`).
 - [**basil00/WinDivert**](https://github.com/basil00/WinDivert) — драйвер перехвата пакетов.
 

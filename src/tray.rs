@@ -1,76 +1,103 @@
-use tray_icon::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
-    Icon, TrayIcon, TrayIconBuilder,
-};
+slint::slint! {
+    import { Palette } from "std-widgets.slint";
 
-/// Decode the bundled white monochrome tray icon (`assets/icon-tray.png`, 32×32
-/// RGBA) into a `tray_icon::Icon`. Embedded via `include_bytes!` so the single
-/// binary stays self-contained.
-fn tray_icon_image() -> anyhow::Result<Icon> {
-    const PNG: &[u8] = include_bytes!("../assets/icon-tray.png");
-    let img = image::load_from_memory_with_format(PNG, image::ImageFormat::Png)?.into_rgba8();
-    let (w, h) = (img.width(), img.height());
-    Ok(Icon::from_rgba(img.into_raw(), w, h)?)
+    export component NativeTray inherits SystemTrayIcon {
+        in property <image> light-icon;
+        in property <image> dark-icon;
+        in property <string> open-label;
+        in property <string> start-label;
+        in property <string> stop-label;
+        in property <string> settings-label;
+        in property <string> quit-label;
+
+        callback open();
+        callback start();
+        callback stop();
+        callback settings();
+        callback quit();
+
+        // The tray has its own native appearance, independent of the window's
+        // selected theme. Slint observes menu-bar appearance changes on macOS.
+        icon: Palette.color-scheme == ColorScheme.light ? root.dark-icon : root.light-icon;
+        tooltip: "Zapret UI";
+        clicked => { root.open(); }
+
+        Menu {
+            MenuItem { title: root.open-label; activated => { root.open(); } }
+            MenuSeparator {}
+            MenuItem { title: root.start-label; activated => { root.start(); } }
+            MenuItem { title: root.stop-label; activated => { root.stop(); } }
+            MenuSeparator {}
+            MenuItem { title: root.settings-label; activated => { root.settings(); } }
+            MenuSeparator {}
+            MenuItem { title: root.quit-label; activated => { root.quit(); } }
+        }
+    }
 }
 
-/// The system-tray icon plus the menu-item ids the app matches `MenuEvent`s
-/// against. Labels are localized once at construction from the saved language;
-/// the menu isn't rebuilt on a runtime language switch (it's created once).
+/// The native tray's lifetime and callbacks belong to the Slint UI thread.
+/// Keeping menu dispatch inside Slint also preserves TextEdit's Copy/Paste
+/// actions, which share the native-menu dispatcher on Windows and macOS.
 pub struct SystemTray {
-    _tray_icon: TrayIcon,
-    pub open_item_id: String,
-    pub start_item_id: String,
-    pub stop_item_id: String,
-    pub settings_item_id: String,
-    pub quit_item_id: String,
+    native: NativeTray,
 }
 
 impl SystemTray {
-    /// Build the tray icon. `lang` is an i18n language code (`"ru"`/`"en"`) used
-    /// to label the menu items. The menu only opens on right-click — left-click
-    /// is handled by the app to show the window (`with_menu_on_left_click(false)`).
+    /// Build the tray from the saved UI language. On macOS a click opens the
+    /// native menu; on Windows a left-click opens the window and a right-click
+    /// opens the menu. No polling or extra window is needed.
     pub fn new(lang: &str) -> anyhow::Result<Self> {
         use crate::i18n::tr;
 
-        let tray_menu = Menu::new();
-        let open_item = MenuItem::new(tr(lang, "tray.open"), true, None);
-        let start_item = MenuItem::new(tr(lang, "tray.start"), true, None);
-        let stop_item = MenuItem::new(tr(lang, "tray.stop"), true, None);
-        let settings_item = MenuItem::new(tr(lang, "tray.settings"), true, None);
-        let quit_item = MenuItem::new(tr(lang, "tray.quit"), true, None);
+        let native = NativeTray::new()?;
+        native.set_open_label(tr(lang, "tray.open").into());
+        native.set_start_label(tr(lang, "tray.start").into());
+        native.set_stop_label(tr(lang, "tray.stop").into());
+        native.set_settings_label(tr(lang, "tray.settings").into());
+        native.set_quit_label(tr(lang, "tray.quit").into());
 
-        let open_item_id = open_item.id().0.clone();
-        let start_item_id = start_item.id().0.clone();
-        let stop_item_id = stop_item.id().0.clone();
-        let settings_item_id = settings_item.id().0.clone();
-        let quit_item_id = quit_item.id().0.clone();
+        let mut pixels = image::load_from_memory_with_format(
+            include_bytes!("../assets/icon-tray.png"),
+            image::ImageFormat::Png,
+        )?
+        .into_rgba8();
+        let (width, height) = pixels.dimensions();
+        let light = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            pixels.as_raw(),
+            width,
+            height,
+        );
+        for pixel in pixels.pixels_mut() {
+            pixel.0[..3].fill(0);
+        }
+        let dark = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            pixels.as_raw(),
+            width,
+            height,
+        );
+        native.set_light_icon(slint::Image::from_rgba8(light));
+        native.set_dark_icon(slint::Image::from_rgba8(dark));
 
-        tray_menu.append(&open_item)?;
-        tray_menu.append(&PredefinedMenuItem::separator())?;
-        tray_menu.append(&start_item)?;
-        tray_menu.append(&stop_item)?;
-        tray_menu.append(&PredefinedMenuItem::separator())?;
-        tray_menu.append(&settings_item)?;
-        tray_menu.append(&PredefinedMenuItem::separator())?;
-        tray_menu.append(&quit_item)?;
+        Ok(Self { native })
+    }
 
-        let icon = tray_icon_image()?;
+    pub fn on_open(&self, callback: impl Fn() + 'static) {
+        self.native.on_open(callback);
+    }
 
-        let tray_icon = TrayIconBuilder::new()
-            .with_menu(Box::new(tray_menu))
-            .with_menu_on_left_click(false)
-            .with_tooltip("Zapret UI")
-            .with_icon(icon)
-            .with_icon_as_template(cfg!(target_os = "macos"))
-            .build()?;
+    pub fn on_start(&self, callback: impl Fn() + 'static) {
+        self.native.on_start(callback);
+    }
 
-        Ok(Self {
-            _tray_icon: tray_icon,
-            open_item_id,
-            start_item_id,
-            stop_item_id,
-            settings_item_id,
-            quit_item_id,
-        })
+    pub fn on_stop(&self, callback: impl Fn() + 'static) {
+        self.native.on_stop(callback);
+    }
+
+    pub fn on_settings(&self, callback: impl Fn() + 'static) {
+        self.native.on_settings(callback);
+    }
+
+    pub fn on_quit(&self, callback: impl Fn() + 'static) {
+        self.native.on_quit(callback);
     }
 }

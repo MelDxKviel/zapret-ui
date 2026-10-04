@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 static OPERATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const ENGINE_PATH: &str = "/Library/Application Support/ZapretMac/bin/utunws";
+const RECOVERY_FILES: [&str; 2] = [
+    "/var/run/zapret-macos.pf-token",
+    "/var/db/zapret-macos.keepinit",
+];
 
 pub struct ProcessRunner {
     install_dir: PathBuf,
@@ -44,30 +49,46 @@ pub fn registered() -> bool {
 }
 
 fn trusted_script(name: &str) -> Result<PathBuf> {
-    use std::os::unix::fs::MetadataExt;
     let root = Path::new(bundle::SERVICE_ROOT);
     let script = root.join(name);
-    for path in [root, script.as_path()] {
-        let m = std::fs::symlink_metadata(path)?;
-        if m.file_type().is_symlink() || m.uid() != 0 || m.mode() & 0o022 != 0 {
-            bail!(
-                "Refusing unprotected privileged core path: {}",
-                path.display()
-            );
-        }
-    }
+    protected_path(root, true)?;
+    protected_path(&script, false)?;
     Ok(script)
 }
 
+fn protected_path(path: &Path, directory: bool) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path)?;
+    if m.uid() != 0
+        || m.mode() & 0o022 != 0
+        || (directory && !m.is_dir())
+        || (!directory && !m.is_file())
+    {
+        bail!(
+            "Refusing unprotected privileged core path: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 fn check_service_owner() -> Result<()> {
-    if !registered() {
-        return Ok(());
+    // A leftover root or plist can exist before the first installation. Do not
+    // let upstream rsync/sed follow an untrusted link while running as root.
+    for (path, directory) in [(bundle::SERVICE_ROOT, true), (bundle::SERVICE_PLIST, false)] {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => protected_path(Path::new(path), directory)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
     }
-    let plist = std::fs::read_to_string(bundle::SERVICE_PLIST)?;
-    if !plist.contains("<string>/Library/Application Support/ZapretMac/run.sh</string>") {
-        bail!("The ZapretMac launchd label belongs to a different service");
+    if registered() {
+        let plist = std::fs::read_to_string(bundle::SERVICE_PLIST)?;
+        if !plist.contains("<string>/Library/Application Support/ZapretMac/run.sh</string>") {
+            bail!("The ZapretMac launchd label belongs to a different service");
+        }
+        trusted_script("stop.sh")?;
     }
-    trusted_script("stop.sh")?;
     Ok(())
 }
 
@@ -86,21 +107,47 @@ pub async fn engine_process() -> Option<(u32, u64)> {
         .find_map(|line| line.trim().strip_prefix("pid = "))?
         .parse()
         .ok()?;
-    tokio::task::spawn_blocking(move || {
-        let mut sys = sysinfo::System::new();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-        sys.processes().iter().find_map(|(pid, p)| {
-            (p.parent().map(|p| p.as_u32()) == Some(supervisor)
-                && p.exe()
-                    == Some(Path::new(
-                        "/Library/Application Support/ZapretMac/bin/utunws",
-                    )))
+    tokio::task::spawn_blocking(move || engine_child(supervisor, Path::new(ENGINE_PATH)))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn engine_child(supervisor: u32, executable: &Path) -> Option<(u32, u64)> {
+    use std::ffi::c_void;
+    unsafe extern "C" {
+        fn proc_listpids(kind: u32, typeinfo: u32, buffer: *mut c_void, size: i32) -> i32;
+    }
+    // PROC_PPID_ONLY (libproc.h/sys/proc_info.h) asks the kernel for children of
+    // this launchd supervisor. Avoid reading paths, CPU, memory and disk usage
+    // for every process on the Mac during the periodic status refresh.
+    let mut children = [0i32; 64];
+    let capacity = std::mem::size_of_val(&children);
+    // SAFETY: libproc writes at most capacity bytes to this initialized buffer.
+    let bytes =
+        unsafe { proc_listpids(6, supervisor, children.as_mut_ptr().cast(), capacity as i32) };
+    if bytes <= 0 || bytes as usize > capacity {
+        return None;
+    }
+    let pids = children[..bytes as usize / std::mem::size_of::<i32>()]
+        .iter()
+        .filter(|pid| **pid > 0)
+        .map(|pid| sysinfo::Pid::from_u32(*pid as u32))
+        .collect::<Vec<_>>();
+    if pids.is_empty() {
+        return None;
+    }
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&pids),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
+    );
+    sys.processes().iter().find_map(|(pid, p)| {
+        // Recheck the parent after lookup to reject a reused PID.
+        (p.parent().map(|p| p.as_u32()) == Some(supervisor) && p.exe() == Some(executable))
             .then(|| (pid.as_u32(), p.run_time()))
-        })
     })
-    .await
-    .ok()
-    .flatten()
 }
 
 async fn await_engine() -> Result<u32> {
@@ -153,15 +200,8 @@ pub async fn start_strategy(install: &Path, strategy: &Strategy) -> Result<u32> 
     // Reinstall on each explicit start: the protected copy and its lists must
     // match the downloaded release, including after a core update/user switch.
     let source = std::fs::canonicalize(install)?;
-    let q = |p: &Path| bundle::shell_quote(&p.to_string_lossy());
     let result = async {
-        privileged(&format!(
-            "/bin/sh {} {} {}",
-            q(&source.join("install.sh")),
-            q(&source),
-            q(&data)
-        ))
-        .await?;
+        privileged(&bundle::install_command(&source, &data)).await?;
         match await_engine().await {
             Ok(pid) => {
                 tracing::info!(target: "utunws", "Started {} (PID {pid})", strategy.display_name);
@@ -189,15 +229,14 @@ pub async fn stop_engine() -> Result<()> {
 }
 
 async fn stop_engine_unlocked() -> Result<()> {
-    if !registered() {
-        return Ok(());
-    }
     check_service_owner()?;
     let loaded = tokio::process::Command::new("/bin/launchctl")
         .args(["print", bundle::SERVICE_LABEL])
         .output()
         .await?;
-    if !loaded.status.success() {
+    // A crashed/unloaded daemon may still have the saved TCP value or PF
+    // enable token. stop.sh restores both even when launchctl has no job.
+    if !loaded.status.success() && !RECOVERY_FILES.iter().any(|path| Path::new(path).exists()) {
         return Ok(());
     }
     let script = trusted_script("stop.sh")?;
@@ -234,10 +273,6 @@ impl Runner for ProcessRunner {
         start_strategy(&self.install_dir, strategy).await
     }
     async fn stop(&self) -> Result<()> {
-        // Avoid authorization dialogs on an initial install/status-only operation.
-        if engine_process().await.is_none() && !registered() {
-            return Ok(());
-        }
         stop_engine().await
     }
     async fn detect_running(&self) -> RuntimeStatus {
@@ -260,5 +295,32 @@ impl Runner for ProcessRunner {
             service_installed: registered(),
             uptime_secs: process.map(|p| p.1),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_only_matching_child_without_network_or_privileges() {
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let child = Child(
+            std::process::Command::new("/bin/sleep")
+                .arg("30")
+                .spawn()
+                .unwrap(),
+        );
+        let parent = std::process::id();
+        let found = engine_child(parent, Path::new("/bin/sleep"));
+        assert_eq!(found.map(|p| p.0), Some(child.0.id()));
+        assert!(engine_child(parent, Path::new(ENGINE_PATH)).is_none());
+        assert!(engine_child(child.0.id(), Path::new("/bin/sleep")).is_none());
     }
 }

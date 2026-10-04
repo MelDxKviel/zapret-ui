@@ -1,17 +1,13 @@
 name: macOS Apple Silicon
 
 on:
+  workflow_call:
   push:
-    branches: [main, master, 'codex/macos-apple-silicon']
-  pull_request:
+    branches: ['codex/macos-*']
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: macos-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   macos:
@@ -39,11 +35,17 @@ jobs:
       - name: Test without elevation or network changes
         run: cargo test --locked
       - name: Build signed app bundle
-        run: sh scripts/build-macos.sh
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            export ZAPRET_UI_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          sh scripts/build-macos.sh
       - uses: actions/upload-artifact@v4
         with:
           name: zapret-ui-macos-arm64
           path: |
             dist/zapret-ui-macos-arm64.zip
             dist/zapret-ui-macos-arm64.zip.sha256
+            dist/zapret-ui-macos-arm64.dmg
+            dist/zapret-ui-macos-arm64.dmg.sha256
           if-no-files-found: error

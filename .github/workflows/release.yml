@@ -61,9 +61,13 @@ jobs:
       - name: Build Release Binary
         run: cargo build --release --verbose
 
+  macos:
+    name: macOS Apple Silicon
+    uses: ./.github/workflows/macos.yml
+
   release:
     name: Publish Release
-    needs: checks
+    needs: [checks, macos]
     runs-on: windows-2022
     # Only tag pushes publish; this is the only job granted write access.
     if: startsWith(github.ref, 'refs/tags/v')
@@ -119,6 +123,12 @@ jobs:
           "$hash  zapret-ui.exe" | Out-File -FilePath "target/release/zapret-ui.exe.sha256" -Encoding ascii
           Write-Host "SHA256: $hash"
 
+      - name: Download verified macOS distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: zapret-ui-macos-arm64
+          path: dist
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -129,5 +139,9 @@ jobs:
           files: |
             target/release/zapret-ui.exe
             target/release/zapret-ui.exe.sha256
+            dist/zapret-ui-macos-arm64.zip
+            dist/zapret-ui-macos-arm64.zip.sha256
+            dist/zapret-ui-macos-arm64.dmg
+            dist/zapret-ui-macos-arm64.dmg.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

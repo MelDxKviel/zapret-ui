@@ -31,9 +31,11 @@ unprivileged and offline; Windows SCM/process tests are platform-gated.
 Build on Apple Silicon with `sh scripts/build-macos.sh`; see `docs/macos.md`.
 App self-update is manual on Mac to preserve the signed `.app` bundle; core
 update remains supported. Keep translated `macos.*` overrides in both catalogs.
-Slint and slint-build are pinned together to 1.17.1 so Slint and tray-icon share
-muda 0.19. Multiple muda versions duplicate Objective-C classes and break macOS
-release LTO; verify the dependency tree when upgrading either GUI dependency.
+Slint and slint-build are pinned together to 1.17.1. The tray uses Slint's native
+`SystemTrayIcon`; keep menu dispatch within Slint. A separate tray-icon/muda
+event handler can consume Slint text-edit context-menu actions. Multiple muda
+versions also duplicate Objective-C classes and break macOS release LTO;
+verify the dependency tree when upgrading GUI dependencies.
 Keep `profile.release.build-override.strip = false`: macOS 27 can reject stripped
 proc-macro dylibs (Rust #157750), surfaced as E0463 during release compilation.
 
@@ -173,6 +175,11 @@ or the build breaks. `DESIGN.md` is the design spec the UI was ported from.
 `StatusDot` pulses only while `testing`. A permanent `active` pulse forced a
 full-window redraw every frame for the whole bypass session.
 
+The native tray/menu-bar wrapper lives in `src/tray.rs`. Tray callbacks run on
+the UI thread without polling. Do not replace Slint's global native-menu event
+handler: the Logs and hosts TextEdit context menus need it for Copy/Paste.
+The uptime timer stops while the main window is hidden and resyncs on reopening.
+
 ### i18n
 
 Every user-visible string is `I18n.t(I18n.lang, "some.key")`. `I18n` is the
@@ -208,10 +215,13 @@ and fires `set_language` to persist. `examples/ui_only.rs` must register
   broadcast that feeds the Logs page. Timestamps are local RFC 3339.
   The Logs page shows `HH:MM:SS` and shortens `zapret_ui::…::module:` to the
   last segment (`ui_models::parse_log_line`).
-- Single-instance: named mutex; a second launch focuses the existing window
-  (`src/single_instance.rs`).
+- Single-instance: named mutex on Windows (`src/single_instance.rs`), advisory
+  file lock and activation socket on macOS (`src/platform/macos/single_instance.rs`).
+  A second process launch focuses the existing window.
 - Tests under `tests/` `#[path = "../src/..."]` include listed modules rather
   than `use zapret_ui::...`. A test file compiles only what it lists.
   `process_tests.rs` includes `src/zapret/mod.rs` (the whole adapter tree).
-- CI (`.github/workflows/release.yml`) is `cargo test` + `cargo build --release`
-  on `windows-2022`. Tag `v*` publishes `zapret-ui.exe`.
+- CI (`.github/workflows/release.yml`) runs Windows checks on `windows-2022`
+  and reuses `macos.yml` for native Apple Silicon checks on `macos-15`.
+  Tag `v*` publishes `zapret-ui.exe`, macOS ARM64 ZIP/DMG, and their checksums
+  only after both platforms pass. Mac builds use an ad-hoc signature by default.

@@ -129,6 +129,7 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let ui = MainWindow::new()?;
+    ui.set_window_visible(true);
     ui.global::<I18n>().set_macos(cfg!(target_os = "macos"));
 
     // Window/taskbar icon, decoded from the bundled .ico.

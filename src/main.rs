@@ -177,8 +177,19 @@ fn write_elevated_result(result_file: &std::path::Path, nonce: &str, outcome: &a
     }
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        // Upstream PF explicitly excludes root traffic. Elevating the GUI
+        // would make its connectivity tests bypass the engine entirely.
+        if unsafe { geteuid() } == 0 {
+            anyhow::bail!("Run Zapret UI as your normal macOS user, without sudo. Core operations request administrator permission separately.");
+        }
+    }
     #[cfg(windows)]
     let args = parse_args();
 
@@ -250,8 +261,14 @@ async fn main() -> anyhow::Result<()> {
     // Forward log lines from log_rx to event_tx
     let event_tx_c = event_tx.clone();
     tokio::spawn(async move {
-        while let Ok(line) = log_rx.recv().await {
-            let _ = event_tx_c.send(UiEvent::LogLine(line));
+        loop {
+            match log_rx.recv().await {
+                Ok(line) => {
+                    let _ = event_tx_c.send(UiEvent::LogLine(line));
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
         }
     });
 

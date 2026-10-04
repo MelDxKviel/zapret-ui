@@ -17,6 +17,9 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 slint::include_modules!();
 
+#[cfg(target_os = "macos")]
+#[path = "../platform/macos/reopen.rs"]
+mod reopen;
 mod ui_models;
 #[cfg_attr(target_os = "macos", path = "macexec.rs")]
 mod winexec;
@@ -58,6 +61,17 @@ fn app_window_icon() -> Option<slint::Image> {
     let (w, h) = (img.width(), img.height());
     let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&img, w, h);
     Some(slint::Image::from_rgba8(buf))
+}
+
+/// Restore the same window from the tray, Dock or a second process launch.
+fn show_main_window(ui: &MainWindow, cmd_tx: &mpsc::Sender<BackendCmd>) {
+    ui.set_window_visible(true);
+    let _ = ui.show();
+    #[cfg(windows)]
+    crate::winicon::restore_and_focus_window("zapret-ui");
+    #[cfg(target_os = "macos")]
+    crate::winenv::focus_window(ui.window());
+    let _ = cmd_tx.try_send(BackendCmd::RefreshStatus);
 }
 
 /// Fire a bypass start/stop toast when the user has notifications enabled.
@@ -544,7 +558,7 @@ impl App {
             let ui_weak = ui.as_weak();
             ui.on_app_update_clicked(move || {
                 if cfg!(target_os = "macos") {
-                    open_external("https://github.com/MelDxKviel/zapret-ui/blob/codex/macos-apple-silicon/docs/macos.md");
+                    open_external("https://github.com/MelDxKviel/zapret-ui/releases");
                     return;
                 }
                 if let Some(ui) = ui_weak.upgrade() {
@@ -560,7 +574,7 @@ impl App {
             let ui_weak = ui.as_weak();
             ui.on_app_check_update_clicked(move || {
                 if cfg!(target_os = "macos") {
-                    open_external("https://github.com/MelDxKviel/zapret-ui/blob/codex/macos-apple-silicon/docs/macos.md");
+                    open_external("https://github.com/MelDxKviel/zapret-ui/releases");
                     return;
                 }
                 if let Some(ui) = ui_weak.upgrade() {
@@ -584,7 +598,19 @@ impl App {
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
+            #[cfg(target_os = "macos")]
+            let w = ui.as_weak();
             ui.on_service_start_clicked(move || {
+                // On Mac starting is also reinstalling the selected profile.
+                // Match the strategy shown in the card after changing selection.
+                #[cfg(target_os = "macos")]
+                if let Some(ui) = w.upgrade() {
+                    let id = ui.get_selected_item().id.to_string();
+                    if !id.is_empty() {
+                        dispatch(&cmd_tx_c, BackendCmd::Start(id));
+                        return;
+                    }
+                }
                 dispatch(&cmd_tx_c, BackendCmd::ServiceStart);
             });
         }
@@ -803,6 +829,7 @@ impl App {
                 .unwrap_or(false);
             if to_tray {
                 if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_window_visible(false);
                     let _ = ui.hide();
                 }
                 // Show the one-time "still running in the tray" toast (the backend
@@ -810,101 +837,99 @@ impl App {
                 let _ = cmd_tx_close.try_send(BackendCmd::MinimizedToTray);
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
-                std::process::exit(0);
+                let _ = slint::quit_event_loop();
+                slint::CloseRequestResponse::HideWindow
             }
         });
 
-        // Event listener task for Tray actions (use OS thread since SystemTray is not Send)
-        let ui_weak = ui.as_weak();
-        let open_id = tray.open_item_id.clone();
-        let start_id = tray.start_item_id.clone();
-        let stop_id = tray.stop_item_id.clone();
-        let settings_id = tray.settings_item_id.clone();
-        let quit_id = tray.quit_item_id.clone();
-        let cmd_tx_tray = self.cmd_tx.clone();
-        std::thread::spawn(move || {
-            // Re-show and raise the window on the UI thread. `ui.show()` alone
-            // re-creates a window hidden to the tray, but won't restore one the
-            // user minimized to the taskbar nor raise it above other windows —
-            // so we also force a Win32 restore + foreground.
-            let show_window = |w: slint::Weak<MainWindow>| {
+        // Slint's native tray delivers callbacks on the UI thread. It also
+        // preserves the backend's native text-editing menus (Copy/Paste etc.).
+        {
+            let w = ui.as_weak();
+            let cmd_tx = self.cmd_tx.clone();
+            tray.on_open(move || {
+                if let Some(ui) = w.upgrade() {
+                    show_main_window(&ui, &cmd_tx);
+                }
+            });
+        }
+        {
+            let w = ui.as_weak();
+            let cmd_tx = self.cmd_tx.clone();
+            tray.on_settings(move || {
+                if let Some(ui) = w.upgrade() {
+                    show_main_window(&ui, &cmd_tx);
+                    ui.set_current_page("settings".into());
+                }
+            });
+        }
+        {
+            let w = ui.as_weak();
+            let cmd_tx = self.cmd_tx.clone();
+            tray.on_start(move || {
+                if let Some(ui) = w.upgrade() {
+                    let mut id = ui.get_selected_item().id.to_string();
+                    if id.is_empty() {
+                        id = ui.get_active_item().id.to_string();
+                    }
+                    let command = if id.is_empty() {
+                        BackendCmd::AutoEngage
+                    } else {
+                        BackendCmd::Start(id)
+                    };
+                    let _ = cmd_tx.try_send(command);
+                }
+            });
+        }
+        {
+            let cmd_tx = self.cmd_tx.clone();
+            tray.on_stop(move || {
+                let _ = cmd_tx.try_send(BackendCmd::Stop);
+            });
+        }
+        tray.on_quit(|| {
+            let _ = slint::quit_event_loop();
+        });
+
+        #[cfg(target_os = "macos")]
+        {
+            let ui_weak = ui.as_weak();
+            let cmd_tx = self.cmd_tx.clone();
+            crate::single_instance::set_activation_handler(move || {
+                let w = ui_weak.clone();
+                let cmd_tx = cmd_tx.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = w.upgrade() {
-                        let _ = ui.show();
-                        #[cfg(windows)]
-                        crate::winicon::restore_and_focus_window("zapret-ui");
-                        #[cfg(target_os = "macos")]
-                        ui.window().set_minimized(false);
+                        show_main_window(&ui, &cmd_tx);
                     }
                 });
-            };
-            loop {
-                if let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-                    let event_id = event.id.0.clone();
-                    if event_id == open_id {
-                        show_window(ui_weak.clone());
-                    } else if event_id == settings_id {
-                        let w = ui_weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(ui) = w.upgrade() {
-                                let _ = ui.show();
-                                ui.set_current_page("settings".into());
-                            }
-                        });
-                    } else if event_id == start_id {
-                        // Engage the user's selected strategy (fall back to the
-                        // currently active one). Read the pick on the UI thread.
-                        let w = ui_weak.clone();
-                        let cmd_tx = cmd_tx_tray.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(ui) = w.upgrade() {
-                                let mut id = ui.get_selected_item().id.to_string();
-                                if id.is_empty() {
-                                    id = ui.get_active_item().id.to_string();
-                                }
-                                if !id.is_empty() {
-                                    let _ = cmd_tx.try_send(BackendCmd::Start(id));
-                                }
-                            }
-                        });
-                    } else if event_id == stop_id {
-                        let _ = cmd_tx_tray.try_send(BackendCmd::Stop);
-                    } else if event_id == quit_id {
-                        std::process::exit(0);
-                    }
-                }
+            });
+        }
 
-                // Left-click (button release) opens the app; a double-click does
-                // too (some users double-click out of habit, and Windows may emit
-                // only the DoubleClick for the second press). Right-click is
-                // reserved for the context menu, so other events are ignored.
-                match tray_icon::TrayIconEvent::receiver().try_recv() {
-                    Ok(tray_icon::TrayIconEvent::Click {
-                        button: tray_icon::MouseButton::Left,
-                        button_state: tray_icon::MouseButtonState::Up,
-                        ..
-                    })
-                    | Ok(tray_icon::TrayIconEvent::DoubleClick {
-                        button: tray_icon::MouseButton::Left,
-                        ..
-                    }) => {
-                        show_window(ui_weak.clone());
-                    }
-                    _ => {}
+        #[cfg(target_os = "macos")]
+        let _reopen = {
+            let w = ui.as_weak();
+            let cmd_tx = self.cmd_tx.clone();
+            reopen::install(move || {
+                if let Some(ui) = w.upgrade() {
+                    show_main_window(&ui, &cmd_tx);
                 }
-
-                // Tray events are human-speed input; a 200 ms poll keeps clicks
-                // responsive while cutting this background thread's wakeups 4x.
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-        });
+            })?
+        };
 
         // Listen to UiEvents and update Slint properties
         let ui_weak = ui.as_weak();
         let catalog = self.catalog.clone();
         let mut event_rx = self.event_tx.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = event_rx.recv().await {
+            loop {
+                let event = match event_rx.recv().await {
+                    Ok(event) => event,
+                    // A burst of engine/download logs must not permanently
+                    // disconnect the UI from subsequent status events.
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
                 let ui_weak = ui_weak.clone();
                 let catalog = catalog.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -1180,10 +1205,15 @@ impl App {
             let cmd_tx_c = self.cmd_tx.clone();
             tokio::spawn(async move {
                 loop {
-                    let _ = cmd_tx_c.try_send(BackendCmd::RefreshStatus);
                     // Commands already push immediate status updates. This poll is
                     // only a safety net for external process/service changes.
                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    if cmd_tx_c
+                        .try_send(BackendCmd::RefreshStatus)
+                        .is_err_and(|e| matches!(e, mpsc::error::TrySendError::Closed(_)))
+                    {
+                        break;
+                    }
                 }
             });
         }
@@ -1235,7 +1265,7 @@ impl App {
 
         // Show + `run_event_loop_until_quit` (instead of `ui.run()`) so hiding the
         // window to the tray doesn't quit the app when it's the last open window.
-        // The tray "Quit" item / close-without-tray path call `process::exit`.
+        // Quit exits the event loop so the tray, instance lock and logs are flushed.
         ui.show()?;
         slint::run_event_loop_until_quit()?;
         Ok(())
@@ -1495,6 +1525,15 @@ impl App {
                                         });
                                     }
                                     Err(e) => {
+                                        if e.downcast_ref::<crate::contracts::AuthorizationCancelled>().is_some() {
+                                            // Cancelling permission is not a failed strategy.
+                                            // Keep the remembered choice and end this click
+                                            // instead of opening another password dialog.
+                                            let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                                            let _ = event_tx.send(UiEvent::AutoEngageFailed);
+                                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                            continue;
+                                        }
                                         // Couldn't start the remembered one — forget it
                                         // and fall through to a full scan.
                                         tracing::warn!("Fast-engage start failed for {id}: {e:#}");
@@ -1644,6 +1683,7 @@ impl App {
                             // A user-process bypass holds the WinDivert driver, which
                             // would make the service's own winws.exe fail to start.
                             // Stop it first so the service can take over cleanly.
+                            #[cfg(windows)]
                             if let Err(e) = runner.stop().await {
                                 let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
                                 continue;
@@ -1707,7 +1747,11 @@ impl App {
                     BackendCmd::ServiceStart => {
                         // Release the WinDivert driver from any user-process bypass so
                         // the service's winws.exe isn't blocked from starting.
-                        let _ = runner.stop().await;
+                        #[cfg(windows)]
+                        if let Err(e) = runner.stop().await {
+                            let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                            continue;
+                        }
                         match service_ctl.start().await {
                             Ok(_) => {
                                 notify_bypass(&config, &notified_running, true, None).await;

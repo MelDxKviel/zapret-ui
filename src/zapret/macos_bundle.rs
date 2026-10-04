@@ -8,6 +8,17 @@ pub const SERVICE_ROOT: &str = "/Library/Application Support/ZapretMac";
 pub const SERVICE_PLIST: &str = "/Library/LaunchDaemons/io.github.flowseal.zapretmac.plist";
 pub const SERVICE_LABEL: &str = "system/io.github.flowseal.zapretmac";
 
+pub const DEFAULT_LISTS: [&str; 8] = [
+    "list-general.txt",
+    "list-general-user.txt",
+    "list-google.txt",
+    "list-exclude.txt",
+    "list-exclude-user.txt",
+    "ipset-all.txt",
+    "ipset-exclude.txt",
+    "ipset-exclude-user.txt",
+];
+
 pub fn release_tag(atom: &str) -> Option<String> {
     let rest = atom.split_once("/releases/tag/")?.1;
     let tag = rest.split(['"', '<', '/', '\'', ' ', '\n', '\r']).next()?;
@@ -33,6 +44,13 @@ pub fn valid_strategy_id(id: &str) -> bool {
 pub fn valid_payload(path: &Path) -> bool {
     [
         "bin/utunws",
+        "bin/ACTIVE_DISCORD_UDP.bin",
+        "bin/quic_initial_www_google_com.bin",
+        "bin/stun.bin",
+        "bin/stun2.bin",
+        "bin/tls_clienthello_4pda_to.bin",
+        "bin/tls_clienthello_max_ru.bin",
+        "bin/tls_clienthello_www_google_com.bin",
         "install.sh",
         "run.sh",
         "stop.sh",
@@ -47,8 +65,17 @@ pub fn valid_payload(path: &Path) -> bool {
         "ipset-any.txt",
     ]
     .iter()
-    .all(|p| path.join(p).is_file())
-        && path.join("default-lists").is_dir()
+    .all(|p| regular_file(&path.join(p)))
+        && ["", "bin", "strategies", "default-lists"]
+            .iter()
+            .all(|dir| std::fs::symlink_metadata(path.join(dir)).is_ok_and(|m| m.is_dir()))
+        && DEFAULT_LISTS
+            .iter()
+            .all(|name| regular_file(&path.join("default-lists").join(name)))
+}
+
+fn regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// Ignore the GUI and __MACOSX resource forks. Only the verified engine payload
@@ -100,19 +127,19 @@ pub fn validate_data_dir(path: &Path) -> Result<()> {
 
 pub fn initialize_user_data(payload: &Path, data: &Path) -> Result<()> {
     let lists = data.join("lists");
+    // Upstream run.sh refuses linked data/list paths. Detect these before any
+    // writes or administrator dialog instead of failing during root startup.
+    for path in [data, lists.as_path()] {
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if !m.is_dir() => bail!("Expected a real directory: {}", path.display()),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
     std::fs::create_dir_all(&lists)?;
-    for name in [
-        "list-general.txt",
-        "list-general-user.txt",
-        "list-google.txt",
-        "list-exclude.txt",
-        "list-exclude-user.txt",
-        "ipset-all.txt",
-        "ipset-exclude.txt",
-        "ipset-exclude-user.txt",
-    ] {
+    for name in DEFAULT_LISTS {
         let target = lists.join(name);
-        if !target.exists() {
+        if missing_regular_file(&target)? {
             std::fs::copy(payload.join("default-lists").join(name), target)?;
         }
     }
@@ -121,11 +148,34 @@ pub fn initialize_user_data(payload: &Path, data: &Path) -> Result<()> {
         ("ipset-mode", "none\n"),
     ] {
         let path = data.join(name);
-        if !path.exists() {
+        if missing_regular_file(&path)? {
             std::fs::write(path, value)?;
         }
     }
     Ok(())
+}
+
+fn missing_regular_file(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() => Ok(false),
+        Ok(_) => bail!("Expected a regular file: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Run cleanup inside the same authorization session if upstream installation
+/// fails after changing PF/TCP state. A cancelled password dialog runs neither
+/// script. The original installation failure remains the command's exit code.
+pub fn install_command(source: &Path, data: &Path) -> String {
+    let q = |p: &Path| shell_quote(&p.to_string_lossy());
+    format!(
+        "if /bin/sh {} {} {}; then :; else status=$?; /bin/sh {}; exit \"$status\"; fi",
+        q(&source.join("install.sh")),
+        q(source),
+        q(data),
+        q(&source.join("stop.sh")),
+    )
 }
 
 pub fn shell_quote(value: &str) -> String {
