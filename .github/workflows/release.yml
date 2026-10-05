@@ -188,12 +188,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Download checked Windows distribution
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: zapret-ui-windows-x64
           path: dist
       - name: Download checked macOS distribution
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: zapret-ui-macos-arm64
           path: dist
