@@ -1,5 +1,5 @@
-use crate::contracts::{RunningMode, Strategy};
-use crate::ports::ServiceCtl;
+use crate::contracts::{EngineKind, RunningMode, Strategy};
+use crate::ports::{ServiceCtl, StrategyCatalog};
 use crate::zapret::elevation::check_elevation;
 use sha2::{Digest, Sha256};
 use std::ffi::{c_void, OsStr, OsString};
@@ -249,7 +249,7 @@ pub(crate) fn service_image_belongs_to_dirs(image: &OsStr, owned_dirs: &[PathBuf
     let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
         return false;
     };
-    if !name.eq_ignore_ascii_case("winws.exe") {
+    if !name.eq_ignore_ascii_case("winws.exe") && !name.eq_ignore_ascii_case("winws2.exe") {
         return false;
     }
     let exe = canonical_or_self(&exe);
@@ -277,6 +277,30 @@ pub(crate) fn service_belongs_to_dirs(
     }
 }
 
+pub(crate) fn service_engine(
+    service_name: &str,
+    service: &windows_service::service::Service,
+) -> anyhow::Result<Option<EngineKind>> {
+    let image = match service_image_path_from_registry(service_name) {
+        Some(image) => image,
+        None => service
+            .query_config()
+            .map_err(|e| svc_err("QueryServiceConfig(engine)", e))?
+            .executable_path
+            .into_os_string(),
+    };
+    Ok(extract_exe_from_image_path(&image)
+        .and_then(|exe| {
+            exe.file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+        })
+        .and_then(|name| match name.as_str() {
+            "winws.exe" => Some(EngineKind::Zapret1),
+            "winws2.exe" => Some(EngineKind::Zapret2),
+            _ => None,
+        }))
+}
+
 fn service_ownership_error(name: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "A different service named \"{}\" already exists and does not belong to zapret-ui. \
@@ -294,6 +318,7 @@ fn strategy_from_bat_content(
     let args = crate::zapret::batparse::parse_winws_args(content, install_dir, gf)?;
     let lists = crate::zapret::batparse::referenced_lists(&args);
     Some(Strategy {
+        engine: EngineKind::Zapret1,
         id: stem.to_string(),
         display_name: stem.to_string(),
         category: crate::zapret::batparse::category_for(stem),
@@ -544,7 +569,32 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
 /// elevation). This closes the privilege-escalation hole where a `LocalSystem`
 /// service ran `winws.exe` out of a user-writable `%APPDATA%` directory.
 pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<ProtectedDir> {
-    let dst = crate::zapret::paths::service_install_dir();
+    prepare_protected_dir_for_engine(user_install_dir, EngineKind::Zapret1)
+}
+
+fn prepare_protected_dir_for_engine(
+    user_install_dir: &Path,
+    engine: EngineKind,
+) -> anyhow::Result<ProtectedDir> {
+    let dst = crate::zapret::paths::service_install_dir_for_engine(engine);
+    let mut protected = stage_protected_dir(user_install_dir, engine)?;
+    if let Err(error) =
+        promote_service_dir(&protected.path, &dst, |from, to| std::fs::rename(from, to))
+    {
+        let _ =
+            remove_dir_all_recovering(&protected.path, "Cleaning unpromoted service staging dir");
+        return Err(error);
+    }
+    protected.path = dst;
+    Ok(protected)
+}
+
+/// Copy, hash and lock the replacement before stopping any working service.
+fn stage_protected_dir(
+    user_install_dir: &Path,
+    engine: EngineKind,
+) -> anyhow::Result<ProtectedDir> {
+    let dst = crate::zapret::paths::service_install_dir_for_engine(engine);
     let stage = staging_dir_for(&dst)?;
 
     let before = collect_file_digests(user_install_dir).map_err(|e| {
@@ -585,13 +635,8 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<Protecte
         return Err(e);
     }
 
-    if let Err(e) = promote_service_dir(&stage, &dst, |from, to| std::fs::rename(from, to)) {
-        let _ = remove_dir_all_recovering(&stage, "Cleaning unpromoted service staging dir");
-        return Err(e);
-    }
-
     Ok(ProtectedDir {
-        path: dst,
+        path: stage,
         snapshot: before,
     })
 }
@@ -601,8 +646,18 @@ pub fn prepare_protected_dir(user_install_dir: &Path) -> anyhow::Result<Protecte
 fn promote_service_dir(
     stage: &Path,
     dst: &Path,
-    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+    rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> anyhow::Result<()> {
+    let backup = promote_service_dir_retaining(stage, dst, rename)?;
+    cleanup_service_backup(backup.as_deref());
+    Ok(())
+}
+
+fn promote_service_dir_retaining(
+    stage: &Path,
+    dst: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> anyhow::Result<Option<PathBuf>> {
     let backup = dst.with_file_name(format!(
         "zapret.previous.{}.{}",
         std::process::id(),
@@ -631,12 +686,190 @@ fn promote_service_dir(
             stage.display()
         );
     }
-    if had_previous {
+    Ok(had_previous.then_some(backup))
+}
+
+fn cleanup_service_backup(backup: Option<&Path>) {
+    if let Some(backup) = backup {
         if let Err(e) =
-            remove_dir_all_recovering(&backup, "Cleaning previous protected service copy")
+            remove_dir_all_recovering(backup, "Cleaning previous protected service copy")
         {
             tracing::warn!("Service files installed; old copy could not be removed: {e:#}");
         }
+    }
+}
+
+fn rollback_service_dir(destination: &Path, backup: Option<&Path>) -> anyhow::Result<()> {
+    remove_dir_all_recovering(destination, "Removing rejected protected service copy")?;
+    if let Some(backup) = backup {
+        std::fs::rename(backup, destination).map_err(|error| {
+            anyhow::anyhow!(
+                "Cannot restore previous service files from {}: {error}",
+                backup.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+struct PreviousService {
+    info: ServiceInfo,
+    image: OsString,
+    was_running: bool,
+}
+
+/// SCM returns a command line, not a standalone executable path. Use the OS
+/// parser so quoted Lua/list paths survive restoring a previous registration.
+fn split_service_command(image: &OsStr) -> anyhow::Result<(PathBuf, Vec<OsString>)> {
+    #[link(name = "shell32")]
+    extern "system" {
+        fn CommandLineToArgvW(command: *const u16, argc: *mut i32) -> *mut *mut u16;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    }
+    let wide: Vec<u16> = image.encode_wide().chain(Some(0)).collect();
+    anyhow::ensure!(wide.len() > 1, "Empty service command line");
+    let mut argc = 0;
+    let argv = unsafe { CommandLineToArgvW(wide.as_ptr(), &mut argc) };
+    anyhow::ensure!(
+        !argv.is_null(),
+        "Cannot parse service command line: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut values = Vec::new();
+    unsafe {
+        for arg in std::slice::from_raw_parts(argv, argc as usize) {
+            let arg = *arg;
+            let mut len = 0;
+            while *arg.add(len) != 0 {
+                len += 1;
+            }
+            values.push(OsString::from_wide(std::slice::from_raw_parts(arg, len)));
+        }
+        LocalFree(argv.cast());
+    }
+    anyhow::ensure!(!values.is_empty(), "Empty service executable");
+    let executable = PathBuf::from(values.remove(0));
+    Ok((executable, values))
+}
+
+fn snapshot_prior_service(owned_dirs: &[PathBuf]) -> anyhow::Result<Option<PreviousService>> {
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|error| svc_err("OpenSCManager(snapshot prior)", error))?;
+    let Some(service) = open_service_with_repair(
+        &manager,
+        "zapret",
+        ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+        owned_dirs,
+        "OpenService(snapshot prior)",
+    )?
+    else {
+        return Ok(None);
+    };
+    if !service_belongs_to_dirs("zapret", &service, owned_dirs)? {
+        return Err(service_ownership_error("zapret"));
+    }
+    let config = service
+        .query_config()
+        .map_err(|error| svc_err("QueryServiceConfig(snapshot prior)", error))?;
+    let image = config.executable_path.as_os_str().to_os_string();
+    if !service_image_belongs_to_dirs(&image, owned_dirs) {
+        return Err(service_ownership_error("zapret"));
+    }
+    // Owned services are LocalSystem. A customized account password cannot be
+    // read back; refuse destructive replacement when exact restoration is unsafe.
+    anyhow::ensure!(
+        config
+            .account_name
+            .as_ref()
+            .is_none_or(|name| name.to_string_lossy().eq_ignore_ascii_case("LocalSystem")),
+        "Cannot safely replace a zapret service configured with a custom account"
+    );
+    anyhow::ensure!(
+        config.load_order_group.is_none(),
+        "Cannot safely replace a zapret service with a custom load-order group"
+    );
+    let (executable_path, launch_arguments) = split_service_command(&image)?;
+    let was_running = service
+        .query_status()
+        .map_err(|error| svc_err("QueryServiceStatus(snapshot prior)", error))?
+        .current_state
+        != ServiceState::Stopped;
+    Ok(Some(PreviousService {
+        info: ServiceInfo {
+            name: OsString::from("zapret"),
+            display_name: config.display_name,
+            service_type: config.service_type,
+            start_type: config.start_type,
+            error_control: config.error_control,
+            executable_path,
+            launch_arguments,
+            dependencies: config.dependencies,
+            account_name: None,
+            account_password: None,
+        },
+        image,
+        was_running,
+    }))
+}
+
+fn restore_prior_service(previous: &PreviousService, owned_dirs: &[PathBuf]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        previous.info.executable_path.is_file(),
+        "Previous service executable is unavailable at {}",
+        previous.info.executable_path.display()
+    );
+    let manager = ServiceManager::local_computer(
+        None::<&str>,
+        ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
+    )
+    .map_err(|error| svc_err("OpenSCManager(restore prior)", error))?;
+    let service = if let Some(service) = open_service_with_repair(
+        &manager,
+        "zapret",
+        ServiceAccess::ALL_ACCESS,
+        owned_dirs,
+        "OpenService(restore prior)",
+    )? {
+        let config = service
+            .query_config()
+            .map_err(|error| svc_err("QueryServiceConfig(restore prior)", error))?;
+        anyhow::ensure!(
+            config.executable_path.as_os_str() == previous.image.as_os_str(),
+            "Service changed during rollback; refusing to overwrite its registration"
+        );
+        service
+    } else {
+        let service = manager
+            .create_service(&previous.info, ServiceAccess::ALL_ACCESS)
+            .map_err(|error| svc_err("CreateService(restore prior)", error))?;
+        repair_service_dacl_if_owned(&manager, "zapret", owned_dirs)?;
+        service
+    };
+    if previous.was_running {
+        let state = service
+            .query_status()
+            .map_err(|error| svc_err("QueryServiceStatus(restore prior)", error))?
+            .current_state;
+        if state == ServiceState::Stopped {
+            crate::zapret::process::ensure_no_interceptor()?;
+            service
+                .start(&[] as &[&str])
+                .map_err(|error| svc_err("StartService(restore prior)", error))?;
+        }
+        wait_until(
+            "previous service to restart",
+            std::time::Duration::from_secs(10),
+            || {
+                Ok(service
+                    .query_status()
+                    .map_err(|error| svc_err("QueryServiceStatus(restore wait)", error))?
+                    .current_state
+                    == ServiceState::Running)
+            },
+        )?;
     }
     Ok(())
 }
@@ -765,52 +998,153 @@ pub async fn install_service_protected(
     user_install_dir: &Path,
     strategy_id: &str,
 ) -> anyhow::Result<()> {
+    let engine = if strategy_id.starts_with("zapret2:") {
+        EngineKind::Zapret2
+    } else {
+        EngineKind::Zapret1
+    };
+    install_service_protected_for_engine(user_install_dir, strategy_id, engine).await
+}
+
+pub async fn install_service_protected_for_engine(
+    user_install_dir: &Path,
+    strategy_id: &str,
+    engine: EngineKind,
+) -> anyhow::Result<()> {
     check_elevation()?;
     // Fail before tearing down a working prior service if the machine-wide
     // prerequisite cannot be applied. The later install/start calls are cheap
     // no-ops after this succeeds because the preflight is process-cached.
-    crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
-    // Tear down any prior "zapret" service of ours first. This matters for two
-    // reasons, both of which otherwise make a reinstall silently fail:
-    //   1. A service still running out of the protected dir locks its winws.exe,
-    //      so replacing the protected copy can fail with "in use".
-    //   2. Older builds registered the service pointing at the user-writable
-    //      install dir (%APPDATA%); the new ownership check in `install()` only
-    //      accepts the protected dir, so it would reject that stale service as
-    //      "a different service named zapret". Removing it here clears the path.
-    remove_prior_zapret_service(&[
+    if engine == EngineKind::Zapret1 {
+        crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+    }
+    let owned_dirs = [
         user_install_dir.to_path_buf(),
         crate::zapret::paths::service_install_dir(),
-    ])?;
-    let protected = prepare_protected_dir(user_install_dir)?;
-    // Resolve the exact preset snapshot we just copied and verified. Reading from
-    // the staged copy avoids a race where the user-writable .bat changes after
-    // staging but before CreateService.
-    let gf = crate::zapret::batparse::read_game_filter(&protected.path);
-    let strategy = resolve_protected_strategy(
-        user_install_dir,
-        &protected.path,
-        &protected.snapshot,
-        strategy_id,
-        gf,
-    )?;
-    let ctl = WindowsServiceCtl::new(protected.path);
-    ctl.install(&strategy).await?;
-    ctl.start().await?;
+        crate::zapret::paths::service_install_dir_for_engine(EngineKind::Zapret2),
+    ];
+    // Validate both ownership and replacement files before deleting anything.
+    snapshot_prior_service(&owned_dirs)?;
+    let mut protected = stage_protected_dir(user_install_dir, engine)?;
+    let staged_result = resolve_service_strategy(user_install_dir, &protected, strategy_id, engine)
+        .and_then(|strategy| {
+            std::fs::write(protected.path.join(".zapret-ui-strategy"), &strategy.id)?;
+            Ok(())
+        });
+    if let Err(error) = staged_result {
+        let _ = remove_dir_all_recovering(&protected.path, "Cleaning invalid service staging dir");
+        return Err(error);
+    }
+    let previous = match snapshot_prior_service(&owned_dirs) {
+        Ok(previous) => previous,
+        Err(error) => {
+            let _ =
+                remove_dir_all_recovering(&protected.path, "Cleaning changed-service staging dir");
+            return Err(error);
+        }
+    };
+    if let Err(error) = remove_prior_zapret_service(&owned_dirs) {
+        let _ =
+            remove_dir_all_recovering(&protected.path, "Cleaning unstopped service staging dir");
+        if let Some(previous) = &previous {
+            if let Err(restore) = restore_prior_service(previous, &owned_dirs) {
+                anyhow::bail!("{error:#}; previous service could not be restored: {restore:#}");
+            }
+        }
+        return Err(error);
+    }
+    let destination = crate::zapret::paths::service_install_dir_for_engine(engine);
+    let backup = match promote_service_dir_retaining(&protected.path, &destination, |from, to| {
+        std::fs::rename(from, to)
+    }) {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = remove_dir_all_recovering(
+                &protected.path,
+                "Cleaning unpromoted service staging dir",
+            );
+            if let Some(previous) = &previous {
+                if let Err(restore) = restore_prior_service(previous, &owned_dirs) {
+                    anyhow::bail!("{error:#}; previous service could not be restored: {restore:#}");
+                }
+            }
+            return Err(error);
+        }
+    };
+    protected.path = destination.clone();
+    let install = async {
+        let strategy = resolve_service_strategy(user_install_dir, &protected, strategy_id, engine)?;
+        let ctl = WindowsServiceCtl::new_for_engine(destination.clone(), engine);
+        ctl.install(&strategy).await?;
+        ctl.start().await
+    }
+    .await;
+    if let Err(error) = install {
+        // Never roll files back beneath a candidate that failed to stop.
+        if let Err(cleanup) = remove_prior_zapret_service(&owned_dirs) {
+            anyhow::bail!("{error:#}; cannot stop rejected service for rollback: {cleanup:#}; prior files retained at {backup:?}");
+        }
+        if let Err(rollback) = rollback_service_dir(&destination, backup.as_deref()) {
+            anyhow::bail!("{error:#}; service file rollback failed: {rollback:#}");
+        }
+        if let Some(previous) = &previous {
+            if let Err(restore) = restore_prior_service(previous, &owned_dirs) {
+                anyhow::bail!("{error:#}; previous service could not be restored: {restore:#}");
+            }
+        }
+        return Err(error);
+    }
+    cleanup_service_backup(backup.as_deref());
     Ok(())
+}
+
+fn resolve_service_strategy(
+    user_install_dir: &Path,
+    protected: &ProtectedDir,
+    strategy_id: &str,
+    engine: EngineKind,
+) -> anyhow::Result<Strategy> {
+    let strategy = if engine == EngineKind::Zapret2 {
+        crate::zapret::zapret2::catalog::Zapret2Catalog::new(protected.path.clone())
+            .by_id(strategy_id)
+            .ok_or_else(|| anyhow::anyhow!("Zapret2 strategy {strategy_id:?} could not be resolved from the protected snapshot"))?
+    } else {
+        let gf = crate::zapret::batparse::read_game_filter(&protected.path);
+        resolve_protected_strategy(
+            user_install_dir,
+            &protected.path,
+            &protected.snapshot,
+            strategy_id,
+            gf,
+        )?
+    };
+    Ok(strategy)
 }
 
 pub struct WindowsServiceCtl {
     install_dir: PathBuf,
+    engine: EngineKind,
+    additional_owned_dirs: Vec<PathBuf>,
     service_name: String,
 }
 
 impl WindowsServiceCtl {
     pub fn new(install_dir: PathBuf) -> Self {
+        Self::new_for_engine(install_dir, EngineKind::Zapret1)
+    }
+
+    pub fn new_for_engine(install_dir: PathBuf, engine: EngineKind) -> Self {
         Self {
             install_dir,
+            engine,
+            additional_owned_dirs: Vec::new(),
             service_name: "zapret".to_string(),
         }
+    }
+
+    pub fn with_owned_dir(mut self, dir: PathBuf) -> Self {
+        self.additional_owned_dirs.push(dir);
+        self
     }
 
     pub fn with_service_name(mut self, name: String) -> Self {
@@ -819,19 +1153,45 @@ impl WindowsServiceCtl {
     }
 
     fn get_winws_path(&self) -> PathBuf {
-        let bin_path = self.install_dir.join("bin").join("winws.exe");
-        if bin_path.exists() {
-            bin_path
-        } else {
-            self.install_dir.join("winws.exe")
-        }
+        crate::zapret::paths::engine_executable(&self.install_dir, self.engine)
     }
 
-    fn owned_dirs(&self) -> [PathBuf; 2] {
-        [
+    fn owned_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![
             self.install_dir.clone(),
             crate::zapret::paths::service_install_dir(),
-        ]
+            crate::zapret::paths::service_install_dir_for_engine(EngineKind::Zapret2),
+        ];
+        dirs.extend(self.additional_owned_dirs.iter().cloned());
+        dirs
+    }
+
+    /// Read the registered image before the asynchronous prerequisite. SCM
+    /// handles are deliberately scoped here: ServiceManager is not Send.
+    fn engine_before_start(&self) -> anyhow::Result<EngineKind> {
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(|e| svc_err("OpenSCManager(start preflight)", e))?;
+        let service = open_service_with_repair(
+            &manager,
+            &self.service_name,
+            ServiceAccess::QUERY_CONFIG | ServiceAccess::QUERY_STATUS,
+            &self.owned_dirs(),
+            "OpenService(start preflight)",
+        )?
+        .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
+        if !service_belongs_to_dirs(&self.service_name, &service, &self.owned_dirs())? {
+            return Err(service_ownership_error(&self.service_name));
+        }
+        if service
+            .query_status()
+            .map_err(|e| svc_err("QueryServiceStatus(start preflight)", e))?
+            .current_state
+            == ServiceState::Stopped
+        {
+            crate::zapret::process::ensure_no_interceptor()?;
+        }
+        service_engine(&self.service_name, &service)?
+            .ok_or_else(|| service_ownership_error(&self.service_name))
     }
 }
 
@@ -1032,17 +1392,31 @@ fn wait_for_deletion(
 #[async_trait::async_trait]
 impl ServiceCtl for WindowsServiceCtl {
     async fn install_protected(&self, strategy: &Strategy) -> anyhow::Result<()> {
-        install_service_protected(&self.install_dir, &strategy.id).await
+        anyhow::ensure!(
+            strategy.engine == self.engine,
+            "Strategy belongs to a different engine"
+        );
+        install_service_protected_for_engine(&self.install_dir, &strategy.id, self.engine).await
     }
     async fn install(&self, strategy: &Strategy) -> anyhow::Result<()> {
         check_elevation()?;
+        anyhow::ensure!(
+            strategy.engine == self.engine,
+            "Strategy belongs to a different engine"
+        );
         // Mirrors service.bat's `:tcp_enable`, which upstream runs before
         // creating the zapret service.
-        crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+        if self.engine == EngineKind::Zapret1 {
+            crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+        }
 
         let winws_path = self.get_winws_path();
-        if !winws_path.exists() {
-            return Err(anyhow::anyhow!("winws.exe not found at {:?}", winws_path));
+        if !winws_path.is_file() {
+            return Err(anyhow::anyhow!(
+                "{} not found at {:?}",
+                crate::zapret::paths::engine_executable_name(self.engine),
+                winws_path
+            ));
         }
 
         let manager = ServiceManager::local_computer(
@@ -1088,7 +1462,9 @@ impl ServiceCtl for WindowsServiceCtl {
             .collect();
 
         // Ensure user list files exist so the service's winws.exe can start.
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
+        if self.engine == EngineKind::Zapret1 {
+            crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
+        }
 
         // Create the ServiceInfo structure.
         let service_info = ServiceInfo {
@@ -1147,10 +1523,7 @@ impl ServiceCtl for WindowsServiceCtl {
         )?
         .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
 
-        let owned_dirs = [
-            self.install_dir.clone(),
-            crate::zapret::paths::service_install_dir(),
-        ];
+        let owned_dirs = self.owned_dirs();
         if !service_belongs_to_dirs(&self.service_name, &service, &owned_dirs)? {
             return Err(service_ownership_error(&self.service_name));
         }
@@ -1175,7 +1548,9 @@ impl ServiceCtl for WindowsServiceCtl {
 
     async fn start(&self) -> anyhow::Result<()> {
         check_elevation()?;
-        crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+        if self.engine_before_start()? == EngineKind::Zapret1 {
+            crate::zapret::tcp::ensure_tcp_timestamps_enabled().await?;
+        }
 
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
             .map_err(|e| svc_err("OpenSCManager(start)", e))?;
@@ -1190,12 +1565,18 @@ impl ServiceCtl for WindowsServiceCtl {
         )?
         .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
 
-        let owned_dirs = [
-            self.install_dir.clone(),
-            crate::zapret::paths::service_install_dir(),
-        ];
+        let owned_dirs = self.owned_dirs();
         if !service_belongs_to_dirs(&self.service_name, &service, &owned_dirs)? {
             return Err(service_ownership_error(&self.service_name));
+        }
+
+        if service
+            .query_status()
+            .map_err(|e| svc_err("QueryServiceStatus(before start)", e))?
+            .current_state
+            == ServiceState::Stopped
+        {
+            crate::zapret::process::ensure_no_interceptor()?;
         }
 
         match service.start(&[] as &[&str]) {
@@ -1287,10 +1668,7 @@ impl ServiceCtl for WindowsServiceCtl {
         )?
         .ok_or_else(|| anyhow::anyhow!("Service {} is not installed", self.service_name))?;
 
-        let owned_dirs = [
-            self.install_dir.clone(),
-            crate::zapret::paths::service_install_dir(),
-        ];
+        let owned_dirs = self.owned_dirs();
         if !service_belongs_to_dirs(&self.service_name, &service, &owned_dirs)? {
             return Err(service_ownership_error(&self.service_name));
         }
@@ -1309,17 +1687,14 @@ impl ServiceCtl for WindowsServiceCtl {
 
         match service_res {
             Ok(service) => {
-                let owned_dirs = [
-                    self.install_dir.clone(),
-                    crate::zapret::paths::service_install_dir(),
-                ];
+                let owned_dirs = self.owned_dirs();
                 if !service_belongs_to_dirs(&self.service_name, &service, &owned_dirs)? {
                     return Ok(RunningMode::None);
                 }
                 let status = service
                     .query_status()
                     .map_err(|e| svc_err("QueryServiceStatus", e))?;
-                if status.current_state == ServiceState::Running {
+                if status.current_state != ServiceState::Stopped {
                     Ok(RunningMode::SystemService)
                 } else {
                     Ok(RunningMode::None)
@@ -1349,17 +1724,76 @@ impl ServiceCtl for WindowsServiceCtl {
         else {
             return false;
         };
-        let owned_dirs = [
-            self.install_dir.clone(),
-            crate::zapret::paths::service_install_dir(),
-        ];
+        let owned_dirs = self.owned_dirs();
         service_belongs_to_dirs(&self.service_name, &service, &owned_dirs).unwrap_or(false)
+    }
+
+    async fn installed_engine(&self) -> Option<EngineKind> {
+        let manager =
+            ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).ok()?;
+        let service = manager
+            .open_service(&self.service_name, ServiceAccess::QUERY_CONFIG)
+            .ok()?;
+        if !service_belongs_to_dirs(&self.service_name, &service, &self.owned_dirs()).ok()? {
+            return None;
+        }
+        service_engine(&self.service_name, &service).ok().flatten()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollback_preserves_exact_previous_protected_files_until_start_succeeds() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("zapret2");
+        let stage = root.path().join("stage");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(destination.join("winws2.exe"), "previous executable").unwrap();
+        std::fs::write(destination.join(".zapret-ui-strategy"), "zapret2:previous").unwrap();
+        std::fs::write(stage.join("winws2.exe"), "rejected executable").unwrap();
+        let backup = promote_service_dir_retaining(&stage, &destination, |from, to| {
+            std::fs::rename(from, to)
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(backup.as_ref().unwrap().join("winws2.exe")).unwrap(),
+            "previous executable"
+        );
+        rollback_service_dir(&destination, backup.as_deref()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(destination.join("winws2.exe")).unwrap(),
+            "previous executable"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join(".zapret-ui-strategy")).unwrap(),
+            "zapret2:previous"
+        );
+        assert!(!backup.unwrap().exists());
+    }
+
+    #[test]
+    fn service_rollback_command_preserves_quoted_paths_and_argv() {
+        let image = OsStr::new(
+            r#""C:\ProgramData\zapret-ui\zapret2\bin\winws2.exe" "--lua-init=@C:\core lua\zapret-lib.lua" "--hostlist=C:\user lists\test.txt" --new"#,
+        );
+        let (executable, args) = split_service_command(image).unwrap();
+        assert_eq!(
+            executable,
+            PathBuf::from(r"C:\ProgramData\zapret-ui\zapret2\bin\winws2.exe")
+        );
+        assert_eq!(
+            args,
+            [
+                OsString::from(r"--lua-init=@C:\core lua\zapret-lib.lua"),
+                OsString::from(r"--hostlist=C:\user lists\test.txt"),
+                OsString::from("--new")
+            ]
+        );
+    }
 
     #[test]
     fn service_image_ownership_respects_path_boundaries() {
@@ -1372,6 +1806,23 @@ mod tests {
             OsStr::new(r#""C:\ProgramData\zapret-ui\zapret2\bin\winws.exe" --wf-tcp=80"#),
             &owned,
         ));
+    }
+
+    #[test]
+    fn service_image_accepts_zapret2_only_inside_owned_directories() {
+        let owned = vec![PathBuf::from(r"C:\ProgramData\zapret-ui\zapret2")];
+        assert!(service_image_belongs_to_dirs(
+            OsStr::new(
+                r#""C:\ProgramData\zapret-ui\zapret2\bin\winws2.exe" --lua-init=@C:\protected\init.lua"#
+            ),
+            &owned,
+        ));
+        for image in [
+            r#""C:\ProgramData\zapret-ui\zapret2-other\bin\winws2.exe""#,
+            r#""C:\ProgramData\zapret-ui\zapret2\bin\other.exe""#,
+        ] {
+            assert!(!service_image_belongs_to_dirs(OsStr::new(image), &owned));
+        }
     }
 
     #[test]

@@ -31,6 +31,7 @@ impl StrategyCatalog for LocalStrategyCatalog {
                     return None;
                 }
                 Some(Strategy {
+                    engine: Default::default(),
                     id: id.into(),
                     display_name: name.trim().into(),
                     category: Category::Mixed,

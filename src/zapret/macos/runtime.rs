@@ -328,6 +328,7 @@ impl Runner for ProcessRunner {
     async fn detect_running(&self) -> RuntimeStatus {
         let process = engine_process().await;
         RuntimeStatus {
+            active_engine: None,
             installed: bundle::valid_payload(&self.install_dir),
             installed_version: std::fs::read_to_string(self.install_dir.join("version.txt"))
                 .ok()

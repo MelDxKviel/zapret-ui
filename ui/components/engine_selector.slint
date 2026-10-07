@@ -1,0 +1,75 @@
+import { ThemePalette } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
+import { AppButton } from "button.slint";
+
+export component EngineSelector inherits Rectangle {
+    in property <string> mode;
+    in property <string> active;
+    in property <string> version;
+    in property <bool> busy;
+    in property <bool> installed;
+    callback selected(string);
+    callback install;
+    callback update;
+    background: ThemePalette.surface;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    border-radius: ThemePalette.r-10;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: I18n.t(I18n.lang, "engine.title");
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-12;
+                color: ThemePalette.text-2;
+                vertical-alignment: center;
+            }
+            AppButton {
+                text: I18n.t(I18n.lang, "engine.zapret1"); size: "sm";
+                variant: root.mode == "zapret1" ? "primary" : "default";
+                enabled: !root.busy;
+                clicked => { root.selected("zapret1"); }
+            }
+            AppButton {
+                text: I18n.t(I18n.lang, "engine.zapret2"); size: "sm";
+                variant: root.mode == "zapret2" ? "primary" : "default";
+                enabled: !root.busy;
+                clicked => { root.selected("zapret2"); }
+            }
+            AppButton {
+                text: I18n.t(I18n.lang, "engine.auto"); size: "sm";
+                variant: root.mode == "auto" ? "primary" : "default";
+                enabled: !root.busy;
+                clicked => { root.selected("auto"); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            AppButton {
+                text: root.installed ? I18n.t(I18n.lang, "engine.update") : I18n.t(I18n.lang, "engine.install");
+                size: "sm";
+                enabled: !root.busy;
+                clicked => { if root.installed { root.update(); } else { root.install(); } }
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: root.active != "" ? I18n.t(I18n.lang, "engine.active") + root.active : I18n.t(I18n.lang, "engine.hint");
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-11;
+                color: root.active != "" ? ThemePalette.accent-text : ThemePalette.text-3;
+                overflow: elide;
+            }
+            Text {
+                text: root.version;
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-10;
+                color: ThemePalette.text-3;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+        }
+    }
+}

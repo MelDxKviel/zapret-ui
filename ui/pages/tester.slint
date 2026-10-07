@@ -67,7 +67,7 @@ component ResultRow inherits Rectangle {
                 Text {
                     horizontal-stretch: 0;
                     min-width: 40px;
-                    text: root.item.pretty;
+                    text: (I18n.macos ? "" : root.item.engine + " · ") + root.item.pretty;
                     font-family: ThemePalette.font-mono;
                     font-size: ThemePalette.fs-13;
                     font-weight: 600;
@@ -142,6 +142,13 @@ component ResultRow inherits Rectangle {
                 font-size: ThemePalette.fs-11;
                 color: root.item.ok == 0 ? ThemePalette.danger-text : ThemePalette.text-2;
                 min-width: 0px;
+                overflow: elide;
+            }
+            if !I18n.macos : Text {
+                text: I18n.t(I18n.lang, "engine.baseline") + "\{root.item.baseline}/\{root.item.total} · +\{root.item.improved} / −\{root.item.regressed}";
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-10;
+                color: ThemePalette.text-3;
                 overflow: elide;
             }
         }

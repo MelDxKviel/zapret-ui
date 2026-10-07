@@ -33,6 +33,7 @@ pub trait TelegramProxy: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait Installer: Send + Sync {
+    fn set_engine_mode(&self, _mode: crate::contracts::EngineMode) {}
     async fn is_installed(&self) -> bool;
     async fn installed_version(&self) -> Option<String>;
     async fn latest_version(&self) -> anyhow::Result<String>;
@@ -65,6 +66,10 @@ pub trait Runner: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait ServiceCtl: Send + Sync {
+    /// Identity of the registered engine even while its service is stopped.
+    async fn installed_engine(&self) -> Option<crate::contracts::EngineKind> {
+        None
+    }
     async fn install(&self, strategy: &Strategy) -> anyhow::Result<()>;
     /// Stage the core in an administrator-owned directory and install/start it.
     async fn install_protected(&self, strategy: &Strategy) -> anyhow::Result<()> {
@@ -79,6 +84,7 @@ pub trait ServiceCtl: Send + Sync {
 }
 
 pub trait StrategyCatalog: Send + Sync {
+    fn set_engine_mode(&self, _mode: crate::contracts::EngineMode) {}
     fn all(&self) -> Vec<Strategy>;
     fn by_id(&self, id: &str) -> Option<Strategy>;
     fn by_category(&self, c: Category) -> Vec<Strategy>;
@@ -86,6 +92,12 @@ pub trait StrategyCatalog: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait StrategyTester: Send + Sync {
+    /// Last completed or cancelled scan, including automatic selection, for
+    /// persistence and display. Adapters without stored diagnostics return none.
+    fn last_results(&self) -> Vec<StrategyTestResult> {
+        Vec::new()
+    }
+
     /// Run each strategy in turn, probe the target endpoints, and return the
     /// per-strategy results ranked best-first. `on_progress` fires before each
     /// strategy is started so the UI can show which one is being tested.
@@ -97,11 +109,11 @@ pub trait StrategyTester: Send + Sync {
         on_progress: TestProgressCb,
     ) -> anyhow::Result<Vec<StrategyTestResult>>;
 
-    /// Simple-mode auto-engage: try `candidates` in order, starting each and
-    /// probing the target endpoints, and **leave the first one that restores
-    /// connectivity running**. `on_progress` fires before each candidate is
-    /// tried. Honours the same cancel flag as [`Self::cancel`]. On success the
-    /// winning strategy's winws is still running when this returns.
+    /// Simple-mode auto-engage: Windows compares all candidates against a
+    /// no-bypass baseline, then leaves the best improving (or nonregressing on
+    /// an already reachable network) strategy running. macOS keeps its existing
+    /// first-working selection. Candidate order preserves last-good priority.
+    /// `on_progress` fires before each candidate. Honours [`Self::cancel`].
     async fn auto_engage(
         &self,
         candidates: Vec<Strategy>,

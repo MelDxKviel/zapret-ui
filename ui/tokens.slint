@@ -38,6 +38,10 @@ export struct StrategyItem {
 // endpoint counts; `latency` is the average latency in ms (0 if nothing passed).
 // `rank` is 1-based (0 while still streaming); `is_best` flags the winner.
 export struct TestResultItem {
+    engine: string,
+    baseline: int,
+    improved: int,
+    regressed: int,
     id: string,
     display_name: string,
     pretty: string,

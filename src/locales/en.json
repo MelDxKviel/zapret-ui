@@ -371,5 +371,14 @@
   "home.folder_path": "…AppData\\Roaming\\zapret-ui",
   "macos.home.folder_path": "…Application Support/zapret-ui",
   "macos.settings.theme_hint": "Choose light, dark, or follow your macOS appearance.",
-  "macos.telegram.lifetime": "Enable the proxy, then confirm the connection in Telegram. Keep zapret-ui open or in the menu bar. After stopping it, disable this proxy in Telegram."
+  "macos.telegram.lifetime": "Enable the proxy, then confirm the connection in Telegram. Keep zapret-ui open or in the menu bar. After stopping it, disable this proxy in Telegram.",
+  "engine.title": "Core",
+  "engine.zapret1": "zapret1",
+  "engine.zapret2": "zapret2",
+  "engine.auto": "Automatic",
+  "engine.install": "Install core",
+  "engine.update": "Update core",
+  "engine.active": "Active core: ",
+  "engine.hint": "Switching stops bypass and removes a different core’s startup service.",
+  "engine.baseline": "Without bypass: "
 }

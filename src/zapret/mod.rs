@@ -3,6 +3,8 @@ pub mod batparse;
 pub mod catalog;
 #[cfg(windows)]
 pub mod elevation;
+#[cfg(windows)]
+pub mod engines;
 pub mod github;
 #[cfg(windows)]
 pub mod hosts;
@@ -12,9 +14,13 @@ pub mod maintenance;
 pub mod paths;
 #[cfg_attr(target_os = "macos", path = "macos/runtime.rs")]
 pub mod process;
+#[cfg(windows)]
+pub mod selection;
 #[cfg_attr(target_os = "macos", path = "macos/service.rs")]
 pub mod service;
 #[cfg(windows)]
 pub mod tcp;
 pub mod tester;
 pub mod updater;
+#[cfg(windows)]
+pub mod zapret2;

@@ -1,6 +1,66 @@
+/// Engine identity travels with a strategy; legacy presets remain zapret1.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EngineKind {
+    #[default]
+    Zapret1,
+    Zapret2,
+}
+
+impl EngineKind {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Zapret1 => "zapret1",
+            Self::Zapret2 => "zapret2",
+        }
+    }
+
+    pub fn for_strategy_id(id: &str) -> Self {
+        if id.starts_with("zapret2:") {
+            Self::Zapret2
+        } else {
+            Self::Zapret1
+        }
+    }
+}
+
+/// Windows core selection. Defaults preserve existing installations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EngineMode {
+    #[default]
+    Zapret1,
+    Zapret2,
+    Auto,
+}
+
+impl EngineMode {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Zapret1 => "zapret1",
+            Self::Zapret2 => "zapret2",
+            Self::Auto => "auto",
+        }
+    }
+    pub fn from_slug(value: &str) -> Self {
+        match value {
+            "zapret2" => Self::Zapret2,
+            "auto" => Self::Auto,
+            _ => Self::Zapret1,
+        }
+    }
+    pub fn includes(self, engine: EngineKind) -> bool {
+        self == Self::Auto
+            || matches!(
+                (self, engine),
+                (Self::Zapret1, EngineKind::Zapret1) | (Self::Zapret2, EngineKind::Zapret2)
+            )
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Strategy {
-    pub id: String,           // ".bat" filename without extension, e.g. "general (ALT2)"
+    #[serde(default)]
+    pub engine: EngineKind,
+    pub id: String, // ".bat" filename without extension, e.g. "general (ALT2)"
     pub display_name: String, // human-friendly name
     pub category: Category,
     pub description: String,
@@ -163,6 +223,9 @@ pub struct HostsCheck {
 
 #[derive(Clone, Debug)]
 pub enum BackendCmd {
+    SetEngineMode(EngineMode),
+    InstallAndEngage,
+    Quit,
     Install,
     CheckUpdate,
     Update,
@@ -236,8 +299,16 @@ pub enum AutoEngageOutcome {
 }
 
 /// Outcome of testing a single strategy against the target endpoints.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StrategyTestResult {
+    #[serde(default)]
+    pub engine: EngineKind,
+    #[serde(default)]
+    pub baseline_ok: u32,
+    #[serde(default)]
+    pub improved: u32,
+    #[serde(default)]
+    pub regressed: u32,
     pub id: String,
     pub display_name: String,
     /// Number of endpoints that became reachable with this strategy.
@@ -250,8 +321,24 @@ pub struct StrategyTestResult {
     pub rank: u32,
 }
 
+impl StrategyTestResult {
+    pub fn eligible(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.ok > 0
+                && ((self.baseline_ok == self.total && self.regressed == 0)
+                    || self.improved > self.regressed)
+        }
+        #[cfg(not(windows))]
+        {
+            self.ok > 0
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum UiEvent {
+    EngineMode(EngineMode),
     TelegramStatus(TelegramProxyStatus),
     TelegramSettings(TelegramProxySettings),
     TelegramError(String),
@@ -343,6 +430,7 @@ pub enum UiEvent {
 
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeStatus {
+    pub active_engine: Option<EngineKind>,
     pub installed: bool,
     pub installed_version: Option<String>,
     pub running_mode: RunningMode,

@@ -73,6 +73,13 @@ impl Language {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default)]
+    pub engine_mode: crate::contracts::EngineMode,
+    #[serde(default)]
+    pub zapret2_install_dir_override: Option<PathBuf>,
+    /// Most recent completed scan, including its baseline and engine identities.
+    #[serde(default)]
+    pub strategy_test_results: Vec<crate::contracts::StrategyTestResult>,
     #[serde(default = "default_true")]
     pub show_telegram_proxy: bool,
     /// Start the Telegram proxy on app launch, independently of the core.
@@ -137,6 +144,9 @@ pub fn default_install_dir() -> Option<PathBuf> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            engine_mode: crate::contracts::EngineMode::default(),
+            zapret2_install_dir_override: None,
+            strategy_test_results: Vec::new(),
             show_telegram_proxy: true,
             telegram_autostart: false,
             telegram_proxy: crate::contracts::TelegramProxySettings::default(),
@@ -158,6 +168,35 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    #[cfg(windows)]
+    pub fn validate_engine_directories(&self) -> anyhow::Result<()> {
+        fn resolved(path: &Path) -> anyhow::Result<String> {
+            let path = path.canonicalize().or_else(|_| std::path::absolute(path))?;
+            Ok(path
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .replace('/', "\\")
+                .trim_end_matches('\\')
+                .to_lowercase())
+        }
+        let first = resolved(&self.install_dir())?;
+        let second = resolved(&self.engine_install_dir(crate::contracts::EngineKind::Zapret2))?;
+        anyhow::ensure!(first != second && !first.starts_with(&format!("{second}\\")) && !second.starts_with(&format!("{first}\\")),
+            "zapret1 and zapret2 installation directories must be separate and must not contain one another");
+        Ok(())
+    }
+
+    pub fn engine_install_dir(&self, engine: crate::contracts::EngineKind) -> PathBuf {
+        match engine {
+            crate::contracts::EngineKind::Zapret1 => self.install_dir(),
+            crate::contracts::EngineKind::Zapret2 => self
+                .zapret2_install_dir_override
+                .clone()
+                .or_else(|| crate::app_dirs::root().map(|root| root.join("zapret2")))
+                .unwrap_or_default(),
+        }
+    }
+
     /// The effective zapret install dir: the explicit `install_dir_override` if
     /// set, else the per-user default ([`default_install_dir`]). Falls back to an
     /// empty path only if the OS user directories can't be resolved. Single

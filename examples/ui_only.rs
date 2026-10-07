@@ -52,6 +52,7 @@ impl Runner for MockRunner {
     }
     async fn detect_running(&self) -> RuntimeStatus {
         RuntimeStatus {
+            active_engine: None,
             installed: true,
             installed_version: Some("v1.0.0-mock".to_string()),
             running_mode: RunningMode::None,
@@ -98,9 +99,10 @@ struct MockCatalog;
 
 impl MockCatalog {
     fn sample() -> Vec<Strategy> {
-        ["general", "general (ALT)", "general (ALT2)"]
+        let mut presets: Vec<Strategy> = ["general", "general (ALT)", "general (ALT2)"]
             .iter()
             .map(|name| Strategy {
+                engine: Default::default(),
                 id: name.to_string(),
                 display_name: name.to_string(),
                 category: Category::Mixed,
@@ -108,7 +110,21 @@ impl MockCatalog {
                 winws_args: vec!["--wf-tcp=80,443".to_string()],
                 requires_lists: vec![],
             })
-            .collect()
+            .collect();
+        if cfg!(windows) {
+            for name in ["multisplit", "multidisorder", "fakedsplit"] {
+                presets.push(Strategy {
+                    id: format!("zapret2:{name}"),
+                    engine: EngineKind::Zapret2,
+                    display_name: name.into(),
+                    category: Category::Mixed,
+                    description: "Mock zapret2 preset".into(),
+                    winws_args: vec![],
+                    requires_lists: vec![],
+                });
+            }
+        }
+        presets
     }
 }
 
@@ -129,6 +145,14 @@ fn set_mock_running(ui: &MainWindow) {
         ui.set_status_running_mode("WindowsService".into());
         ui.set_status_service_installed(true);
     } else {
+        ui.set_status_active_engine(
+            if ui.get_engine_mode() == "zapret2" {
+                "zapret2"
+            } else {
+                "zapret1"
+            }
+            .into(),
+        );
         ui.set_status_running_mode("UserProcess".into());
     }
 }
@@ -142,6 +166,37 @@ fn main() -> anyhow::Result<()> {
         &std::env::var("ZAPRET_UI_PREVIEW_THEME").unwrap_or_else(|_| "system".into()),
     )?;
     let ui = MainWindow::new()?;
+    ui.set_supports_engine_selection(cfg!(windows));
+    {
+        let w = ui.as_weak();
+        ui.on_set_engine_mode(move |mode| {
+            if let Some(ui) = w.upgrade() {
+                ui.set_engine_mode(mode.clone());
+                ui.set_status_running_mode("None".into());
+                ui.set_status_active_engine("".into());
+                ui.set_is_busy(false);
+                println!("[MOCK] engine mode: {mode}");
+            }
+        });
+    }
+    {
+        let w = ui.as_weak();
+        ui.on_install_and_engage(move || {
+            if let Some(ui) = w.upgrade() {
+                ui.set_status_installed(true);
+                set_mock_running(&ui);
+                ui.set_status_active_engine(
+                    if ui.get_engine_mode() == "zapret2" {
+                        "zapret2"
+                    } else {
+                        "zapret1"
+                    }
+                    .into(),
+                );
+                ui.set_is_busy(false);
+            }
+        });
+    }
     ui.set_window_visible(true);
     ui.global::<I18n>().set_macos(cfg!(target_os = "macos"));
 
@@ -179,7 +234,14 @@ fn main() -> anyhow::Result<()> {
             if let Some(ui) = ui_weak.upgrade() {
                 let favs = favorites.borrow();
                 let q = ui.get_strategies_query().to_string().trim().to_lowercase();
-                let all = MockCatalog.all();
+                let all = MockCatalog
+                    .all()
+                    .into_iter()
+                    .filter(|s| {
+                        !cfg!(windows)
+                            || EngineMode::from_slug(&ui.get_engine_mode()).includes(s.engine)
+                    })
+                    .collect::<Vec<_>>();
                 ui.set_total_strategy_count(all.len() as i32);
                 let mut list: Vec<Strategy> = all
                     .into_iter()
@@ -218,6 +280,21 @@ fn main() -> anyhow::Result<()> {
     };
     let _ = &catalog;
     rebuild_strategies();
+    {
+        let w = ui.as_weak();
+        let rebuild = rebuild_strategies.clone();
+        ui.on_set_engine_mode(move |mode| {
+            if let Some(ui) = w.upgrade() {
+                ui.set_engine_mode(mode);
+                ui.set_status_running_mode("None".into());
+                ui.set_status_active_engine("".into());
+                ui.set_selected_item(StrategyItem::default());
+                ui.set_selected_strategy("".into());
+                ui.set_is_busy(false);
+                rebuild();
+            }
+        });
+    }
     {
         let favorites = favorites.clone();
         let rebuild_strategies = rebuild_strategies.clone();
@@ -481,6 +558,10 @@ fn main() -> anyhow::Result<()> {
                           latency: i32,
                           rank: i32,
                           best: bool| TestResultItem {
+                    engine: EngineKind::for_strategy_id(id).slug().into(),
+                    baseline: 1,
+                    improved: (ok - 1).max(0),
+                    regressed: 0,
                     id: id.into(),
                     display_name: id.into(),
                     pretty: pretty.into(),
@@ -494,7 +575,16 @@ fn main() -> anyhow::Result<()> {
                 };
                 let rows = vec![
                     mk("general (ALT2)", "general", "ALT2", 12, 12, 184, 1, true),
-                    mk("general", "general", "", 10, 12, 203, 2, false),
+                    mk(
+                        "zapret2:multisplit",
+                        "multisplit",
+                        "",
+                        10,
+                        12,
+                        203,
+                        2,
+                        false,
+                    ),
                     mk("general (ALT)", "general", "ALT", 7, 12, 311, 3, false),
                     mk(
                         "general (SIMPLE FAKE)",
@@ -507,10 +597,26 @@ fn main() -> anyhow::Result<()> {
                         false,
                     ),
                 ];
+                let mode = EngineMode::from_slug(&ui.get_engine_mode());
+                let mut rows: Vec<_> = rows
+                    .into_iter()
+                    .filter(|row| {
+                        !cfg!(windows) || mode.includes(EngineKind::for_strategy_id(&row.id))
+                    })
+                    .collect();
+                for (index, row) in rows.iter_mut().enumerate() {
+                    row.rank = index as i32 + 1;
+                    row.is_best = index == 0 && row.ok > 0;
+                }
+                ui.set_test_best_id(
+                    rows.first()
+                        .filter(|row| row.is_best)
+                        .map(|row| row.id.clone())
+                        .unwrap_or_default(),
+                );
+                ui.set_test_total(rows.len() as i32);
+                ui.set_test_current(rows.len() as i32);
                 ui.set_test_results(Rc::new(slint::VecModel::from(rows)).into());
-                ui.set_test_best_id("general (ALT2)".into());
-                ui.set_test_total(4);
-                ui.set_test_current(4);
                 ui.set_test_running(false);
             }
         });
@@ -723,6 +829,13 @@ fn main() -> anyhow::Result<()> {
     // and/or force a window size, e.g.
     //   ZAPRET_UI_PREVIEW_PAGE=tester ZAPRET_UI_PREVIEW_SIZE=940x900 cargo run --example ui_only
     // The tester page also gets its mock results filled in so the ranked list renders.
+    if let Ok(engine) = std::env::var("ZAPRET_UI_PREVIEW_ENGINE") {
+        ui.set_engine_mode(engine.into());
+        rebuild_strategies();
+    }
+    if let Ok(error) = std::env::var("ZAPRET_UI_PREVIEW_ERROR") {
+        ui.set_core_error(error.into());
+    }
     if let Ok(theme) = std::env::var("ZAPRET_UI_PREVIEW_THEME") {
         ui.set_theme(theme.into());
     }

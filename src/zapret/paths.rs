@@ -7,10 +7,37 @@ use std::path::{Path, PathBuf};
 /// The elevated installer copies the install here and locks it down (see
 /// `service.rs::prepare_protected_dir`) before registering the service.
 pub fn service_install_dir() -> PathBuf {
+    service_install_dir_for_engine(crate::contracts::EngineKind::Zapret1)
+}
+
+/// Each engine keeps its own protected files, while sharing one SCM service slot.
+pub fn service_install_dir_for_engine(engine: crate::contracts::EngineKind) -> PathBuf {
     let program_data = std::env::var_os("ProgramData")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-    program_data.join("zapret-ui").join("zapret")
+    program_data.join("zapret-ui").join(match engine {
+        crate::contracts::EngineKind::Zapret1 => "zapret",
+        crate::contracts::EngineKind::Zapret2 => "zapret2",
+    })
+}
+
+#[cfg(windows)]
+pub fn engine_executable_name(engine: crate::contracts::EngineKind) -> &'static str {
+    match engine {
+        crate::contracts::EngineKind::Zapret1 => "winws.exe",
+        crate::contracts::EngineKind::Zapret2 => "winws2.exe",
+    }
+}
+
+#[cfg(windows)]
+pub fn engine_executable(install_dir: &Path, engine: crate::contracts::EngineKind) -> PathBuf {
+    let name = engine_executable_name(engine);
+    let bin = install_dir.join("bin").join(name);
+    if bin.is_file() || engine == crate::contracts::EngineKind::Zapret2 {
+        bin
+    } else {
+        install_dir.join(name)
+    }
 }
 
 /// Machine-wide location for one-shot elevated helper result files. The helper

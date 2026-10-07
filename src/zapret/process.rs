@@ -1,5 +1,5 @@
-use crate::contracts::{RunningMode, RuntimeStatus, Strategy};
-use crate::ports::Runner;
+use crate::contracts::{EngineKind, RunningMode, RuntimeStatus, Strategy};
+use crate::ports::{Runner, ServiceCtl};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,25 +12,55 @@ extern "system" {
     fn GenerateConsoleCtrlEvent(dwCtrlEvent: u32, dwProcessGroupId: u32) -> i32;
 }
 
+/// Refuse conflicting unmanaged installations instead of killing processes by
+/// basename. Owned-process termination uses canonical paths separately.
+pub(crate) fn ensure_no_interceptor() -> anyhow::Result<()> {
+    let mut snapshot = System::new();
+    snapshot.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    for (pid, process) in snapshot.processes() {
+        let name = process.name().to_string_lossy();
+        if ["winws", "winws.exe", "winws2", "winws2.exe"]
+            .iter()
+            .any(|expected| name.eq_ignore_ascii_case(expected))
+        {
+            anyhow::bail!(
+                "An existing {name} process (PID {}) is still running. Stop that bypass before starting another engine",
+                pid.as_u32()
+            );
+        }
+    }
+    Ok(())
+}
+
 pub struct ProcessRunner {
     install_dir: PathBuf,
+    protected_dir: PathBuf,
+    engine: EngineKind,
     active_child: Arc<Mutex<Option<tokio::process::Child>>>,
     active_strategy_id: Arc<Mutex<Option<String>>>,
     active_started_at: Arc<Mutex<Option<Instant>>>,
     process_snapshot: Arc<Mutex<System>>,
     tcp_preflight: bool,
+    interceptor_guard: bool,
     service_name: String,
 }
 
 impl ProcessRunner {
     pub fn new(install_dir: PathBuf) -> Self {
+        Self::new_for_engine(install_dir, EngineKind::Zapret1)
+    }
+
+    pub fn new_for_engine(install_dir: PathBuf, engine: EngineKind) -> Self {
         Self {
             install_dir,
+            protected_dir: crate::zapret::paths::service_install_dir_for_engine(engine),
+            engine,
             active_child: Arc::new(Mutex::new(None)),
             active_strategy_id: Arc::new(Mutex::new(None)),
             active_started_at: Arc::new(Mutex::new(None)),
             process_snapshot: Arc::new(Mutex::new(System::new())),
-            tcp_preflight: true,
+            tcp_preflight: engine == EngineKind::Zapret1,
+            interceptor_guard: true,
             service_name: "zapret".to_string(),
         }
     }
@@ -47,25 +77,34 @@ impl ProcessRunner {
         self
     }
 
-    fn get_winws_path(&self) -> PathBuf {
-        let bin_path = self.install_dir.join("bin").join("winws.exe");
-        if bin_path.exists() {
-            bin_path
-        } else {
-            self.install_dir.join("winws.exe")
+    /// Tests use inert executable stubs and may run concurrently. Production
+    /// keeps this guard enabled and refuses to overlap any unmanaged winws core.
+    pub fn with_interceptor_guard(mut self, enabled: bool) -> Self {
+        self.interceptor_guard = enabled;
+        self
+    }
+
+    fn ensure_no_interceptor(&self) -> anyhow::Result<()> {
+        if !self.interceptor_guard {
+            return Ok(());
         }
+        ensure_no_interceptor()
+    }
+
+    fn get_winws_path(&self) -> PathBuf {
+        crate::zapret::paths::engine_executable(&self.install_dir, self.engine)
     }
 
     /// The set of canonical winws.exe paths we consider "ours": the configured
     /// install dir and the protected machine-wide service dir.
     fn owned_winws_paths(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
-        let p = self.get_winws_path();
-        out.push(p.canonicalize().unwrap_or(p));
-        let svc_dir = crate::zapret::paths::service_install_dir();
+        let name = crate::zapret::paths::engine_executable_name(self.engine);
         for cand in [
-            svc_dir.join("bin").join("winws.exe"),
-            svc_dir.join("winws.exe"),
+            self.install_dir.join("bin").join(name),
+            self.install_dir.join(name),
+            self.protected_dir.join("bin").join(name),
+            self.protected_dir.join(name),
         ] {
             if cand.exists() {
                 out.push(cand.canonicalize().unwrap_or(cand));
@@ -74,10 +113,35 @@ impl ProcessRunner {
         out
     }
 
+    async fn stoppable_winws_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let service = crate::zapret::service::WindowsServiceCtl::new_for_engine(
+            self.install_dir.clone(),
+            self.engine,
+        )
+        .with_service_name(self.service_name.clone())
+        .with_owned_dir(self.protected_dir.clone());
+        let service_active = service.status().await? != RunningMode::None;
+        if service_active {
+            // This includes legacy services registered against a user directory.
+            // Missing engine identity fails closed instead of killing a service.
+            if service
+                .installed_engine()
+                .await
+                .is_none_or(|engine| engine == self.engine)
+            {
+                return Ok(Vec::new());
+            }
+        }
+        Ok(self.owned_winws_paths())
+    }
+
     /// Whether `process` is a winws.exe that belongs to our installation.
-    fn is_owned_winws(process: &sysinfo::Process, owned: &[PathBuf]) -> bool {
+    fn is_owned_winws(&self, process: &sysinfo::Process, owned: &[PathBuf]) -> bool {
         let name = process.name().to_string_lossy();
-        if !(name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws")) {
+        let expected = crate::zapret::paths::engine_executable_name(self.engine);
+        if !(name.eq_ignore_ascii_case(expected)
+            || name.eq_ignore_ascii_case(expected.trim_end_matches(".exe")))
+        {
             return false;
         }
         match process.exe() {
@@ -103,10 +167,7 @@ impl ProcessRunner {
                 &self.service_name,
                 ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
             ) {
-                let owned_dirs = [
-                    self.install_dir.clone(),
-                    crate::zapret::paths::service_install_dir(),
-                ];
+                let owned_dirs = [self.install_dir.clone(), self.protected_dir.clone()];
                 let owned = crate::zapret::service::service_belongs_to_dirs(
                     &self.service_name,
                     &service,
@@ -114,6 +175,13 @@ impl ProcessRunner {
                 )
                 .unwrap_or(false);
                 if !owned {
+                    return false;
+                }
+                if crate::zapret::service::service_engine(&self.service_name, &service)
+                    .ok()
+                    .flatten()
+                    != Some(self.engine)
+                {
                     return false;
                 }
                 if let Ok(status) = service.query_status() {
@@ -128,18 +196,17 @@ impl ProcessRunner {
 #[async_trait::async_trait]
 impl Runner for ProcessRunner {
     async fn start(&self, strategy: &Strategy) -> anyhow::Result<u32> {
-        // Upstream's general*.bat calls `service.bat status_zapret` before every
-        // launch. That routine enables TCP timestamps; starting winws directly
-        // without reproducing it can leave otherwise-valid strategies broken.
-        if self.tcp_preflight {
-            if let Err(e) = crate::zapret::tcp::ensure_tcp_timestamps_enabled().await {
-                // Upstream warns on a failed netsh prerequisite but still starts
-                // winws. In particular, unelevated development builds cannot SET
-                // machine-wide TCP options.
-                tracing::warn!("TCP timestamps preflight failed; continuing process start: {e:#}");
-            }
-        }
-
+        anyhow::ensure!(
+            strategy.engine == self.engine,
+            "Strategy belongs to a different engine"
+        );
+        let winws_path = self.get_winws_path();
+        anyhow::ensure!(
+            winws_path.is_file(),
+            "{} not found at {:?}",
+            crate::zapret::paths::engine_executable_name(self.engine),
+            winws_path
+        );
         let mut active_child = self.active_child.lock().await;
         // If already running, stop it first
         if active_child.is_some() {
@@ -147,14 +214,22 @@ impl Runner for ProcessRunner {
             self.stop().await?;
             active_child = self.active_child.lock().await;
         }
+        // The router has stopped owned engines. Never terminate an unmanaged
+        // installation, and never start a second interceptor alongside it.
+        self.ensure_no_interceptor()?;
 
-        let winws_path = self.get_winws_path();
-        if !winws_path.exists() {
-            return Err(anyhow::anyhow!("winws.exe not found at {:?}", winws_path));
+        // Match zapret1's service.bat prerequisite; zapret2 does not need it.
+        // Refuse conflicting processes before attempting machine-wide changes.
+        if self.tcp_preflight {
+            if let Err(e) = crate::zapret::tcp::ensure_tcp_timestamps_enabled().await {
+                tracing::warn!("TCP timestamps preflight failed; continuing process start: {e:#}");
+            }
         }
 
         // Make sure the user list files winws expects exist (service.bat does this too).
-        crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
+        if self.engine == EngineKind::Zapret1 {
+            crate::zapret::batparse::ensure_user_lists(&self.install_dir)?;
+        }
 
         // winws.exe is launched with bin/ as the working directory (matches the .bat: `cd /d %BIN%`).
         let bin_dir = winws_path
@@ -175,6 +250,7 @@ impl Runner for ProcessRunner {
 
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        cmd.kill_on_drop(true);
 
         let mut child = cmd.spawn()?;
         let pid = child
@@ -185,6 +261,7 @@ impl Runner for ProcessRunner {
         // UiEvent::LogLine: that stamps every line with a local timestamp +
         // level, persists it to app.log and still reaches the in-app Logs page
         // via the UiWriter broadcast.
+        let engine = self.engine;
         if let Some(stdout) = child.stdout.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
@@ -196,7 +273,10 @@ impl Runner for ProcessRunner {
                     let line = String::from_utf8_lossy(&buf);
                     let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
                     if !trimmed.is_empty() {
-                        tracing::info!(target: "winws", "{}", trimmed);
+                        match engine {
+                            EngineKind::Zapret1 => tracing::info!(target: "winws", "{}", trimmed),
+                            EngineKind::Zapret2 => tracing::info!(target: "winws2", "{}", trimmed),
+                        }
                     }
                     buf.clear();
                 }
@@ -214,11 +294,30 @@ impl Runner for ProcessRunner {
                     let line = String::from_utf8_lossy(&buf);
                     let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
                     if !trimmed.is_empty() {
-                        tracing::warn!(target: "winws", "{}", trimmed);
+                        match engine {
+                            EngineKind::Zapret1 => tracing::warn!(target: "winws", "{}", trimmed),
+                            EngineKind::Zapret2 => tracing::warn!(target: "winws2", "{}", trimmed),
+                        }
                     }
                     buf.clear();
                 }
             });
+        }
+
+        // Argument/Lua/driver initialization failures normally exit immediately.
+        // Observe that failure before reporting a running engine to the GUI or
+        // replacing a working engine in the router. The handle stays local, so
+        // cancellation during this wait also kills the uncommitted child.
+        match timeout(Duration::from_millis(200), child.wait()).await {
+            Ok(Ok(status)) => anyhow::bail!(
+                "{} exited during startup ({status}); inspect the core log for its argument or driver error",
+                crate::zapret::paths::engine_executable_name(self.engine)
+            ),
+            Ok(Err(error)) => anyhow::bail!(
+                "Failed to verify {} startup: {error}",
+                crate::zapret::paths::engine_executable_name(self.engine)
+            ),
+            Err(_) => {}
         }
 
         *active_child = Some(child);
@@ -260,51 +359,43 @@ impl Runner for ProcessRunner {
                     })?;
                 }
             }
-        } else {
-            // Clean up only winws.exe processes belonging to our installation
-            let winws_path = self.get_winws_path();
-            let winws_path_canonical = winws_path.canonicalize().unwrap_or(winws_path.clone());
+        }
+        {
+            // Also join detached owned copies, including protected-directory
+            // orphans after SCM has stopped. Never terminate an active service
+            // behind SCM's back, or a process from an unmanaged directory.
+            let owned = self.stoppable_winws_paths().await?;
 
             let mut sys = System::new();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             for (pid, process) in sys.processes() {
-                let name = process.name().to_string_lossy();
-                if name.eq_ignore_ascii_case("winws.exe") || name.eq_ignore_ascii_case("winws") {
-                    let matches_path = if let Some(exe) = process.exe() {
-                        let exe_canonical = exe.canonicalize().unwrap_or(exe.to_path_buf());
-                        exe_canonical == winws_path_canonical
-                    } else {
-                        false
-                    };
-
-                    if matches_path {
-                        let pid_val = pid.as_u32();
-                        #[cfg(windows)]
-                        unsafe {
-                            if GenerateConsoleCtrlEvent(1, pid_val) == 0 {
-                                tracing::warn!(
-                                    "GenerateConsoleCtrlEvent for pid {pid_val} failed: {}",
-                                    std::io::Error::last_os_error()
-                                );
-                            }
+                if self.is_owned_winws(process, &owned) {
+                    let pid_val = pid.as_u32();
+                    #[cfg(windows)]
+                    unsafe {
+                        if GenerateConsoleCtrlEvent(1, pid_val) == 0 {
+                            tracing::warn!(
+                                "GenerateConsoleCtrlEvent for pid {pid_val} failed: {}",
+                                std::io::Error::last_os_error()
+                            );
                         }
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        let killed = process.kill();
-                        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-                        let mut confirmation = System::new();
-                        loop {
-                            confirmation
-                                .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[*pid]), true);
-                            if !confirmation.processes().contains_key(pid) {
-                                break;
-                            }
-                            if tokio::time::Instant::now() >= deadline {
-                                return Err(anyhow::anyhow!(
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    let killed = process.kill();
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                    let mut confirmation = System::new();
+                    loop {
+                        confirmation
+                            .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[*pid]), true);
+                        if !confirmation.processes().contains_key(pid) {
+                            break;
+                        }
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(anyhow::anyhow!(
                                     "Owned winws process {pid_val} did not terminate (kill accepted: {killed})"
                                 ));
-                            }
-                            tokio::time::sleep(Duration::from_millis(50)).await;
                         }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
                     }
                 }
             }
@@ -317,7 +408,7 @@ impl Runner for ProcessRunner {
     }
 
     async fn detect_running(&self) -> RuntimeStatus {
-        let winws_exists = self.get_winws_path().exists();
+        let winws_exists = self.get_winws_path().is_file();
         let version = std::fs::read_to_string(self.install_dir.join("version.txt"))
             .ok()
             .map(|s| s.trim().to_string());
@@ -371,7 +462,7 @@ impl Runner for ProcessRunner {
             let mut first_owned = None;
             let mut exact_pid = None;
             for (pid, process) in sys.processes() {
-                if Self::is_owned_winws(process, &owned) {
+                if self.is_owned_winws(process, &owned) {
                     let observed = (pid.as_u32(), process.run_time());
                     first_owned.get_or_insert(observed);
                     if Some(pid.as_u32()) == winws_pid {
@@ -395,6 +486,13 @@ impl Runner for ProcessRunner {
         let active_strategy_id = self.active_strategy_id.lock().await.clone();
         let detected_strategy = if mode == RunningMode::None {
             None
+        } else if mode == RunningMode::SystemService {
+            std::fs::read_to_string(
+                crate::zapret::paths::service_install_dir_for_engine(self.engine)
+                    .join(".zapret-ui-strategy"),
+            )
+            .ok()
+            .map(|id| id.trim().to_string())
         } else {
             active_strategy_id
         };
@@ -404,6 +502,7 @@ impl Runner for ProcessRunner {
             installed_version: version,
             running_mode: mode,
             active_strategy: detected_strategy,
+            active_engine: (mode != RunningMode::None).then_some(self.engine),
             winws_pid,
             service_installed: false,
             uptime_secs,
@@ -417,9 +516,61 @@ mod tests {
     use futures_util::FutureExt;
 
     #[tokio::test]
+    async fn stop_joins_protected_orphan_without_touching_unmanaged_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let protected = root.path().join("protected");
+        let unmanaged = root.path().join("unmanaged");
+        std::fs::create_dir_all(protected.join("bin")).unwrap();
+        std::fs::create_dir_all(&unmanaged).unwrap();
+        let source = root.path().join("stub.rs");
+        std::fs::write(
+            &source,
+            "fn main() { std::thread::sleep(std::time::Duration::from_secs(30)); }",
+        )
+        .unwrap();
+        let exe = protected.join("bin/winws2.exe");
+        assert!(std::process::Command::new("rustc")
+            .arg(source)
+            .arg("-o")
+            .arg(&exe)
+            .status()
+            .unwrap()
+            .success());
+        let foreign_exe = unmanaged.join("winws2.exe");
+        std::fs::copy(&exe, &foreign_exe).unwrap();
+        let spawn = |path| {
+            let mut command = tokio::process::Command::new(path);
+            command
+                .creation_flags(0x0800_0000 | 0x0000_0200)
+                .kill_on_drop(true);
+            command.spawn().unwrap()
+        };
+        let mut owned_child = spawn(&exe);
+        let mut foreign_child = spawn(&foreign_exe);
+        let mut runner =
+            ProcessRunner::new_for_engine(root.path().join("user"), EngineKind::Zapret2)
+                .with_service_name("zapret-test-protected-orphan".into())
+                .with_tcp_preflight(false);
+        runner.protected_dir = protected;
+        assert_eq!(runner.detect_running().await.winws_pid, owned_child.id());
+        runner.stop().await.unwrap();
+        let owned_stopped = owned_child.try_wait().unwrap().is_some();
+        let foreign_alive = foreign_child.try_wait().unwrap().is_none();
+        foreign_child.kill().await.unwrap();
+        assert!(owned_stopped);
+        assert!(foreign_alive);
+        assert_eq!(
+            runner.detect_running().await.running_mode,
+            RunningMode::None
+        );
+    }
+
+    #[tokio::test]
     async fn cancelled_stop_keeps_the_child_handle_and_strategy_until_exit() {
         let tmp = tempfile::tempdir().unwrap();
-        let runner = ProcessRunner::new(tmp.path().to_path_buf()).with_tcp_preflight(false);
+        let runner = ProcessRunner::new(tmp.path().to_path_buf())
+            .with_tcp_preflight(false)
+            .with_service_name("zapret-test-cancelled-stop".into());
         let system_cmd = crate::zapret::paths::system_executable("cmd.exe").unwrap();
         let powershell = system_cmd
             .parent()

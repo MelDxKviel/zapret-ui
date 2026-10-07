@@ -102,6 +102,7 @@ fn test_config_fallback_on_corrupt() {
 #[tokio::test]
 async fn test_state_get_and_set_status() {
     let initial_status = RuntimeStatus {
+        active_engine: None,
         installed: false,
         installed_version: None,
         running_mode: RunningMode::None,
@@ -119,6 +120,7 @@ async fn test_state_get_and_set_status() {
 
     // Update status using set_status
     let new_status = RuntimeStatus {
+        active_engine: None,
         installed: true,
         installed_version: Some("v1.0.0".to_string()),
         running_mode: RunningMode::UserProcess,
@@ -200,4 +202,85 @@ fn corrupt_config_diagnostics_do_not_log_proxy_secrets() {
     let logs = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
     assert!(logs.contains("Failed to parse config file"));
     assert!(!logs.contains(secret));
+}
+
+#[test]
+fn engine_preferences_roundtrip_and_preserve_legacy_configuration() {
+    use contracts::{EngineKind, EngineMode, StrategyTestResult};
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = AppConfig {
+        last_strategy: Some("general (ALT2)".into()),
+        simple_last_good: Some("general (ALT2)".into()),
+        favorites: vec!["general (ALT2)".into()],
+        install_dir_override: Some(dir.path().join("legacy-core")),
+        theme: Theme::Dark,
+        language: Language::En,
+        telegram_autostart: true,
+        ..Default::default()
+    };
+    let mut legacy = toml::Value::try_from(&config).unwrap();
+    for key in [
+        "engine_mode",
+        "zapret2_install_dir_override",
+        "strategy_test_results",
+    ] {
+        legacy.as_table_mut().unwrap().remove(key);
+    }
+    fs::write(&path, toml::to_string(&legacy).unwrap()).unwrap();
+    let loaded = AppConfig::load_from_path(&path);
+    assert_eq!(loaded, config);
+    assert_eq!(loaded.engine_mode, EngineMode::Zapret1);
+    assert_ne!(
+        loaded.engine_install_dir(EngineKind::Zapret2),
+        loaded.install_dir()
+    );
+    config.engine_mode = EngineMode::Auto;
+    config.zapret2_install_dir_override = Some(dir.path().join("second-core"));
+    config.strategy_test_results = vec![StrategyTestResult {
+        id: "zapret2:multisplit".into(),
+        engine: EngineKind::Zapret2,
+        baseline_ok: 1,
+        improved: 2,
+        ok: 3,
+        total: 3,
+        avg_latency_ms: 42,
+        rank: 1,
+        ..Default::default()
+    }];
+    config.save_to_path(&path).unwrap();
+    assert_eq!(AppConfig::load_from_path(&path), config);
+    assert!(!path.with_extension("toml.bak").exists());
+}
+
+#[test]
+fn legacy_strategy_defaults_to_zapret1() {
+    let strategy: contracts::Strategy = serde_json::from_str(
+        r#"{
+        "id":"general", "display_name":"general", "category":"Mixed", "description":"",
+        "winws_args":[], "requires_lists":[]
+    }"#,
+    )
+    .unwrap();
+    assert_eq!(strategy.engine, contracts::EngineKind::Zapret1);
+}
+
+#[cfg(windows)]
+#[test]
+fn engine_directories_reject_same_or_nested_installations() {
+    let dir = tempdir().unwrap();
+    let mut config = AppConfig {
+        install_dir_override: Some(dir.path().join("one")),
+        zapret2_install_dir_override: Some(dir.path().join("two")),
+        ..Default::default()
+    };
+    config.validate_engine_directories().unwrap();
+    for path in [
+        dir.path().join("one"),
+        dir.path().join("one/child"),
+        dir.path().to_path_buf(),
+    ] {
+        config.zapret2_install_dir_override = Some(path);
+        assert!(config.validate_engine_directories().is_err());
+    }
 }

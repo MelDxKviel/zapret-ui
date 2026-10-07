@@ -258,6 +258,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Load config and state
     let config = config::AppConfig::load();
+    #[cfg(windows)]
+    config.validate_engine_directories()?;
     let state = state::AppState::default();
 
     let install_dir = config.install_dir();
@@ -269,18 +271,42 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
     let github_client = zapret::github::GithubClient::new(client.clone(), None);
 
-    let installer = Arc::new(zapret::installer::ZapretInstaller::new(
-        install_dir.clone(),
-        github_client,
-    ));
+    let installer: Arc<dyn zapret_ui::ports::Installer> = Arc::new(
+        zapret::installer::ZapretInstaller::new(install_dir.clone(), github_client),
+    );
+    #[cfg(target_os = "macos")]
     let runner = Arc::new(zapret::process::ProcessRunner::new(install_dir.clone()));
     #[cfg(windows)]
-    let service_ctl = Arc::new(zapret::service::WindowsServiceCtl::new(install_dir.clone()));
+    let runtime = zapret::engines::EngineRuntime::new(
+        install_dir.clone(),
+        config.engine_install_dir(zapret_ui::contracts::EngineKind::Zapret2),
+    );
+    #[cfg(windows)]
+    let (runner, service_ctl) = (runtime.runner, runtime.service);
     #[cfg(target_os = "macos")]
     let service_ctl = Arc::new(zapret::service::MacServiceCtl::new(install_dir.clone()));
-    let catalog = Arc::new(zapret::catalog::LocalStrategyCatalog::new(
-        install_dir.clone(),
-    ));
+    let catalog: Arc<dyn zapret_ui::ports::StrategyCatalog> = Arc::new(
+        zapret::catalog::LocalStrategyCatalog::new(install_dir.clone()),
+    );
+    #[cfg(windows)]
+    let installer: Arc<dyn zapret_ui::ports::Installer> =
+        Arc::new(zapret::selection::EngineInstaller::new(
+            installer,
+            Arc::new(zapret::zapret2::Zapret2Installer::new(
+                config.engine_install_dir(zapret_ui::contracts::EngineKind::Zapret2),
+                client.clone(),
+            )),
+            config.engine_mode,
+        ));
+    #[cfg(windows)]
+    let catalog: Arc<dyn zapret_ui::ports::StrategyCatalog> =
+        Arc::new(zapret::selection::EngineCatalog::new(
+            catalog,
+            Arc::new(zapret::zapret2::Zapret2Catalog::new(
+                config.engine_install_dir(zapret_ui::contracts::EngineKind::Zapret2),
+            )),
+            config.engine_mode,
+        ));
     let tester = Arc::new(zapret::tester::ConnectivityTester::new(
         runner.clone(),
         install_dir.clone(),

@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::contracts::{
-    split_alt, AutoEngageOutcome, BackendCmd, GameFilterMode, InstallStage, IpsetMode, RunningMode,
-    UiEvent,
+    split_alt, AutoEngageOutcome, BackendCmd, EngineKind, EngineMode, GameFilterMode, InstallStage,
+    IpsetMode, RunningMode, UiEvent,
 };
 use crate::ports::{
     Installer, Maintenance, Runner, SelfUpdater, ServiceCtl, StrategyCatalog, StrategyTester,
@@ -18,6 +18,8 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 slint::include_modules!();
 
+#[cfg(test)]
+mod engine_tests;
 mod preferences;
 #[cfg(target_os = "macos")]
 #[path = "../platform/macos/reopen.rs"]
@@ -166,6 +168,9 @@ fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
     matches!(
         cmd,
         BackendCmd::Install
+            | BackendCmd::InstallAndEngage
+            | BackendCmd::SetEngineMode(_)
+            | BackendCmd::SelfUpdate
             | BackendCmd::Update
             | BackendCmd::Start(_)
             | BackendCmd::AutoEngage
@@ -178,6 +183,59 @@ fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
     )
 }
 
+/// Commit scan completion and cancellation under the same lock. A cancellation
+/// accepted before this boundary always stops the winner before enabling Start.
+async fn finish_scan(
+    runner: &Arc<dyn Runner>,
+    running: &AtomicBool,
+    cancelled: &AtomicBool,
+    completion: &std::sync::Mutex<()>,
+) -> anyhow::Result<bool> {
+    {
+        let _guard = completion.lock().unwrap();
+        if !cancelled.load(Ordering::SeqCst) {
+            running.store(false, Ordering::SeqCst);
+            return Ok(false);
+        }
+    }
+    let stopped = runner.stop().await;
+    {
+        let _guard = completion.lock().unwrap();
+        running.store(false, Ordering::SeqCst);
+    }
+    stopped?;
+    Ok(true)
+}
+
+#[cfg(windows)]
+async fn start_test_winner(
+    runner: &Arc<dyn Runner>,
+    catalog: &Arc<dyn StrategyCatalog>,
+    results: &[crate::contracts::StrategyTestResult],
+    cancelled: &AtomicBool,
+    events: &broadcast::Sender<UiEvent>,
+) -> String {
+    for result in results.iter().filter(|r| r.eligible()) {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        let Some(strategy) = catalog.by_id(&result.id) else {
+            continue;
+        };
+        match runner.start(&strategy).await {
+            Ok(_) => return result.id.clone(),
+            Err(e) => {
+                let _ = events.send(UiEvent::Error(format!("{e:#}")));
+                if let Err(e) = runner.stop().await {
+                    let _ = events.send(UiEvent::Error(format!("{e:#}")));
+                    break;
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 /// Candidate strategies for auto-engage, ordered so the most likely winner is
 /// tried first: the last-known-good strategy, then starred favorites, then the
 /// remaining catalog order. De-duplicated, preserving first occurrence.
@@ -186,6 +244,7 @@ fn ordered_candidates(
     last_strategy: Option<&str>,
     favorites: &[String],
 ) -> Vec<crate::contracts::Strategy> {
+    let available = catalog.all();
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push = |out: &mut Vec<crate::contracts::Strategy>, s: crate::contracts::Strategy| {
@@ -194,16 +253,16 @@ fn ordered_candidates(
         }
     };
     if let Some(id) = last_strategy {
-        if let Some(s) = catalog.by_id(id) {
-            push(&mut out, s);
+        if let Some(s) = available.iter().find(|s| s.id == id) {
+            push(&mut out, s.clone());
         }
     }
     for fav in favorites {
-        if let Some(s) = catalog.by_id(fav) {
-            push(&mut out, s);
+        if let Some(s) = available.iter().find(|s| &s.id == fav) {
+            push(&mut out, s.clone());
         }
     }
-    for s in catalog.all() {
+    for s in available {
         push(&mut out, s);
     }
     out
@@ -220,7 +279,11 @@ async fn elevate_service_task(
     config: &Arc<RwLock<AppConfig>>,
     event_tx: &broadcast::Sender<UiEvent>,
 ) -> bool {
-    let install_dir = current_install_dir(config).await;
+    let install_dir = config.read().await.engine_install_dir(
+        strategy
+            .map(EngineKind::for_strategy_id)
+            .unwrap_or_default(),
+    );
     match relaunch_elevated(task, strategy, &install_dir) {
         Ok(handle) => match wait_for_elevated_result(handle).await {
             Ok(()) => true,
@@ -244,12 +307,15 @@ async fn elevate_service_task(
 /// same four-step "settle the status" sequence, so it lives here instead of
 /// being copy-pasted into each handler (see CLAUDE.md "Status flow").
 async fn refresh_and_broadcast(
+    installer: &Arc<dyn Installer>,
     runner: &Arc<dyn Runner>,
     service_ctl: &Arc<dyn ServiceCtl>,
     state: &AppState,
     event_tx: &broadcast::Sender<UiEvent>,
 ) {
     let mut status = runner.detect_running().await;
+    status.installed = installer.is_installed().await;
+    status.installed_version = installer.installed_version().await;
     status.service_installed = service_ctl.is_installed().await;
     state.set_status(status.clone()).await;
     let _ = event_tx.send(UiEvent::Status(status));
@@ -289,12 +355,7 @@ async fn stop_bypass_before_install(
     config: &Arc<RwLock<AppConfig>>,
     event_tx: &broadcast::Sender<UiEvent>,
 ) -> bool {
-    if let Err(e) = runner.stop().await {
-        let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
-        return false;
-    }
-
-    match service_ctl.status().await {
+    let service_stopped = match service_ctl.status().await {
         Ok(RunningMode::SystemService) => match service_ctl.stop().await {
             Ok(()) => true,
             Err(e) => elevate_or_report(e, "service-stop", None, config, event_tx).await,
@@ -304,7 +365,15 @@ async fn stop_bypass_before_install(
             let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
             false
         }
+    };
+    if !service_stopped {
+        return false;
     }
+    if let Err(e) = runner.stop().await {
+        let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+        return false;
+    }
+    true
 }
 
 /// A failed process stop must abort the transition to service mode; otherwise
@@ -314,6 +383,11 @@ async fn stop_process_before_service(
     runner: &Arc<dyn Runner>,
     event_tx: &broadcast::Sender<UiEvent>,
 ) -> bool {
+    // Let the service adapter snapshot its registration and running state before
+    // replacement, so a failed install can restore both.
+    if runner.detect_running().await.running_mode != RunningMode::UserProcess {
+        return true;
+    }
     match runner.stop().await {
         Ok(()) => true,
         Err(e) => {
@@ -354,6 +428,11 @@ impl App {
         state: AppState,
         event_tx: broadcast::Sender<UiEvent>,
     ) -> Self {
+        #[cfg(windows)]
+        {
+            installer.set_engine_mode(config.engine_mode);
+            catalog.set_engine_mode(config.engine_mode);
+        }
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
 
         Self {
@@ -386,6 +465,13 @@ impl App {
                 .slug(),
         )?;
         let ui = MainWindow::new()?;
+        ui.set_supports_engine_selection(cfg!(windows));
+        if let Ok(config) = self.config.try_read() {
+            ui.set_engine_mode(config.engine_mode.slug().into());
+            TEST_RESULTS
+                .with(|results| *results.borrow_mut() = config.strategy_test_results.clone());
+            rebuild_test_results(&ui);
+        }
         let preferences = preferences::Controller::new(self.config.clone());
         let telegram = telegram::bind(
             &ui,
@@ -477,18 +563,31 @@ impl App {
             ui.set_autoengage(c.autoengage);
             ui.set_theme(c.theme.slug().into());
             ui.set_ui_mode(c.ui_mode.slug().into());
-            ui.set_install_dir(c.install_dir().display().to_string().into());
+            ui.set_install_dir(
+                c.engine_install_dir(if cfg!(windows) && c.engine_mode == EngineMode::Zapret2 {
+                    EngineKind::Zapret2
+                } else {
+                    EngineKind::Zapret1
+                })
+                .display()
+                .to_string()
+                .into(),
+            );
         }
 
         // Populate strategies list (favorites first).
         rebuild_strategies(&ui, &self.catalog);
 
-        // Restore the previously selected strategy as the user's current pick.
-        if let Some(id) = last_strategy {
-            if let Some(s) = self.catalog.by_id(&id) {
-                ui.set_selected_item(to_item(&s));
-                ui.set_selected_strategy(id.as_str().into());
-            }
+        // Resolve only within the selected mode; a saved legacy choice remains
+        // available when the user switches back to its engine.
+        let available = self.catalog.all();
+        if let Some(strategy) = available
+            .iter()
+            .find(|s| Some(&s.id) == last_strategy.as_ref())
+            .or_else(|| available.first())
+        {
+            ui.set_selected_item(to_item(strategy));
+            ui.set_selected_strategy(strategy.id.as_str().into());
         }
 
         // Search: rebuild the model from the catalog filtered by the query string.
@@ -563,6 +662,16 @@ impl App {
             tokio::spawn(async move {
                 let _ = tx.send(cmd).await;
             });
+        }
+        {
+            let tx = self.cmd_tx.clone();
+            ui.on_set_engine_mode(move |mode| {
+                dispatch(&tx, BackendCmd::SetEngineMode(EngineMode::from_slug(&mode)))
+            });
+        }
+        {
+            let tx = self.cmd_tx.clone();
+            ui.on_install_and_engage(move || dispatch(&tx, BackendCmd::InstallAndEngage));
         }
         {
             let cmd_tx_c = self.cmd_tx.clone();
@@ -727,7 +836,7 @@ impl App {
             ui.on_test_use_strategy(move |id| {
                 if let Some(ui) = ui_weak.upgrade() {
                     let id = id.to_string();
-                    if let Some(s) = catalog.by_id(&id) {
+                    if let Some(s) = catalog.all().into_iter().find(|strategy| strategy.id == id) {
                         ui.set_selected_item(to_item(&s));
                         ui.set_selected_strategy(id.as_str().into());
                         ui.set_current_page("home".into());
@@ -880,8 +989,8 @@ impl App {
                 let _ = cmd_tx_close.try_send(BackendCmd::MinimizedToTray);
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
-                let _ = slint::quit_event_loop();
-                slint::CloseRequestResponse::HideWindow
+                dispatch(&cmd_tx_close, BackendCmd::Quit);
+                slint::CloseRequestResponse::KeepWindowShown
             }
         });
 
@@ -930,9 +1039,8 @@ impl App {
                 let _ = cmd_tx.try_send(BackendCmd::Stop);
             });
         }
-        tray.on_quit(|| {
-            let _ = slint::quit_event_loop();
-        });
+        let tx_quit = self.cmd_tx.clone();
+        tray.on_quit(move || dispatch(&tx_quit, BackendCmd::Quit));
 
         #[cfg(target_os = "macos")]
         {
@@ -963,6 +1071,20 @@ impl App {
         // Listen to UiEvents and update Slint properties
         let ui_weak = ui.as_weak();
         let catalog = self.catalog.clone();
+        let directories = self
+            .config
+            .try_read()
+            .map(|c| {
+                [
+                    c.engine_install_dir(EngineKind::Zapret1)
+                        .display()
+                        .to_string(),
+                    c.engine_install_dir(EngineKind::Zapret2)
+                        .display()
+                        .to_string(),
+                ]
+            })
+            .unwrap_or_default();
         let mut event_rx = self.event_tx.subscribe();
         tokio::spawn(async move {
             loop {
@@ -975,6 +1097,7 @@ impl App {
                 };
                 let ui_weak = ui_weak.clone();
                 let catalog = catalog.clone();
+                let directories = directories.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         match event {
@@ -1006,6 +1129,13 @@ impl App {
                                 ui.set_telegram_autostart(enabled);
                             }
                             UiEvent::Status(status) => {
+                                ui.set_status_active_engine(
+                                    status
+                                        .active_engine
+                                        .map(|e| e.slug())
+                                        .unwrap_or_default()
+                                        .into(),
+                                );
                                 ui.set_status_installed(status.installed);
                                 ui.set_status_installed_version(
                                     status.installed_version.unwrap_or_default().into(),
@@ -1062,6 +1192,9 @@ impl App {
                                 ui.set_progress(pct);
                             }
                             UiEvent::InstallProgress(stage) => {
+                                if matches!(stage, InstallStage::Resolving) {
+                                    ui.set_core_error("".into());
+                                }
                                 ui.set_is_busy(!matches!(stage, InstallStage::Done));
                                 if let InstallStage::Done = stage {
                                     ui.set_progress(1.0);
@@ -1097,7 +1230,33 @@ impl App {
                             }
                             UiEvent::Error(err) => {
                                 ui.set_is_busy(false);
+                                ui.set_core_error(err.clone().into());
                                 report_ui_error(&ui, err);
+                            }
+                            UiEvent::EngineMode(mode) => {
+                                ui.set_engine_mode(mode.slug().into());
+                                ui.set_install_dir(
+                                    directories[usize::from(mode == EngineMode::Zapret2)]
+                                        .as_str()
+                                        .into(),
+                                );
+                                ui.set_has_update(false);
+                                ui.set_latest_version("".into());
+                                ui.set_simple_failed(false);
+                                ui.set_core_error("".into());
+                                let selected = catalog.all().into_iter().next();
+                                ui.set_selected_strategy(
+                                    selected
+                                        .as_ref()
+                                        .map(|s| s.id.as_str())
+                                        .unwrap_or_default()
+                                        .into(),
+                                );
+                                ui.set_selected_item(
+                                    selected.as_ref().map(to_item).unwrap_or_default(),
+                                );
+                                rebuild_strategies(&ui, &catalog);
+                                rebuild_test_results(&ui);
                             }
                             UiEvent::TestStarted { total } => {
                                 TEST_RESULTS.with(|b| b.borrow_mut().clear());
@@ -1148,6 +1307,9 @@ impl App {
                                 }
                             }
                             UiEvent::AutoEngageProgress { index, total } => {
+                                ui.set_is_busy(true);
+                                ui.set_pending_op("start".into());
+                                ui.set_simple_failed(false);
                                 ui.set_engage_index(index as i32);
                                 ui.set_engage_total(total as i32);
                             }
@@ -1238,7 +1400,7 @@ impl App {
 
         // Run the backend loop task
         if let Some(cmd_rx) = self.cmd_rx.take() {
-            self.run_backend_loop(cmd_rx, preferences.clone());
+            self.run_backend_loop(cmd_rx, preferences.clone(), telegram.clone());
         }
 
         // Periodically refresh status
@@ -1279,7 +1441,9 @@ impl App {
         }
         // Auto-start the last-used strategy on launch when enabled.
         if autoengage {
-            if let Some(id) = last_strategy {
+            if cfg!(windows) {
+                let _ = self.cmd_tx.try_send(BackendCmd::AutoEngage);
+            } else if let Some(id) = last_strategy {
                 let _ = self.cmd_tx.try_send(BackendCmd::Start(id));
             }
         }
@@ -1320,6 +1484,7 @@ impl App {
         &self,
         mut rx: mpsc::Receiver<BackendCmd>,
         preferences: preferences::Controller,
+        telegram: telegram::Controller,
     ) {
         let installer = self.installer.clone();
         let runner = self.runner.clone();
@@ -1331,6 +1496,7 @@ impl App {
         let event_tx = self.event_tx.clone();
         let config = self.config.clone();
         let state = self.state.clone();
+        let command_tx = self.cmd_tx.clone();
 
         tokio::spawn(async move {
             let test_running = Arc::new(AtomicBool::new(false));
@@ -1345,15 +1511,23 @@ impl App {
             // a real transition (see `notify_bypass`). Seeded to "stopped". An
             // `Arc<Mutex>` so the spawned auto-engage task can update it too.
             let notified_running = Arc::new(tokio::sync::Mutex::new(Some(false)));
+            let scan_completion = Arc::new(std::sync::Mutex::new(()));
+            let mut scan_task: Option<tokio::task::JoinHandle<()>> = None;
             while let Some(cmd) = rx.recv().await {
+                let scan_active = scan_task.as_ref().is_some_and(|task| !task.is_finished());
                 // While a simple-mode auto-engage is probing candidates, skip the
                 // periodic status refresh: catching a candidate's winws mid-run
                 // would briefly flip the dial to "active" and back.
-                if auto_engaging.load(Ordering::SeqCst) && matches!(cmd, BackendCmd::RefreshStatus)
+                if (scan_active
+                    || auto_engaging.load(Ordering::SeqCst)
+                    || test_running.load(Ordering::SeqCst))
+                    && matches!(cmd, BackendCmd::RefreshStatus)
                 {
                     continue;
                 }
-                if (test_running.load(Ordering::SeqCst) || auto_engaging.load(Ordering::SeqCst))
+                if (scan_active
+                    || test_running.load(Ordering::SeqCst)
+                    || auto_engaging.load(Ordering::SeqCst))
                     && conflicts_with_running_test(&cmd)
                 {
                     let _ =
@@ -1361,7 +1535,81 @@ impl App {
                     continue;
                 }
                 match cmd {
-                    BackendCmd::Install | BackendCmd::Update => {
+                    BackendCmd::Quit => {
+                        auto_cancelled.store(true, Ordering::SeqCst);
+                        test_cancelled.store(true, Ordering::SeqCst);
+                        tester.cancel();
+                        if let Some(task) = scan_task.take() {
+                            let _ = task.await;
+                        }
+                        if let Err(e) = telegram.shutdown().await {
+                            let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                            continue;
+                        }
+                        if runner.detect_running().await.running_mode == RunningMode::UserProcess {
+                            if let Err(e) = runner.stop().await {
+                                let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                                continue;
+                            }
+                        }
+                        preferences.flush().await;
+                        let _ = slint::invoke_from_event_loop(|| {
+                            let _ = slint::quit_event_loop();
+                        });
+                        break;
+                    }
+                    BackendCmd::SetEngineMode(mode) => {
+                        if !cfg!(windows) {
+                            continue;
+                        }
+                        if !stop_bypass_before_install(&runner, &service_ctl, &config, &event_tx)
+                            .await
+                        {
+                            continue;
+                        }
+                        // A stopped automatic service would otherwise launch the
+                        // excluded engine again at the next Windows boot.
+                        if service_ctl
+                            .installed_engine()
+                            .await
+                            .is_some_and(|engine| !mode.includes(engine))
+                        {
+                            if let Err(error) = service_ctl.remove().await {
+                                if !elevate_or_report(
+                                    error,
+                                    "service-remove",
+                                    None,
+                                    &config,
+                                    &event_tx,
+                                )
+                                .await
+                                {
+                                    continue;
+                                }
+                            }
+                        }
+                        {
+                            let mut cfg = config.write().await;
+                            let previous = cfg.engine_mode;
+                            cfg.engine_mode = mode;
+                            if let Err(e) = cfg.save() {
+                                cfg.engine_mode = previous;
+                                let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
+                                continue;
+                            }
+                        }
+                        installer.set_engine_mode(mode);
+                        catalog.set_engine_mode(mode);
+                        let _ = event_tx.send(UiEvent::EngineMode(mode));
+                        let mut status = runner.detect_running().await;
+                        status.installed = installer.is_installed().await;
+                        status.installed_version = installer.installed_version().await;
+                        status.service_installed = service_ctl.is_installed().await;
+                        state.set_status(status.clone()).await;
+                        let _ = event_tx.send(UiEvent::Status(status));
+                    }
+                    BackendCmd::Install | BackendCmd::Update | BackendCmd::InstallAndEngage => {
+                        let engage = matches!(cmd, BackendCmd::InstallAndEngage);
                         // Install and Update are the same backend operation —
                         // `install_or_update` handles both a fresh install and an
                         // upgrade — so they share one handler; only the button differs.
@@ -1370,7 +1618,14 @@ impl App {
                             .await
                         {
                             let _ = event_tx.send(UiEvent::InstallProgress(InstallStage::Done));
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
                             continue;
                         }
                         let event_tx_c = event_tx.clone();
@@ -1388,13 +1643,28 @@ impl App {
                                 let installed =
                                     installer.installed_version().await.unwrap_or_default();
                                 let _ = event_tx.send(UiEvent::UpToDate { latest: installed });
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                    .await;
+                                refresh_and_broadcast(
+                                    &installer,
+                                    &runner,
+                                    &service_ctl,
+                                    &state,
+                                    &event_tx,
+                                )
+                                .await;
+                                if engage {
+                                    let _ = command_tx.try_send(BackendCmd::AutoEngage);
+                                }
                             }
                             Err(e) => {
                                 let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                    .await;
+                                refresh_and_broadcast(
+                                    &installer,
+                                    &runner,
+                                    &service_ctl,
+                                    &state,
+                                    &event_tx,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1468,7 +1738,9 @@ impl App {
                         }
                     }
                     BackendCmd::Start(strategy_id) => {
-                        if let Some(strategy) = catalog.by_id(&strategy_id) {
+                        if let Some(strategy) =
+                            catalog.all().into_iter().find(|s| s.id == strategy_id)
+                        {
                             match runner.start(&strategy).await {
                                 Ok(pid) => {
                                     {
@@ -1484,18 +1756,24 @@ impl App {
                                     )
                                     .await;
                                     let mut status = runner.detect_running().await;
-                                    status.running_mode = if cfg!(target_os = "macos") {
-                                        RunningMode::SystemService
-                                    } else {
-                                        RunningMode::UserProcess
-                                    };
-                                    status.active_strategy = Some(strategy_id);
-                                    status.winws_pid = Some(pid);
+                                    if status.running_mode != RunningMode::None {
+                                        status.active_strategy = Some(strategy_id);
+                                        status.active_engine = Some(strategy.engine);
+                                        status.winws_pid = Some(pid);
+                                    }
                                     state.set_status(status.clone()).await;
                                     let _ = event_tx.send(UiEvent::Status(status));
                                 }
                                 Err(e) => {
                                     let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
+                                    refresh_and_broadcast(
+                                        &installer,
+                                        &runner,
+                                        &service_ctl,
+                                        &state,
+                                        &event_tx,
+                                    )
+                                    .await;
                                 }
                             }
                         } else {
@@ -1510,7 +1788,14 @@ impl App {
                         // dial is already "active").
                         let status = runner.detect_running().await;
                         if status.running_mode != RunningMode::None {
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
                             continue;
                         }
 
@@ -1520,7 +1805,13 @@ impl App {
                         // once) and verify it quietly in the background. If that
                         // background check fails, we forget the remembered strategy
                         // so the NEXT engage runs a full scan.
-                        let last_good = { config.read().await.simple_last_good.clone() };
+                        // Windows scans compare against a fresh no-bypass baseline.
+                        // Keep the existing fast path on macOS.
+                        let last_good = if cfg!(windows) {
+                            None
+                        } else {
+                            config.read().await.simple_last_good.clone()
+                        };
                         let mut fast_started = false;
                         if let Some(id) = last_good {
                             match catalog.by_id(&id) {
@@ -1585,7 +1876,7 @@ impl App {
                                             // instead of opening another password dialog.
                                             let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
                                             let _ = event_tx.send(UiEvent::AutoEngageFailed);
-                                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                                            refresh_and_broadcast(&installer, &runner, &service_ctl, &state, &event_tx).await;
                                             continue;
                                         }
                                         // Couldn't start the remembered one — forget it
@@ -1622,7 +1913,12 @@ impl App {
                         // so an empty catalog here just means nothing is installed).
                         let (last, favs) = {
                             let c = config.read().await;
-                            (c.last_strategy.clone(), c.favorites.clone())
+                            (
+                                c.simple_last_good
+                                    .clone()
+                                    .or_else(|| c.last_strategy.clone()),
+                                c.favorites.clone(),
+                            )
                         };
                         let candidates = ordered_candidates(&catalog, last.as_deref(), &favs);
                         if candidates.is_empty() {
@@ -1631,7 +1927,14 @@ impl App {
                                 tr_config(&config, "err.no_strategies_to_test").await,
                             ));
                             let _ = event_tx.send(UiEvent::AutoEngageFailed);
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
                             continue;
                         }
 
@@ -1639,6 +1942,7 @@ impl App {
                         // (crucially CancelAutoEngage, which flips the cancel flag).
                         let tester_c = tester.clone();
                         let runner_c = runner.clone();
+                        let installer_c = installer.clone();
                         let service_ctl_c = service_ctl.clone();
                         let state_c = state.clone();
                         let config_c = config.clone();
@@ -1646,7 +1950,8 @@ impl App {
                         let auto_engaging_c = auto_engaging.clone();
                         let auto_cancelled_c = auto_cancelled.clone();
                         let notified_c = notified_running.clone();
-                        tokio::spawn(async move {
+                        let completion_c = scan_completion.clone();
+                        scan_task = Some(tokio::spawn(async move {
                             let ev_progress = event_tx_c.clone();
                             let cancelled = auto_cancelled_c.clone();
                             let cancel_tester = tester_c.clone();
@@ -1660,7 +1965,20 @@ impl App {
                                 let _ =
                                     ev_progress.send(UiEvent::AutoEngageProgress { index, total });
                             });
-                            match tester_c.auto_engage(candidates, on_progress).await {
+                            let mut outcome = tester_c.auto_engage(candidates, on_progress).await;
+                            match finish_scan(
+                                &runner_c,
+                                &auto_engaging_c,
+                                &auto_cancelled_c,
+                                &completion_c,
+                            )
+                            .await
+                            {
+                                Ok(true) => outcome = Ok(AutoEngageOutcome::Cancelled),
+                                Err(e) => outcome = Err(e),
+                                Ok(false) => {}
+                            }
+                            match outcome {
                                 Ok(AutoEngageOutcome::Engaged(id)) => {
                                     {
                                         let mut cfg = config_c.write().await;
@@ -1686,21 +2004,41 @@ impl App {
                                     let _ = event_tx_c.send(UiEvent::AutoEngageFailed);
                                 }
                             }
-                            if auto_cancelled_c.load(Ordering::SeqCst) {
-                                if let Err(e) = runner_c.stop().await {
-                                    let _ = event_tx_c.send(UiEvent::Error(format!("{e:#}")));
+                            #[cfg(windows)]
+                            {
+                                let results = tester_c.last_results();
+                                let best = if auto_cancelled_c.load(Ordering::SeqCst) {
+                                    String::new()
+                                } else {
+                                    runner_c
+                                        .detect_running()
+                                        .await
+                                        .active_strategy
+                                        .unwrap_or_default()
+                                };
+                                if !auto_cancelled_c.load(Ordering::SeqCst) {
+                                    let mut cfg = config_c.write().await;
+                                    cfg.strategy_test_results = results.clone();
+                                    if let Err(e) = cfg.save() {
+                                        let _ = event_tx_c.send(UiEvent::Error(format!("{e:#}")));
+                                    }
                                 }
+                                let _ = event_tx_c.send(UiEvent::TestComplete { best, results });
                             }
-                            // Release the flag before the final refresh so the next
-                            // periodic poll is no longer suppressed.
-                            auto_engaging_c.store(false, Ordering::SeqCst);
-                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c)
-                                .await;
-                        });
+                            refresh_and_broadcast(
+                                &installer_c,
+                                &runner_c,
+                                &service_ctl_c,
+                                &state_c,
+                                &event_tx_c,
+                            )
+                            .await;
+                        }));
                     }
                     BackendCmd::CancelAutoEngage => {
                         // Same cancel flag as the tester; the in-flight auto_engage
                         // notices it, stops winws, and resolves to Cancelled.
+                        let _completion = scan_completion.lock().unwrap();
                         if auto_engaging.load(Ordering::SeqCst) {
                             auto_cancelled.store(true, Ordering::SeqCst);
                             tester.cancel();
@@ -1712,8 +2050,14 @@ impl App {
                             match service_ctl.stop().await {
                                 Ok(_) => {
                                     notify_bypass(&config, &notified_running, false, None).await;
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                        .await;
+                                    refresh_and_broadcast(
+                                        &installer,
+                                        &runner,
+                                        &service_ctl,
+                                        &state,
+                                        &event_tx,
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
                                     if elevate_or_report(
@@ -1728,6 +2072,7 @@ impl App {
                                         notify_bypass(&config, &notified_running, false, None)
                                             .await;
                                         refresh_and_broadcast(
+                                            &installer,
                                             &runner,
                                             &service_ctl,
                                             &state,
@@ -1741,8 +2086,14 @@ impl App {
                             match runner.stop().await {
                                 Ok(_) => {
                                     notify_bypass(&config, &notified_running, false, None).await;
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                        .await;
+                                    refresh_and_broadcast(
+                                        &installer,
+                                        &runner,
+                                        &service_ctl,
+                                        &state,
+                                        &event_tx,
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
                                     let _ = event_tx.send(UiEvent::Error(format!("{:#}", e)));
@@ -1751,14 +2102,22 @@ impl App {
                         }
                     }
                     BackendCmd::ServiceInstall(strategy_id) => {
-                        if let Some(strategy) = catalog.by_id(&strategy_id) {
+                        if let Some(strategy) =
+                            catalog.all().into_iter().find(|s| s.id == strategy_id)
+                        {
                             // A user-process bypass holds the WinDivert driver, which
                             // would make the service's own winws.exe fail to start.
                             // Stop it first so the service can take over cleanly.
                             #[cfg(windows)]
                             if !stop_process_before_service(&runner, &event_tx).await {
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                    .await;
+                                refresh_and_broadcast(
+                                    &installer,
+                                    &runner,
+                                    &service_ctl,
+                                    &state,
+                                    &event_tx,
+                                )
+                                .await;
                                 continue;
                             }
                             // Always install via the protected machine dir — even when
@@ -1773,8 +2132,14 @@ impl App {
                                         Some(&strategy_id),
                                     )
                                     .await;
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                        .await;
+                                    refresh_and_broadcast(
+                                        &installer,
+                                        &runner,
+                                        &service_ctl,
+                                        &state,
+                                        &event_tx,
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
                                     if elevate_or_report(
@@ -1787,6 +2152,7 @@ impl App {
                                     .await
                                     {
                                         refresh_and_broadcast(
+                                            &installer,
                                             &runner,
                                             &service_ctl,
                                             &state,
@@ -1806,37 +2172,97 @@ impl App {
                     BackendCmd::ServiceRemove => match service_ctl.remove().await {
                         Ok(_) => {
                             notify_bypass(&config, &notified_running, false, None).await;
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             if elevate_or_report(e, "service-remove", None, &config, &event_tx)
                                 .await
                             {
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                    .await;
+                                refresh_and_broadcast(
+                                    &installer,
+                                    &runner,
+                                    &service_ctl,
+                                    &state,
+                                    &event_tx,
+                                )
+                                .await;
                             }
                         }
                     },
                     BackendCmd::ServiceStart => {
+                        #[cfg(windows)]
+                        {
+                            let cfg = config.read().await;
+                            let mode = cfg.engine_mode;
+                            if service_ctl
+                                .installed_engine()
+                                .await
+                                .is_some_and(|engine| !mode.includes(engine))
+                            {
+                                let strategy = ordered_candidates(
+                                    &catalog,
+                                    cfg.last_strategy.as_deref(),
+                                    &cfg.favorites,
+                                )
+                                .into_iter()
+                                .next();
+                                drop(cfg);
+                                if let Some(strategy) = strategy {
+                                    let _ = command_tx
+                                        .try_send(BackendCmd::ServiceInstall(strategy.id));
+                                } else {
+                                    let _ = event_tx.send(UiEvent::Error(
+                                        tr_config(&config, "err.no_strategies_to_test").await,
+                                    ));
+                                }
+                                continue;
+                            }
+                        }
                         // Release the WinDivert driver from any user-process bypass so
                         // the service's winws.exe isn't blocked from starting.
                         #[cfg(windows)]
                         if !stop_process_before_service(&runner, &event_tx).await {
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
                             continue;
                         }
                         match service_ctl.start().await {
                             Ok(_) => {
                                 notify_bypass(&config, &notified_running, true, None).await;
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                    .await;
+                                refresh_and_broadcast(
+                                    &installer,
+                                    &runner,
+                                    &service_ctl,
+                                    &state,
+                                    &event_tx,
+                                )
+                                .await;
                             }
                             Err(e) => {
                                 if elevate_or_report(e, "service-start", None, &config, &event_tx)
                                     .await
                                 {
-                                    refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                        .await;
+                                    refresh_and_broadcast(
+                                        &installer,
+                                        &runner,
+                                        &service_ctl,
+                                        &state,
+                                        &event_tx,
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -1844,13 +2270,26 @@ impl App {
                     BackendCmd::ServiceStop => match service_ctl.stop().await {
                         Ok(_) => {
                             notify_bypass(&config, &notified_running, false, None).await;
-                            refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx).await;
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             if elevate_or_report(e, "service-stop", None, &config, &event_tx).await
                             {
-                                refresh_and_broadcast(&runner, &service_ctl, &state, &event_tx)
-                                    .await;
+                                refresh_and_broadcast(
+                                    &installer,
+                                    &runner,
+                                    &service_ctl,
+                                    &state,
+                                    &event_tx,
+                                )
+                                .await;
                             }
                         }
                     },
@@ -1868,24 +2307,26 @@ impl App {
                                 Err(e) => tracing::warn!("Service status query failed: {:#}", e),
                             }
                         }
-                        if !status.installed {
-                            status.installed = installer.is_installed().await;
-                        }
+                        status.installed = installer.is_installed().await;
                         // If a Windows service or user process is detected, treat zapret as installed
                         // even if our managed install dir is empty (system service may point elsewhere).
-                        if status.running_mode != RunningMode::None {
+                        if !cfg!(windows) && status.running_mode != RunningMode::None {
                             status.installed = true;
                         }
-                        if status.installed_version.is_none() {
-                            status.installed_version = installer.installed_version().await;
-                        }
+                        status.installed_version = installer.installed_version().await;
                         state.set_status(status.clone()).await;
                         let _ = event_tx.send(UiEvent::Status(status));
                         // Keep the Settings filter toggles in sync with disk.
                         let _ = event_tx.send(UiEvent::Maintenance(maintenance.status().await));
                     }
                     BackendCmd::OpenInstallFolder => {
-                        let install_dir = current_install_dir(&config).await;
+                        let cfg = config.read().await;
+                        let install_dir =
+                            cfg.engine_install_dir(if cfg.engine_mode == EngineMode::Zapret2 {
+                                EngineKind::Zapret2
+                            } else {
+                                EngineKind::Zapret1
+                            });
                         open_external(&install_dir.to_string_lossy());
                     }
                     BackendCmd::OpenIpsetFile => {
@@ -1907,6 +2348,7 @@ impl App {
                         }
                     }
                     BackendCmd::CancelTest => {
+                        let _completion = scan_completion.lock().unwrap();
                         if test_running.load(Ordering::SeqCst) {
                             test_cancelled.store(true, Ordering::SeqCst);
                             tester.cancel();
@@ -2112,7 +2554,15 @@ impl App {
                             continue;
                         }
 
-                        let strategies = catalog.all();
+                        let cfg = config.read().await;
+                        let strategies = ordered_candidates(
+                            &catalog,
+                            cfg.simple_last_good
+                                .as_deref()
+                                .or(cfg.last_strategy.as_deref()),
+                            &cfg.favorites,
+                        );
+                        drop(cfg);
                         if strategies.is_empty() {
                             test_running.store(false, Ordering::SeqCst);
                             let _ = event_tx.send(UiEvent::Error(
@@ -2138,13 +2588,16 @@ impl App {
                         // be blocked on `test_all` and never see the cancel).
                         let tester_c = tester.clone();
                         let runner_c = runner.clone();
+                        let installer_c = installer.clone();
                         let service_ctl_c = service_ctl.clone();
                         let state_c = state.clone();
                         let config_c = config.clone();
                         let event_tx_c = event_tx.clone();
                         let test_running_c = test_running.clone();
                         let test_cancelled_c = test_cancelled.clone();
-                        tokio::spawn(async move {
+                        let catalog_c = catalog.clone();
+                        let completion_c = scan_completion.clone();
+                        scan_task = Some(tokio::spawn(async move {
                             let ev_result = event_tx_c.clone();
                             let on_each = Box::new(move |r| {
                                 let _ = ev_result.send(UiEvent::TestResult(r));
@@ -2166,19 +2619,55 @@ impl App {
 
                             match tester_c.test_all(strategies, on_each, on_progress).await {
                                 Ok(results) => {
-                                    let best = if test_cancelled_c.load(Ordering::SeqCst) {
-                                        String::new()
-                                    } else {
-                                        results
-                                            .first()
-                                            .filter(|r| r.ok > 0)
-                                            .map(|r| r.id.clone())
-                                            .unwrap_or_default()
-                                    };
+                                    #[cfg(windows)]
+                                    let mut best = start_test_winner(
+                                        &runner_c,
+                                        &catalog_c,
+                                        &results,
+                                        &test_cancelled_c,
+                                        &event_tx_c,
+                                    )
+                                    .await;
+                                    #[cfg(not(windows))]
+                                    let mut best = results
+                                        .first()
+                                        .filter(|r| r.eligible())
+                                        .map(|r| r.id.clone())
+                                        .unwrap_or_default();
+                                    #[cfg(not(windows))]
+                                    let _ = &catalog_c;
+                                    match finish_scan(
+                                        &runner_c,
+                                        &test_running_c,
+                                        &test_cancelled_c,
+                                        &completion_c,
+                                    )
+                                    .await
+                                    {
+                                        Ok(true) => best.clear(),
+                                        Err(e) => {
+                                            best.clear();
+                                            let _ =
+                                                event_tx_c.send(UiEvent::Error(format!("{e:#}")));
+                                        }
+                                        Ok(false) => {}
+                                    }
                                     if !best.is_empty() {
                                         let mut cfg = config_c.write().await;
                                         cfg.last_strategy = Some(best.clone());
+                                        #[cfg(windows)]
+                                        {
+                                            cfg.simple_last_good = Some(best.clone());
+                                        }
                                         let _ = cfg.save();
+                                    }
+                                    if !test_cancelled_c.load(Ordering::SeqCst) {
+                                        let mut cfg = config_c.write().await;
+                                        cfg.strategy_test_results = results.clone();
+                                        if let Err(e) = cfg.save() {
+                                            let _ =
+                                                event_tx_c.send(UiEvent::Error(format!("{e:#}")));
+                                        }
                                     }
                                     let _ =
                                         event_tx_c.send(UiEvent::TestComplete { best, results });
@@ -2196,10 +2685,19 @@ impl App {
                             }
 
                             // Settle the status display after the test churns winws.
-                            refresh_and_broadcast(&runner_c, &service_ctl_c, &state_c, &event_tx_c)
-                                .await;
-                            test_running_c.store(false, Ordering::SeqCst);
-                        });
+                            refresh_and_broadcast(
+                                &installer_c,
+                                &runner_c,
+                                &service_ctl_c,
+                                &state_c,
+                                &event_tx_c,
+                            )
+                            .await;
+                            {
+                                let _completion = completion_c.lock().unwrap();
+                                test_running_c.store(false, Ordering::SeqCst);
+                            }
+                        }));
                     }
                 }
             }
@@ -2212,7 +2710,7 @@ mod tests {
     use super::*;
     use crate::contracts::{RuntimeStatus, Strategy};
 
-    struct StopFailure;
+    struct StopFailure(RunningMode);
 
     #[async_trait::async_trait]
     impl Runner for StopFailure {
@@ -2225,16 +2723,27 @@ mod tests {
         }
 
         async fn detect_running(&self) -> RuntimeStatus {
-            RuntimeStatus::default()
+            RuntimeStatus {
+                running_mode: self.0,
+                ..RuntimeStatus::default()
+            }
         }
     }
 
     #[tokio::test]
     async fn failed_process_stop_blocks_service_transition_and_reports_cause() {
-        let runner: Arc<dyn Runner> = Arc::new(StopFailure);
+        let runner: Arc<dyn Runner> = Arc::new(StopFailure(RunningMode::UserProcess));
         let (events, mut rx) = broadcast::channel(4);
         assert!(!stop_process_before_service(&runner, &events).await);
         assert!(matches!(rx.recv().await.unwrap(), UiEvent::Error(message)
             if message.contains("cannot release WinDivert") && message.contains("child is still running")));
+    }
+
+    #[tokio::test]
+    async fn service_transition_preserves_running_service_for_adapter_rollback() {
+        let runner: Arc<dyn Runner> = Arc::new(StopFailure(RunningMode::SystemService));
+        let (events, mut rx) = broadcast::channel(4);
+        assert!(stop_process_before_service(&runner, &events).await);
+        assert!(rx.try_recv().is_err());
     }
 }

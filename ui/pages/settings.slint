@@ -100,6 +100,7 @@ component SettingsRow inherits Rectangle {
 }
 
 export component SettingsPage inherits Rectangle {
+    in property <bool> show_core_tuning: true;
     in-out property <bool> show_telegram_proxy;
     in-out property <bool> telegram_autostart;
     callback telegram_visibility_changed(bool);
@@ -409,7 +410,7 @@ export component SettingsPage inherits Rectangle {
                 Rectangle { height: 18px; }
 
                 // DPI bypass tuning — the zapret service.bat filters & updaters.
-                SettingsGroup {
+                if root.show_core_tuning : SettingsGroup {
                     title: I18n.t(I18n.lang, "settings.group_dpi");
                     icon: @image-url("../../assets/icons/filter.svg");
                     if !I18n.macos : SettingsRow {

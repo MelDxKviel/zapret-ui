@@ -21,7 +21,10 @@ pub(super) fn is_favorite(id: &str) -> bool {
 
 /// Map a catalog strategy to its Slint row, tagging its current favorite state.
 pub(super) fn to_item(s: &crate::contracts::Strategy) -> StrategyItem {
-    let (pretty, alt) = split_alt(&s.display_name);
+    let (mut pretty, alt) = split_alt(&s.display_name);
+    if cfg!(windows) {
+        pretty = format!("{} · {}", s.engine.slug(), pretty);
+    }
     StrategyItem {
         id: s.id.as_str().into(),
         display_name: s.display_name.as_str().into(),
@@ -166,32 +169,48 @@ pub(super) fn rebuild_logs(ui: &MainWindow) {
 }
 
 /// Rebuild the Slint `test_results` model from the thread-local buffer.
-/// Sorts live by reachability (then latency) so the best strategies bubble to
-/// the top as results stream in, rather than appearing in catalog/name order.
+/// Uses the tester's baseline/reachability/latency ordering as results stream in.
 pub(super) fn rebuild_test_results(ui: &MainWindow) {
-    let best_id = ui.get_test_best_id().to_string();
-    let mut sorted = TEST_RESULTS.with(|b| b.borrow().clone());
+    let mut best_id = ui.get_test_best_id().to_string();
+    let mode = crate::contracts::EngineMode::from_slug(&ui.get_engine_mode());
+    let mut sorted = TEST_RESULTS.with(|buffer| results_for_mode(&buffer.borrow(), mode));
+    if !best_id.is_empty() && !sorted.iter().any(|result| result.id == best_id) {
+        best_id.clear();
+        ui.set_test_best_id("".into());
+    }
     sorted.sort_by(|a, b| {
-        b.ok.cmp(&a.ok).then_with(|| {
-            let al = if a.avg_latency_ms == 0 {
-                u32::MAX
-            } else {
-                a.avg_latency_ms
-            };
-            let bl = if b.avg_latency_ms == 0 {
-                u32::MAX
-            } else {
-                b.avg_latency_ms
-            };
-            al.cmp(&bl)
-        })
+        b.eligible()
+            .cmp(&a.eligible())
+            .then_with(|| {
+                (i64::from(b.improved) - i64::from(b.regressed))
+                    .cmp(&(i64::from(a.improved) - i64::from(a.regressed)))
+            })
+            .then_with(|| b.ok.cmp(&a.ok))
+            .then_with(|| a.regressed.cmp(&b.regressed))
+            .then_with(|| {
+                let al = if !cfg!(windows) && a.avg_latency_ms == 0 {
+                    u32::MAX
+                } else {
+                    a.avg_latency_ms
+                };
+                let bl = if !cfg!(windows) && b.avg_latency_ms == 0 {
+                    u32::MAX
+                } else {
+                    b.avg_latency_ms
+                };
+                al.cmp(&bl)
+            })
     });
     let items: Vec<TestResultItem> = sorted
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let (pretty, alt) = split_alt(&r.id);
+            let (pretty, alt) = split_alt(&r.display_name);
             TestResultItem {
+                engine: r.engine.slug().into(),
+                baseline: r.baseline_ok as i32,
+                improved: r.improved as i32,
+                regressed: r.regressed as i32,
                 id: r.id.as_str().into(),
                 display_name: r.display_name.as_str().into(),
                 pretty: pretty.into(),
@@ -208,9 +227,51 @@ pub(super) fn rebuild_test_results(ui: &MainWindow) {
     ui.set_test_results(Rc::new(slint::VecModel::from(items)).into());
 }
 
+/// Keep the complete saved scan while showing only results that the current
+/// engine mode can launch. macOS does not have Windows engine selection.
+fn results_for_mode(
+    results: &[crate::contracts::StrategyTestResult],
+    mode: crate::contracts::EngineMode,
+) -> Vec<crate::contracts::StrategyTestResult> {
+    results
+        .iter()
+        .filter(|result| !cfg!(windows) || mode.includes(result.engine))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{line_passes, parse_log_line};
+    use super::{line_passes, parse_log_line, results_for_mode};
+    use crate::contracts::{EngineKind, EngineMode, StrategyTestResult};
+
+    #[test]
+    fn saved_test_results_follow_engine_mode_without_losing_other_engine_history() {
+        let history = vec![
+            StrategyTestResult {
+                id: "general".into(),
+                engine: EngineKind::Zapret1,
+                ..Default::default()
+            },
+            StrategyTestResult {
+                id: "zapret2:multisplit".into(),
+                engine: EngineKind::Zapret2,
+                ..Default::default()
+            },
+        ];
+        let first = results_for_mode(&history, EngineMode::Zapret1);
+        let second = results_for_mode(&history, EngineMode::Zapret2);
+        if cfg!(windows) {
+            assert_eq!(first.len(), 1);
+            assert_eq!(first[0].id, "general");
+            assert_eq!(second.len(), 1);
+            assert_eq!(second[0].id, "zapret2:multisplit");
+        } else {
+            assert_eq!(first, history);
+            assert_eq!(second, history);
+        }
+        assert_eq!(results_for_mode(&history, EngineMode::Auto), history);
+    }
 
     #[test]
     fn log_filter_matches_severity_instead_of_message() {

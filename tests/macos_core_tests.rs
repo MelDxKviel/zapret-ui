@@ -205,11 +205,22 @@ async fn declining_authorization_aborts_test_and_auto_engage_without_more_prompt
     };
     let temp = tempfile::tempdir().unwrap();
     let runner = Arc::new(Declined(AtomicU32::new(0)));
+    // Windows measures a baseline before a start; keep this test offline too.
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = socket.local_addr().unwrap();
+    drop(socket);
+    std::fs::create_dir_all(temp.path().join("utils")).unwrap();
+    std::fs::write(
+        temp.path().join("utils/targets.txt"),
+        format!("Offline = \"http://{address}/\"\n"),
+    )
+    .unwrap();
     let tester =
         zapret_ui::zapret::tester::ConnectivityTester::new(runner.clone(), temp.path().into());
     let candidates = || {
         (0..3)
             .map(|i| Strategy {
+                engine: Default::default(),
                 id: format!("general-alt{i}"),
                 display_name: "test".into(),
                 category: Category::Mixed,

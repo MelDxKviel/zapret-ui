@@ -385,6 +385,7 @@ component FilterCard inherits Rectangle {
 }
 
 export component HomePage inherits Rectangle {
+    in property <bool> show_core_tuning: true;
     in property <AppStatus> status;
     in property <StrategyItem> chosen_item;
     in property <bool> has_strategy;
@@ -773,7 +774,7 @@ export component HomePage inherits Rectangle {
                 Rectangle { height: 16px; }
 
                 // ── DPI FILTERS (game filter + ipset, side by side) ──
-                HorizontalLayout {
+                if root.show_core_tuning : HorizontalLayout {
                     spacing: 16px;
 
                     // GameFilter is absent from the macOS core.

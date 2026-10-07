@@ -371,5 +371,14 @@
   "home.folder_path": "…AppData\\Roaming\\zapret-ui",
   "macos.home.folder_path": "…Application Support/zapret-ui",
   "macos.settings.theme_hint": "Светлая, тёмная или как в настройках macOS.",
-  "macos.telegram.lifetime": "Сначала включите прокси, затем подтвердите подключение в Telegram. Прокси работает, пока открыт zapret-ui, в том числе в строке меню. После остановки отключите этот прокси в Telegram."
+  "macos.telegram.lifetime": "Сначала включите прокси, затем подтвердите подключение в Telegram. Прокси работает, пока открыт zapret-ui, в том числе в строке меню. После остановки отключите этот прокси в Telegram.",
+  "engine.title": "Ядро",
+  "engine.zapret1": "zapret1",
+  "engine.zapret2": "zapret2",
+  "engine.auto": "Автоматически",
+  "engine.install": "Установить ядро",
+  "engine.update": "Обновить ядро",
+  "engine.active": "Активное ядро: ",
+  "engine.hint": "Смена ядра останавливает обход и отключает службу другого ядра.",
+  "engine.baseline": "Без обхода: "
 }

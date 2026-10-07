@@ -11,7 +11,7 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock};
 
 pub(super) fn apply_settings(ui: &MainWindow, settings: &TelegramProxySettings) {
     ui.set_telegram_port(settings.port.to_string().into());
@@ -29,6 +29,7 @@ pub(super) struct Controller {
     config: Arc<RwLock<AppConfig>>,
     events: broadcast::Sender<UiEvent>,
     pending: Arc<Mutex<PendingActions>>,
+    idle: Arc<Notify>,
     save_config: ConfigSave,
 }
 
@@ -47,6 +48,7 @@ enum Action {
 struct PendingActions {
     actions: VecDeque<Action>,
     worker_running: bool,
+    closing: bool,
 }
 
 impl Controller {
@@ -66,6 +68,9 @@ impl Controller {
         // spawned tasks only serializes execution: the multithread runtime can
         // acquire those locks in a different order from the user's clicks.
         let mut pending = self.pending.lock().unwrap();
+        if pending.closing {
+            return;
+        }
         pending.actions.push_back(action);
         if pending.worker_running {
             return;
@@ -81,6 +86,7 @@ impl Controller {
                         Some(action) => action,
                         None => {
                             pending.worker_running = false;
+                            this.idle.notify_waiters();
                             break;
                         }
                     }
@@ -88,6 +94,33 @@ impl Controller {
                 this.process(action).await;
             }
         });
+    }
+
+    /// Join in-flight actions before stopping: a queued Start must not reopen
+    /// the listener after Quit has already stopped it. Keep pending settings
+    /// writes, but discard starts and reject new actions once closing begins.
+    pub(super) async fn shutdown(&self) -> anyhow::Result<()> {
+        {
+            let mut pending = self.pending.lock().unwrap();
+            pending.closing = true;
+            pending
+                .actions
+                .retain(|action| !matches!(action, Action::Start | Action::Startup));
+        }
+        loop {
+            let notified = self.idle.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.pending.lock().unwrap().worker_running {
+                break;
+            }
+            notified.await;
+        }
+        self.proxy.stop().await?;
+        let _ = self
+            .events
+            .send(UiEvent::TelegramStatus(Default::default()));
+        Ok(())
     }
 
     async fn process(&self, action: Action) {
@@ -235,6 +268,7 @@ pub(super) fn bind(
         config,
         events,
         pending: Arc::new(Mutex::new(PendingActions::default())),
+        idle: Arc::new(Notify::new()),
         save_config: Arc::new(AppConfig::save),
     };
     let c = controller.clone();
@@ -355,6 +389,82 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct StartingProxy {
+        inner: RecordingProxy,
+        entered: Notify,
+        release: Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl TelegramProxy for StartingProxy {
+        fn prepare_settings(
+            &self,
+            settings: TelegramProxySettings,
+        ) -> anyhow::Result<TelegramProxySettings> {
+            self.inner.prepare_settings(settings)
+        }
+
+        async fn start(
+            &self,
+            settings: TelegramProxySettings,
+            on_status: TelegramStatusCb,
+        ) -> anyhow::Result<()> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.inner.start(settings, on_status).await
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.inner.stop().await
+        }
+
+        async fn is_running(&self) -> bool {
+            self.inner.is_running().await
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_joins_active_start_discards_queued_starts_and_rejects_new_starts() {
+        let proxy = Arc::new(StartingProxy::default());
+        let (events, _) = broadcast::channel(256);
+        let controller = Controller {
+            proxy: proxy.clone(),
+            config: Arc::new(RwLock::new(AppConfig::default())),
+            events,
+            pending: Arc::new(Mutex::new(PendingActions::default())),
+            idle: Arc::new(Notify::new()),
+            save_config: Arc::new(|_| Ok(())),
+        };
+        controller.dispatch(Action::Start);
+        timeout(Duration::from_secs(2), proxy.entered.notified())
+            .await
+            .unwrap();
+        controller.dispatch(Action::Start);
+        controller.dispatch(Action::Startup);
+        controller.dispatch(Action::Autostart(false));
+
+        let mut shutdown = Box::pin(controller.shutdown());
+        assert!(futures_util::poll!(&mut shutdown).is_pending());
+        assert_eq!(proxy.inner.stops.load(Ordering::SeqCst), 0);
+        // Settings already queued before Quit are still saved. Further clicks
+        // cannot enqueue another worker or reopen the proxy after shutdown.
+        assert_eq!(controller.pending.lock().unwrap().actions.len(), 1);
+        controller.dispatch(Action::Start);
+        assert_eq!(controller.pending.lock().unwrap().actions.len(), 1);
+        proxy.release.notify_one();
+        timeout(Duration::from_secs(2), shutdown)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(proxy.inner.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(proxy.inner.stops.load(Ordering::SeqCst), 1);
+        assert!(!proxy.inner.is_running().await);
+        assert!(!controller.pending.lock().unwrap().worker_running);
+        controller.dispatch(Action::Start);
+        assert!(!controller.pending.lock().unwrap().worker_running);
+    }
+
     struct Harness {
         controller: Controller,
         proxy: Arc<RecordingProxy>,
@@ -383,6 +493,7 @@ mod tests {
                 config: Arc::new(RwLock::new(config)),
                 events,
                 pending: Arc::new(Mutex::new(PendingActions::default())),
+                idle: Arc::new(Notify::new()),
                 save_config,
             };
             Self {
@@ -645,6 +756,7 @@ mod tests {
                 config: Arc::new(RwLock::new(AppConfig::default())),
                 events,
                 pending: Arc::new(Mutex::new(PendingActions::default())),
+                idle: Arc::new(Notify::new()),
                 save_config: Arc::new(|_| unreachable!("rejected settings must not be saved")),
             };
             let save = |port| {

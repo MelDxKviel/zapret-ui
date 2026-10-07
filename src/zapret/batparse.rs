@@ -241,6 +241,7 @@ pub fn strategy_from_bat(
     let args = parse_winws_args(&content, install_dir, gf)?;
     let lists = referenced_lists(&args);
     Some(Strategy {
+        engine: Default::default(),
         id: stem.clone(),
         display_name: stem.clone(),
         category: category_for(&stem),
