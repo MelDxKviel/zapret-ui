@@ -324,15 +324,33 @@ impl ZapretInstaller {
     }
 }
 
-/// Retain explicit user lists and tuning while accepting updated upstream
-/// presets and standard host lists from the archive.
+/// Keep user data and custom presets while accepting updated upstream defaults.
+/// A legacy install has no manifest telling us whether a colliding file was
+/// edited, so preserve its differing original in a content-addressed backup.
 #[cfg(any(not(target_os = "macos"), test))]
 fn preserve_user_state(current: &Path, staged: &Path) -> Result<()> {
+    fn linked(metadata: &std::fs::Metadata) -> bool {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return true;
+            }
+        }
+        metadata.file_type().is_symlink()
+    }
+
     fn copy_regular_file(src: &Path, dst: &Path) -> Result<()> {
         let metadata = std::fs::symlink_metadata(src)
             .with_context(|| format!("Failed to inspect user data {}", src.display()))?;
-        if !metadata.file_type().is_file() {
+        if !metadata.file_type().is_file() || linked(&metadata) {
             anyhow::bail!("User data must be a regular file: {}", src.display());
+        }
+        if metadata.len() > 128 * 1024 * 1024 {
+            anyhow::bail!(
+                "User data file exceeds the preservation limit: {}",
+                src.display()
+            );
         }
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)
@@ -343,28 +361,157 @@ fn preserve_user_state(current: &Path, staged: &Path) -> Result<()> {
         Ok(())
     }
 
-    let lists = current.join("lists");
-    match std::fs::read_dir(&lists) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry.context("Failed to enumerate user lists")?;
-                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-                if name.ends_with("-user.txt")
-                    || matches!(name.as_str(), "ipset-all.txt" | "ipset-all.txt.backup")
-                {
-                    copy_regular_file(
-                        &entry.path(),
-                        &staged.join("lists").join(entry.file_name()),
-                    )?;
-                }
+    fn hash_file(path: &Path) -> Result<Vec<u8>> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let meta = std::fs::symlink_metadata(path)?;
+        if !meta.is_file() || linked(&meta) {
+            anyhow::bail!("User data must be a regular file");
+        }
+        let mut file = std::fs::File::open(path)?.take(128 * 1024 * 1024 + 1);
+        let mut buffer = [0u8; 64 * 1024];
+        let mut total = 0u64;
+        let mut hash = Sha256::new();
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            total += count as u64;
+            if total > 128 * 1024 * 1024 {
+                anyhow::bail!("User data file exceeds preservation limit");
+            }
+            hash.update(&buffer[..count]);
+        }
+        Ok(hash.finalize().to_vec())
+    }
+
+    fn preserve_collision(
+        source: &Path,
+        target: &Path,
+        backup_root: &Path,
+        relative: &Path,
+    ) -> Result<()> {
+        let original_hash = hash_file(source)?;
+        if original_hash != hash_file(target)? {
+            let digest: String = original_hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            copy_regular_file(source, &backup_root.join(digest).join(relative))?;
+        }
+        Ok(())
+    }
+
+    // Also retain previous backups. Bound recursion and reject reparse points
+    // before traversing: an elevated update must not follow user junctions.
+    fn preserve_tree(
+        source: &Path,
+        target: &Path,
+        backup_root: Option<&Path>,
+        relative: &Path,
+        visited: &mut usize,
+        bytes: &mut u64,
+        depth: usize,
+    ) -> Result<()> {
+        *visited += 1;
+        if depth > 16 || *visited > 20_000 {
+            anyhow::bail!("User data exceeds preservation entry/depth limit");
+        }
+        let meta = std::fs::symlink_metadata(source)?;
+        if linked(&meta) {
+            anyhow::bail!("User data must not contain links or junctions");
+        }
+        let name = source
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        let user_owned = name.ends_with("-user.txt")
+            || matches!(name.as_str(), "ipset-all.txt" | "ipset-all.txt.backup");
+        if user_owned && !meta.is_file() {
+            anyhow::bail!("User list must be a regular file: {}", source.display());
+        }
+        if meta.is_dir() {
+            std::fs::create_dir_all(target)?;
+            for entry in std::fs::read_dir(source)? {
+                let entry = entry?;
+                preserve_tree(
+                    &entry.path(),
+                    &target.join(entry.file_name()),
+                    backup_root,
+                    &relative.join(entry.file_name()),
+                    visited,
+                    bytes,
+                    depth + 1,
+                )?;
+            }
+        } else if meta.is_file() {
+            *bytes = bytes.saturating_add(meta.len());
+            if *bytes > 512 * 1024 * 1024 {
+                anyhow::bail!("User data exceeds preservation byte limit");
+            }
+            if let Some(backup_root) = backup_root.filter(|_| target.exists() && !user_owned) {
+                preserve_collision(source, target, backup_root, relative)?;
+            } else {
+                copy_regular_file(source, target)?;
+            }
+        } else {
+            anyhow::bail!("User data must be a regular file or directory");
+        }
+        Ok(())
+    }
+
+    let mut visited = 0;
+    let mut bytes = 0;
+    for folder in ["user-backups", "lists"] {
+        let source = current.join(folder);
+        match std::fs::symlink_metadata(&source) {
+            Ok(_) => preserve_tree(
+                &source,
+                &staged.join(folder),
+                (folder == "lists")
+                    .then_some(staged.join("user-backups/lists"))
+                    .as_deref(),
+                Path::new(""),
+                &mut visited,
+                &mut bytes,
+                0,
+            )?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).context("Failed to inspect saved core data"),
+        }
+    }
+    for entry in std::fs::read_dir(current)? {
+        let entry = entry?;
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("bat"))
+        {
+            visited += 1;
+            if visited > 20_000 {
+                anyhow::bail!("Too many custom strategy files");
+            }
+            let target = staged.join(entry.file_name());
+            if target.exists() {
+                preserve_collision(
+                    &entry.path(),
+                    &target,
+                    &staged.join("user-backups/presets"),
+                    Path::new(&entry.file_name()),
+                )?;
+            } else {
+                copy_regular_file(&entry.path(), &target)?;
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).context("Failed to enumerate user lists"),
     }
 
     let flag = current.join("utils").join("game_filter.enabled");
     let staged_flag = staged.join("utils").join("game_filter.enabled");
+    if std::fs::symlink_metadata(current.join("utils")).is_ok_and(|meta| linked(&meta)) {
+        anyhow::bail!("User tuning directory must not be a link or junction");
+    }
     match std::fs::symlink_metadata(&flag) {
         Ok(_) => copy_regular_file(&flag, &staged_flag)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -617,5 +764,85 @@ mod tests {
         std::fs::create_dir_all(&invalid).unwrap();
         assert!(preserve_user_state(current.path(), staged.path()).is_err());
         assert!(invalid.is_dir());
+    }
+
+    #[test]
+    fn core_update_keeps_custom_presets_and_nonstandard_lists() {
+        let current = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(current.path().join("lists/custom")).unwrap();
+        std::fs::write(current.path().join("my-provider.bat"), "custom preset").unwrap();
+        std::fs::write(
+            current.path().join("lists/my-hosts.txt"),
+            "custom.example\n",
+        )
+        .unwrap();
+        std::fs::write(
+            current.path().join("lists/custom/ipset.txt"),
+            "192.0.2.1/32\n",
+        )
+        .unwrap();
+        preserve_user_state(current.path(), staged.path()).unwrap();
+        for path in [
+            "my-provider.bat",
+            "lists/my-hosts.txt",
+            "lists/custom/ipset.txt",
+        ] {
+            assert_eq!(
+                std::fs::read(current.path().join(path)).unwrap(),
+                std::fs::read(staged.path().join(path)).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn core_update_retains_differing_collisions_and_previous_backups() {
+        let current = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        for dir in [current.path(), staged.path()] {
+            std::fs::create_dir_all(dir.join("lists")).unwrap();
+        }
+        std::fs::write(current.path().join("general.bat"), "user-edited preset").unwrap();
+        std::fs::write(staged.path().join("general.bat"), "updated official preset").unwrap();
+        std::fs::write(
+            current.path().join("lists/list-general.txt"),
+            "user-edited list",
+        )
+        .unwrap();
+        std::fs::write(
+            staged.path().join("lists/list-general.txt"),
+            "updated official list",
+        )
+        .unwrap();
+        std::fs::create_dir_all(current.path().join("user-backups/previous")).unwrap();
+        std::fs::write(
+            current.path().join("user-backups/previous/saved.txt"),
+            "older backup",
+        )
+        .unwrap();
+        preserve_user_state(current.path(), staged.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(staged.path().join("general.bat")).unwrap(),
+            "updated official preset"
+        );
+        assert_eq!(
+            std::fs::read_to_string(staged.path().join("user-backups/previous/saved.txt")).unwrap(),
+            "older backup"
+        );
+        for (folder, filename, content) in [
+            ("presets", "general.bat", "user-edited preset"),
+            ("lists", "list-general.txt", "user-edited list"),
+        ] {
+            let backup = std::fs::read_dir(staged.path().join("user-backups").join(folder))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            assert_eq!(
+                std::fs::read_to_string(backup.join(filename)).unwrap(),
+                content
+            );
+        }
     }
 }
