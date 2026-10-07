@@ -13,7 +13,8 @@ are governed by their own licenses:
 | [zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) | Flowseal | Ready-made strategy presets + binaries that zapret-ui downloads and runs | See upstream repository |
 | [zapret-mac-discord-youtube](https://github.com/Flowseal/zapret-mac-discord-youtube) | Flowseal | macOS `utunws` core, strategies and system scripts downloaded at runtime | See upstream repository |
 | [zapret](https://github.com/bol-van/zapret) | bol-van | The underlying DPI-bypass engine (`winws`) | MIT |
-| [WinDivert](https://github.com/basil00/WinDivert) | basil00 | Windows packet-capture driver used by `winws` | LGPLv3 / GPLv2 |
+| [zapret2](https://github.com/bol-van/zapret2) | bol-van | Optional Windows `winws2` engine, Lua packet functions and runtime dependencies downloaded from official releases | See upstream repository |
+| [WinDivert](https://github.com/basil00/WinDivert) | basil00 | Windows packet-capture driver used by `winws` and `winws2` | LGPLv3 / GPLv2 |
 
 When the application downloads the upstream distribution, the licenses of those
 components apply to the downloaded files. Rust dependencies retain their own
