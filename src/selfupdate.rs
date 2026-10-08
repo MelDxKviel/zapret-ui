@@ -427,13 +427,20 @@ mod tests {
     async fn check_releases(
         replies: Vec<(&'static str, u16, String)>,
     ) -> Result<Option<ReadyRelease>> {
+        check_releases_from("v0.1.0", replies).await
+    }
+
+    async fn check_releases_from(
+        current: &str,
+        replies: Vec<(&'static str, u16, String)>,
+    ) -> Result<Option<ReadyRelease>> {
         let (base, server) = release_server(replies).await;
         let client = reqwest::Client::builder()
             .no_proxy()
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap();
-        let updater = GithubSelfUpdater::from_repo_url(client, "https://github.com/o/r", "v0.1.0");
+        let updater = GithubSelfUpdater::from_repo_url(client, "https://github.com/o/r", current);
         let result = updater
             .fetch_latest_release_from(&format!("{base}/feed"), &format!("{base}/downloads"))
             .await;
@@ -461,6 +468,47 @@ mod tests {
         .unwrap();
         assert_eq!(release.tag, "v0.2.0");
         assert_eq!(release.sha256, TEST_SHA256);
+    }
+
+    #[tokio::test]
+    async fn local_git_build_skips_base_release_without_requesting_its_assets() {
+        for current in [
+            "v0.4.0-3-g8609f33",
+            "v0.4.0-3-g8609f33-dirty",
+            "v0.4.0-dirty",
+        ] {
+            let release = check_releases_from(
+                current,
+                vec![("GET /feed HTTP/1.1", 200, feed(&["v0.4.0", "v0.3.9"]))],
+            )
+            .await
+            .unwrap();
+            assert!(release.is_none(), "{current}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_git_build_can_update_to_a_newer_ready_release() {
+        let release = check_releases_from(
+            "v0.4.0-3-g8609f33",
+            vec![
+                ("GET /feed HTTP/1.1", 200, feed(&["v0.4.1", "v0.4.0"])),
+                (
+                    "GET /downloads/v0.4.1/zapret-ui.exe.sha256 HTTP/1.1",
+                    200,
+                    checksum(),
+                ),
+                (
+                    "HEAD /downloads/v0.4.1/zapret-ui.exe HTTP/1.1",
+                    200,
+                    "exe".into(),
+                ),
+            ],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(release.tag, "v0.4.1");
     }
 
     #[tokio::test]
