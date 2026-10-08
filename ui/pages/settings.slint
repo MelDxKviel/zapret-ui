@@ -4,6 +4,7 @@ import { AppSwitch } from "../components/switch.slint";
 import { AppButton } from "../components/button.slint";
 import { Segmented, SegmentOption } from "../components/segmented.slint";
 import { Icon } from "../components/icon.slint";
+import { EngineSelector } from "../components/engine_selector.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component SettingsGroup inherits Rectangle {
@@ -100,6 +101,15 @@ component SettingsRow inherits Rectangle {
 }
 
 export component SettingsPage inherits Rectangle {
+    in property <bool> supports_engine_selection;
+    in-out property <bool> zapret2_enabled;
+    in property <bool> core_busy;
+    in property <string> engine_mode;
+    in property <string> core_version;
+    callback zapret2_changed(bool);
+    callback engine_selected(string);
+    callback install_core_clicked();
+    callback update_core_clicked();
     in property <bool> show_core_tuning: true;
     in-out property <bool> show_telegram_proxy;
     in-out property <bool> telegram_autostart;
@@ -192,6 +202,45 @@ export component SettingsPage inherits Rectangle {
                         wrap: word-wrap;
                     }
                 }
+
+                if root.supports_engine_selection : SettingsGroup {
+                    title: I18n.t(I18n.lang, "beta.group");
+                    icon: @image-url("../../assets/icons/shield.svg");
+                    SettingsRow {
+                        label: I18n.t(I18n.lang, "beta.label");
+                        hint: I18n.t(I18n.lang, "beta.description");
+                        last: true;
+                        AppSwitch {
+                            checked <=> root.zapret2_enabled;
+                            enabled: !root.core_busy;
+                            toggled(enabled) => { root.zapret2_changed(enabled); }
+                        }
+                    }
+                    if root.zapret2_enabled : VerticalLayout {
+                        padding: 20px; padding-top: 0px; spacing: 12px;
+                        EngineSelector {
+                            management: true;
+                            mode: root.engine_mode;
+                            version: root.core_version;
+                            installed: root.installed;
+                            busy: root.core_busy;
+                            selected(mode) => { root.engine_selected(mode); }
+                            install => { root.install_core_clicked(); }
+                            update => { root.update_core_clicked(); }
+                        }
+                    }
+                    if !root.zapret2_enabled : SettingsRow {
+                        label: I18n.t(I18n.lang, "engine.zapret1");
+                        hint: root.core_version;
+                        last: true;
+                        AppButton {
+                            text: root.installed ? I18n.t(I18n.lang, "engine.update") : I18n.t(I18n.lang, "engine.install");
+                            enabled: !root.core_busy;
+                            clicked => { if root.installed { root.update_core_clicked(); } else { root.install_core_clicked(); } }
+                        }
+                    }
+                }
+                if root.supports_engine_selection : Rectangle { height: 18px; }
 
                 // Appearance
                 SettingsGroup {

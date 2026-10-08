@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::contracts::{
     split_alt, AutoEngageOutcome, BackendCmd, EngineKind, EngineMode, GameFilterMode, InstallStage,
-    IpsetMode, RunningMode, UiEvent,
+    IpsetMode, RunningMode, ScanKind, UiEvent,
 };
 use crate::ports::{
     Installer, Maintenance, Runner, SelfUpdater, ServiceCtl, StrategyCatalog, StrategyTester,
@@ -46,9 +46,57 @@ thread_local! {
     // Last error toast (message + when) so we can dedupe a burst of identical/rapid
     // errors into a single notification instead of spamming the user.
     static LAST_ERROR_TOAST: RefCell<Option<(String, std::time::Instant)>> = const { RefCell::new(None) };
+    static SCAN_PRESENTATION: RefCell<ScanPresentation> = RefCell::new(ScanPresentation::default());
 }
 
 const LOG_BUF_CAP: usize = 4000;
+
+/// Explicit ownership of the scan display. A status refresh, nonfatal error or
+/// partial result must never turn a live scan back into an idle/startable UI.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ScanPresentation {
+    kind: Option<ScanKind>,
+    index: u32,
+    total: u32,
+}
+
+impl ScanPresentation {
+    fn apply(&mut self, event: &UiEvent) -> bool {
+        let previous = self.clone();
+        match event {
+            UiEvent::ScanStarted { kind, total } => {
+                self.kind = Some(*kind);
+                self.index = 0;
+                self.total = *total;
+            }
+            UiEvent::TestProgress { index, total, .. } if self.kind == Some(ScanKind::Test) => {
+                self.index = *index;
+                self.total = *total;
+            }
+            UiEvent::AutoEngageProgress { index, total, .. }
+                if self.kind == Some(ScanKind::Auto) =>
+            {
+                self.index = *index;
+                self.total = *total;
+            }
+            UiEvent::ScanFinished => *self = Self::default(),
+            _ => {}
+        }
+        *self != previous
+    }
+}
+
+fn set_scan_candidate(ui: &MainWindow, catalog: &Arc<dyn StrategyCatalog>, id: &str) {
+    let candidate = catalog.by_id(id);
+    ui.set_scan_engine(
+        candidate
+            .as_ref()
+            .map(|s| s.engine.slug())
+            .unwrap_or_default()
+            .into(),
+    );
+    ui.set_scan_strategy(candidate.map(|s| s.display_name).unwrap_or_default().into());
+}
 
 /// UI-thread error surface shared by core and independent Telegram actions.
 /// Callers release only the busy state of their own subsystem.
@@ -183,6 +231,101 @@ fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
     )
 }
 
+/// Commands can already be queued when startup begins an automatic scan. Treat
+/// repeated Start as the same intent; Stop always cancels whichever scan owns it.
+fn command_during_scan(cmd: BackendCmd, active: bool) -> Option<BackendCmd> {
+    if !active {
+        return Some(cmd);
+    }
+    match cmd {
+        BackendCmd::Stop | BackendCmd::ServiceStop => Some(BackendCmd::CancelScan),
+        BackendCmd::RefreshStatus => None,
+        cmd if conflicts_with_running_test(&cmd) => None,
+        cmd => Some(cmd),
+    }
+}
+
+fn requires_scan_handoff(cmd: &BackendCmd) -> bool {
+    matches!(
+        cmd,
+        BackendCmd::SetEngineMode(_) | BackendCmd::SetZapret2Enabled(false)
+    )
+}
+
+async fn cancel_scan_before_handoff(
+    task: &mut Option<tokio::task::JoinHandle<()>>,
+    tester: &Arc<dyn StrategyTester>,
+    auto_cancelled: &AtomicBool,
+    test_cancelled: &AtomicBool,
+    completion: &std::sync::Mutex<()>,
+) {
+    {
+        let _completion = completion.lock().unwrap();
+        auto_cancelled.store(true, Ordering::SeqCst);
+        test_cancelled.store(true, Ordering::SeqCst);
+        tester.cancel();
+    }
+    if let Some(task) = task.take() {
+        let _ = task.await;
+    }
+}
+
+/// Keep the completed scan available for a cancel already queued by the UI,
+/// but never let that old cancel stop a later manual start or mode transition.
+fn retire_finished_scan(task: &mut Option<tokio::task::JoinHandle<()>>, cmd: &BackendCmd) {
+    if task.as_ref().is_some_and(|task| task.is_finished())
+        && (conflicts_with_running_test(cmd)
+            || matches!(cmd, BackendCmd::SetZapret2Enabled(_) | BackendCmd::Quit))
+    {
+        task.take();
+    }
+}
+
+async fn cancel_scan_and_stop(
+    task: &mut Option<tokio::task::JoinHandle<()>>,
+    tester: &Arc<dyn StrategyTester>,
+    runner: &Arc<dyn Runner>,
+    auto_cancelled: &AtomicBool,
+    test_cancelled: &AtomicBool,
+    completion: &std::sync::Mutex<()>,
+) -> anyhow::Result<bool> {
+    if task.is_none() {
+        return Ok(false);
+    }
+    cancel_scan_before_handoff(task, tester, auto_cancelled, test_cancelled, completion).await;
+    // The task may already have committed its winner while persisting results
+    // or refreshing status. Joining alone cannot undo that completed start.
+    runner.stop().await?;
+    Ok(true)
+}
+
+fn proposed_engine_preferences(config: &AppConfig, cmd: &BackendCmd) -> Option<(EngineMode, bool)> {
+    match cmd {
+        BackendCmd::SetEngineMode(mode)
+            if config.zapret2_enabled || *mode == EngineMode::Zapret1 =>
+        {
+            Some((*mode, config.zapret2_enabled))
+        }
+        BackendCmd::SetZapret2Enabled(true) => Some((config.effective_engine_mode(), true)),
+        BackendCmd::SetZapret2Enabled(false) => Some((EngineMode::Zapret1, false)),
+        _ => None,
+    }
+}
+
+fn save_engine_preferences(
+    config: &mut AppConfig,
+    mode: EngineMode,
+    enabled: bool,
+    save: impl FnOnce(&AppConfig) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let mut updated = config.clone();
+    updated.engine_mode = mode;
+    updated.zapret2_enabled = enabled;
+    save(&updated)?;
+    *config = updated;
+    Ok(())
+}
+
 /// Commit scan completion and cancellation under the same lock. A cancellation
 /// accepted before this boundary always stops the winner before enabling Start.
 async fn finish_scan(
@@ -215,6 +358,7 @@ async fn start_test_winner(
     cancelled: &AtomicBool,
     events: &broadcast::Sender<UiEvent>,
 ) -> String {
+    let mut last_failure = None;
     for result in results.iter().filter(|r| r.eligible()) {
         if cancelled.load(Ordering::SeqCst) {
             break;
@@ -222,16 +366,25 @@ async fn start_test_winner(
         let Some(strategy) = catalog.by_id(&result.id) else {
             continue;
         };
+        let _ = events.send(UiEvent::TestProgress {
+            index: results.len() as u32,
+            total: results.len() as u32,
+            strategy: strategy.id.clone(),
+        });
         match runner.start(&strategy).await {
             Ok(_) => return result.id.clone(),
             Err(e) => {
-                let _ = events.send(UiEvent::Error(format!("{e:#}")));
-                if let Err(e) = runner.stop().await {
-                    let _ = events.send(UiEvent::Error(format!("{e:#}")));
-                    break;
+                tracing::warn!("Test winner {} failed to restart: {e:#}", result.id);
+                if let Err(cleanup) = runner.stop().await {
+                    let _ = events.send(UiEvent::Error(format!("{e:#}; {cleanup:#}")));
+                    return String::new();
                 }
+                last_failure = Some(format!("{e:#}"));
             }
         }
+    }
+    if let Some(error) = last_failure.filter(|_| !cancelled.load(Ordering::SeqCst)) {
+        let _ = events.send(UiEvent::Error(error));
     }
     String::new()
 }
@@ -430,8 +583,8 @@ impl App {
     ) -> Self {
         #[cfg(windows)]
         {
-            installer.set_engine_mode(config.engine_mode);
-            catalog.set_engine_mode(config.engine_mode);
+            installer.set_engine_mode(config.effective_engine_mode());
+            catalog.set_engine_mode(config.effective_engine_mode());
         }
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
 
@@ -465,9 +618,11 @@ impl App {
                 .slug(),
         )?;
         let ui = MainWindow::new()?;
+        SCAN_PRESENTATION.with(|state| *state.borrow_mut() = ScanPresentation::default());
         ui.set_supports_engine_selection(cfg!(windows));
         if let Ok(config) = self.config.try_read() {
-            ui.set_engine_mode(config.engine_mode.slug().into());
+            ui.set_zapret2_enabled(config.zapret2_enabled);
+            ui.set_engine_mode(config.effective_engine_mode().slug().into());
             TEST_RESULTS
                 .with(|results| *results.borrow_mut() = config.strategy_test_results.clone());
             rebuild_test_results(&ui);
@@ -564,11 +719,13 @@ impl App {
             ui.set_theme(c.theme.slug().into());
             ui.set_ui_mode(c.ui_mode.slug().into());
             ui.set_install_dir(
-                c.engine_install_dir(if cfg!(windows) && c.engine_mode == EngineMode::Zapret2 {
-                    EngineKind::Zapret2
-                } else {
-                    EngineKind::Zapret1
-                })
+                c.engine_install_dir(
+                    if cfg!(windows) && c.effective_engine_mode() == EngineMode::Zapret2 {
+                        EngineKind::Zapret2
+                    } else {
+                        EngineKind::Zapret1
+                    },
+                )
                 .display()
                 .to_string()
                 .into(),
@@ -671,6 +828,16 @@ impl App {
         }
         {
             let tx = self.cmd_tx.clone();
+            ui.on_set_zapret2_enabled(move |enabled| {
+                dispatch(&tx, BackendCmd::SetZapret2Enabled(enabled))
+            });
+        }
+        {
+            let tx = self.cmd_tx.clone();
+            ui.on_cancel_scan_clicked(move || dispatch(&tx, BackendCmd::CancelScan));
+        }
+        {
+            let tx = self.cmd_tx.clone();
             ui.on_install_and_engage(move || dispatch(&tx, BackendCmd::InstallAndEngage));
         }
         {
@@ -695,7 +862,7 @@ impl App {
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_cancel_engage_clicked(move || {
-                dispatch(&cmd_tx_c, BackendCmd::CancelAutoEngage);
+                dispatch(&cmd_tx_c, BackendCmd::CancelScan);
             });
         }
         {
@@ -824,7 +991,7 @@ impl App {
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_test_cancel_clicked(move || {
-                dispatch(&cmd_tx_c, BackendCmd::CancelTest);
+                dispatch(&cmd_tx_c, BackendCmd::CancelScan);
             });
         }
         // "Use this strategy" from a test result row: resolve it from the catalog
@@ -1100,7 +1267,43 @@ impl App {
                 let directories = directories.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
+                        let scan_active = SCAN_PRESENTATION.with(|state| {
+                            let mut state = state.borrow_mut();
+                            if state.apply(&event) {
+                                ui.set_scan_kind(
+                                    state.kind.map(ScanKind::slug).unwrap_or_default().into(),
+                                );
+                                ui.set_scan_index(state.index as i32);
+                                ui.set_scan_total(state.total as i32);
+                            }
+                            state.kind.is_some()
+                        });
                         match event {
+                            UiEvent::ScanStarted { kind, total } => {
+                                ui.set_is_busy(true);
+                                ui.set_pending_op("".into());
+                                ui.set_scan_engine("".into());
+                                ui.set_scan_strategy("".into());
+                                ui.set_core_error("".into());
+                                ui.set_simple_failed(false);
+                                ui.set_test_running(true);
+                                ui.set_test_current(0);
+                                ui.set_test_total(total as i32);
+                                if kind == ScanKind::Auto {
+                                    TEST_RESULTS.with(|results| results.borrow_mut().clear());
+                                    ui.set_test_best_id("".into());
+                                    rebuild_test_results(&ui);
+                                }
+                            }
+                            UiEvent::ScanFinished => {
+                                ui.set_scan_engine("".into());
+                                ui.set_scan_strategy("".into());
+                                ui.set_test_running(false);
+                                ui.set_test_current_strategy("".into());
+                                ui.set_test_current_alt("".into());
+                                ui.set_is_busy(false);
+                            }
+                            UiEvent::Zapret2Enabled(enabled) => ui.set_zapret2_enabled(enabled),
                             UiEvent::TelegramStatus(status) => {
                                 ui.set_telegram_running(status.running);
                                 ui.set_telegram_error(status.error.into());
@@ -1177,7 +1380,9 @@ impl App {
                                 if !active.is_empty() && ui.get_selected_item().id.is_empty() {
                                     ui.set_selected_item(active_item);
                                 }
-                                ui.set_is_busy(false);
+                                if !scan_active {
+                                    ui.set_is_busy(false);
+                                }
                             }
                             UiEvent::DownloadProgress { bytes, total } => {
                                 let pct = if let Some(tot) = total {
@@ -1194,8 +1399,14 @@ impl App {
                             UiEvent::InstallProgress(stage) => {
                                 if matches!(stage, InstallStage::Resolving) {
                                     ui.set_core_error("".into());
+                                    ui.set_progress(0.0);
                                 }
-                                ui.set_is_busy(!matches!(stage, InstallStage::Done));
+                                if !scan_active {
+                                    ui.set_is_busy(!matches!(stage, InstallStage::Done));
+                                    if !matches!(stage, InstallStage::Done) {
+                                        ui.set_pending_op("install".into());
+                                    }
+                                }
                                 if let InstallStage::Done = stage {
                                     ui.set_progress(1.0);
                                     // The freshly-installed core's .bat presets are now
@@ -1229,11 +1440,14 @@ impl App {
                                 ui.set_latest_version(latest.into());
                             }
                             UiEvent::Error(err) => {
-                                ui.set_is_busy(false);
+                                if !scan_active {
+                                    ui.set_is_busy(false);
+                                }
                                 ui.set_core_error(err.clone().into());
                                 report_ui_error(&ui, err);
                             }
                             UiEvent::EngineMode(mode) => {
+                                let changed = ui.get_engine_mode().as_str() != mode.slug();
                                 ui.set_engine_mode(mode.slug().into());
                                 ui.set_install_dir(
                                     directories[usize::from(mode == EngineMode::Zapret2)]
@@ -1243,7 +1457,9 @@ impl App {
                                 ui.set_has_update(false);
                                 ui.set_latest_version("".into());
                                 ui.set_simple_failed(false);
-                                ui.set_core_error("".into());
+                                if changed {
+                                    ui.set_core_error("".into());
+                                }
                                 let selected = catalog.all().into_iter().next();
                                 ui.set_selected_strategy(
                                     selected
@@ -1273,6 +1489,7 @@ impl App {
                                 total,
                                 strategy,
                             } => {
+                                set_scan_candidate(&ui, &catalog, &strategy);
                                 ui.set_test_running(true);
                                 ui.set_test_current(index as i32);
                                 ui.set_test_total(total as i32);
@@ -1293,7 +1510,9 @@ impl App {
                                 // final ranked one.
                                 TEST_RESULTS.with(|b| *b.borrow_mut() = results);
                                 ui.set_test_best_id(best.as_str().into());
-                                ui.set_test_running(false);
+                                if !scan_active {
+                                    ui.set_test_running(false);
+                                }
                                 ui.set_test_current_strategy("".into());
                                 ui.set_test_current_alt("".into());
                                 rebuild_test_results(&ui);
@@ -1306,19 +1525,26 @@ impl App {
                                     }
                                 }
                             }
-                            UiEvent::AutoEngageProgress { index, total } => {
-                                ui.set_is_busy(true);
-                                ui.set_pending_op("start".into());
-                                ui.set_simple_failed(false);
+                            UiEvent::AutoEngageProgress {
+                                index,
+                                total,
+                                strategy,
+                            } => {
+                                set_scan_candidate(&ui, &catalog, &strategy);
                                 ui.set_engage_index(index as i32);
                                 ui.set_engage_total(total as i32);
+                                ui.set_test_current(index as i32);
+                                ui.set_test_total(total as i32);
+                                ui.set_test_current_strategy(strategy.into());
                             }
                             UiEvent::AutoEngageFailed => {
                                 // Distinct from a user cancel: flip the dial to its
                                 // red error state and release the busy lock.
                                 ui.set_simple_failed(true);
                                 ui.set_pending_op("".into());
-                                ui.set_is_busy(false);
+                                if !scan_active {
+                                    ui.set_is_busy(false);
+                                }
                             }
                             UiEvent::Maintenance(m) => {
                                 ui.set_game_filter(m.game_filter.slug().into());
@@ -1514,26 +1740,24 @@ impl App {
             let scan_completion = Arc::new(std::sync::Mutex::new(()));
             let mut scan_task: Option<tokio::task::JoinHandle<()>> = None;
             while let Some(cmd) = rx.recv().await {
-                let scan_active = scan_task.as_ref().is_some_and(|task| !task.is_finished());
-                // While a simple-mode auto-engage is probing candidates, skip the
-                // periodic status refresh: catching a candidate's winws mid-run
-                // would briefly flip the dial to "active" and back.
-                if (scan_active
+                let mut scan_active = scan_task.as_ref().is_some_and(|task| !task.is_finished())
                     || auto_engaging.load(Ordering::SeqCst)
-                    || test_running.load(Ordering::SeqCst))
-                    && matches!(cmd, BackendCmd::RefreshStatus)
-                {
-                    continue;
+                    || test_running.load(Ordering::SeqCst);
+                if scan_active && requires_scan_handoff(&cmd) {
+                    cancel_scan_before_handoff(
+                        &mut scan_task,
+                        &tester,
+                        &auto_cancelled,
+                        &test_cancelled,
+                        &scan_completion,
+                    )
+                    .await;
+                    scan_active = false;
                 }
-                if (scan_active
-                    || test_running.load(Ordering::SeqCst)
-                    || auto_engaging.load(Ordering::SeqCst))
-                    && conflicts_with_running_test(&cmd)
-                {
-                    let _ =
-                        event_tx.send(UiEvent::Error(tr_config(&config, "err.test_running").await));
+                let Some(cmd) = command_during_scan(cmd, scan_active) else {
                     continue;
-                }
+                };
+                retire_finished_scan(&mut scan_task, &cmd);
                 match cmd {
                     BackendCmd::Quit => {
                         auto_cancelled.store(true, Ordering::SeqCst);
@@ -1558,55 +1782,72 @@ impl App {
                         });
                         break;
                     }
-                    BackendCmd::SetEngineMode(mode) => {
+                    BackendCmd::SetEngineMode(_) | BackendCmd::SetZapret2Enabled(_) => {
                         if !cfg!(windows) {
                             continue;
                         }
-                        if !stop_bypass_before_install(&runner, &service_ctl, &config, &event_tx)
-                            .await
-                        {
-                            continue;
-                        }
-                        // A stopped automatic service would otherwise launch the
-                        // excluded engine again at the next Windows boot.
-                        if service_ctl
-                            .installed_engine()
-                            .await
-                            .is_some_and(|engine| !mode.includes(engine))
-                        {
-                            if let Err(error) = service_ctl.remove().await {
-                                if !elevate_or_report(
-                                    error,
-                                    "service-remove",
-                                    None,
-                                    &config,
-                                    &event_tx,
-                                )
-                                .await
-                                {
-                                    continue;
+                        let proposal = proposed_engine_preferences(&*config.read().await, &cmd);
+                        if let Some((mode, enabled)) = proposal {
+                            let result: anyhow::Result<()> = async {
+                                #[cfg(windows)]
+                                if enabled {
+                                    config.read().await.validate_engine_directories()?;
                                 }
+                                let previous_mode = config.read().await.effective_engine_mode();
+                                if mode != previous_mode
+                                    || matches!(cmd, BackendCmd::SetZapret2Enabled(false))
+                                {
+                                    if !stop_bypass_before_install(
+                                        &runner,
+                                        &service_ctl,
+                                        &config,
+                                        &event_tx,
+                                    )
+                                    .await
+                                    {
+                                        return Ok(());
+                                    }
+                                    // Do not let an excluded automatic service launch
+                                    // the old engine again at the next Windows boot.
+                                    if service_ctl
+                                        .installed_engine()
+                                        .await
+                                        .is_some_and(|engine| !mode.includes(engine))
+                                    {
+                                        if let Err(error) = service_ctl.remove().await {
+                                            if !elevate_or_report(
+                                                error,
+                                                "service-remove",
+                                                None,
+                                                &config,
+                                                &event_tx,
+                                            )
+                                            .await
+                                            {
+                                                return Ok(());
+                                            }
+                                        }
+                                    }
+                                }
+                                let mut cfg = config.write().await;
+                                save_engine_preferences(&mut cfg, mode, enabled, AppConfig::save)?;
+                                installer.set_engine_mode(mode);
+                                catalog.set_engine_mode(mode);
+                                Ok(())
+                            }
+                            .await;
+                            if let Err(error) = result {
+                                let _ = event_tx.send(UiEvent::Error(format!("{error:#}")));
                             }
                         }
-                        {
-                            let mut cfg = config.write().await;
-                            let previous = cfg.engine_mode;
-                            cfg.engine_mode = mode;
-                            if let Err(e) = cfg.save() {
-                                cfg.engine_mode = previous;
-                                let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
-                                continue;
-                            }
-                        }
-                        installer.set_engine_mode(mode);
-                        catalog.set_engine_mode(mode);
-                        let _ = event_tx.send(UiEvent::EngineMode(mode));
-                        let mut status = runner.detect_running().await;
-                        status.installed = installer.is_installed().await;
-                        status.installed_version = installer.installed_version().await;
-                        status.service_installed = service_ctl.is_installed().await;
-                        state.set_status(status.clone()).await;
-                        let _ = event_tx.send(UiEvent::Status(status));
+                        // Also restore optimistic controls after validation,
+                        // stop, authorization or save failures.
+                        let cfg = config.read().await;
+                        let _ = event_tx.send(UiEvent::Zapret2Enabled(cfg.zapret2_enabled));
+                        let _ = event_tx.send(UiEvent::EngineMode(cfg.effective_engine_mode()));
+                        drop(cfg);
+                        refresh_and_broadcast(&installer, &runner, &service_ctl, &state, &event_tx)
+                            .await;
                     }
                     BackendCmd::Install | BackendCmd::Update | BackendCmd::InstallAndEngage => {
                         let engage = matches!(cmd, BackendCmd::InstallAndEngage);
@@ -1937,6 +2178,10 @@ impl App {
                             .await;
                             continue;
                         }
+                        let _ = event_tx.send(UiEvent::ScanStarted {
+                            kind: ScanKind::Auto,
+                            total: candidates.len() as u32,
+                        });
 
                         // Run on its own task so the loop keeps servicing commands
                         // (crucially CancelAutoEngage, which flips the cancel flag).
@@ -1955,15 +2200,18 @@ impl App {
                             let ev_progress = event_tx_c.clone();
                             let cancelled = auto_cancelled_c.clone();
                             let cancel_tester = tester_c.clone();
-                            let on_progress = Box::new(move |index, total, _id: &str| {
+                            let on_progress = Box::new(move |index, total, id: &str| {
                                 // Replay a cancel that arrived before this task
                                 // began and the adapter reset its cancel flag.
                                 if cancelled.load(Ordering::SeqCst) {
                                     cancel_tester.cancel();
                                     return;
                                 }
-                                let _ =
-                                    ev_progress.send(UiEvent::AutoEngageProgress { index, total });
+                                let _ = ev_progress.send(UiEvent::AutoEngageProgress {
+                                    index,
+                                    total,
+                                    strategy: id.to_owned(),
+                                });
                             });
                             let mut outcome = tester_c.auto_engage(candidates, on_progress).await;
                             match finish_scan(
@@ -2033,15 +2281,36 @@ impl App {
                                 &event_tx_c,
                             )
                             .await;
+                            let _ = event_tx_c.send(UiEvent::ScanFinished);
                         }));
                     }
-                    BackendCmd::CancelAutoEngage => {
-                        // Same cancel flag as the tester; the in-flight auto_engage
-                        // notices it, stops winws, and resolves to Cancelled.
-                        let _completion = scan_completion.lock().unwrap();
-                        if auto_engaging.load(Ordering::SeqCst) {
-                            auto_cancelled.store(true, Ordering::SeqCst);
-                            tester.cancel();
+                    BackendCmd::CancelScan
+                    | BackendCmd::CancelAutoEngage
+                    | BackendCmd::CancelTest => {
+                        let cancelled = cancel_scan_and_stop(
+                            &mut scan_task,
+                            &tester,
+                            &runner,
+                            &auto_cancelled,
+                            &test_cancelled,
+                            &scan_completion,
+                        )
+                        .await;
+                        if !matches!(cancelled, Ok(false)) {
+                            auto_engaging.store(false, Ordering::SeqCst);
+                            test_running.store(false, Ordering::SeqCst);
+                            if let Err(error) = cancelled {
+                                let _ = event_tx.send(UiEvent::Error(format!("{error:#}")));
+                            }
+                            refresh_and_broadcast(
+                                &installer,
+                                &runner,
+                                &service_ctl,
+                                &state,
+                                &event_tx,
+                            )
+                            .await;
+                            let _ = event_tx.send(UiEvent::ScanFinished);
                         }
                     }
                     BackendCmd::Stop => {
@@ -2200,7 +2469,7 @@ impl App {
                         #[cfg(windows)]
                         {
                             let cfg = config.read().await;
-                            let mode = cfg.engine_mode;
+                            let mode = cfg.effective_engine_mode();
                             if service_ctl
                                 .installed_engine()
                                 .await
@@ -2321,12 +2590,13 @@ impl App {
                     }
                     BackendCmd::OpenInstallFolder => {
                         let cfg = config.read().await;
-                        let install_dir =
-                            cfg.engine_install_dir(if cfg.engine_mode == EngineMode::Zapret2 {
+                        let install_dir = cfg.engine_install_dir(
+                            if cfg.effective_engine_mode() == EngineMode::Zapret2 {
                                 EngineKind::Zapret2
                             } else {
                                 EngineKind::Zapret1
-                            });
+                            },
+                        );
                         open_external(&install_dir.to_string_lossy());
                     }
                     BackendCmd::OpenIpsetFile => {
@@ -2345,13 +2615,6 @@ impl App {
                     BackendCmd::OpenHostsFile => {
                         if let Err(e) = winexec::open_hosts_file() {
                             let _ = event_tx.send(UiEvent::Error(format!("{e:#}")));
-                        }
-                    }
-                    BackendCmd::CancelTest => {
-                        let _completion = scan_completion.lock().unwrap();
-                        if test_running.load(Ordering::SeqCst) {
-                            test_cancelled.store(true, Ordering::SeqCst);
-                            tester.cancel();
                         }
                     }
                     BackendCmd::SetFavorites(favs) => {
@@ -2549,8 +2812,6 @@ impl App {
                             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                             .is_err()
                         {
-                            let _ = event_tx
-                                .send(UiEvent::Error(tr_config(&config, "err.test_running").await));
                             continue;
                         }
 
@@ -2580,6 +2841,10 @@ impl App {
                         }
                         let total = strategies.len() as u32;
                         test_cancelled.store(false, Ordering::SeqCst);
+                        let _ = event_tx.send(UiEvent::ScanStarted {
+                            kind: ScanKind::Test,
+                            total,
+                        });
                         let _ = event_tx.send(UiEvent::TestStarted { total });
 
                         // Run the test on its own task so the backend loop keeps
@@ -2697,6 +2962,7 @@ impl App {
                                 let _completion = completion_c.lock().unwrap();
                                 test_running_c.store(false, Ordering::SeqCst);
                             }
+                            let _ = event_tx_c.send(UiEvent::ScanFinished);
                         }));
                     }
                 }

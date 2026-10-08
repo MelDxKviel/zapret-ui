@@ -372,6 +372,37 @@ async fn successful_explicit_scan_returns_ranking_and_leaves_start_to_orchestrat
 }
 
 #[tokio::test]
+async fn baseline_progress_does_not_claim_an_engine_is_starting() {
+    let (tester, runner, _tmp) = fixture(&[("zapret2:only", &[Some(12); 3])]);
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let captured = progress.clone();
+    let observed = runner.clone();
+    tester
+        .test_all(
+            vec![candidate("zapret2:only", EngineKind::Zapret2)],
+            Box::new(|_| {}),
+            Box::new(move |index, _, id| {
+                if index > 0 {
+                    assert!(observed
+                        .0
+                        .lock()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event == "probe:"));
+                }
+                captured.lock().unwrap().push((index, id.to_owned()));
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        *progress.lock().unwrap(),
+        [(0, String::new()), (1, "zapret2:only".into())]
+    );
+}
+
+#[tokio::test]
 async fn real_loopback_probes_keep_endpoint_identity_and_accept_http_error_responses() {
     use tokio::io::AsyncWriteExt;
 

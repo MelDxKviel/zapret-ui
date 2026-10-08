@@ -19,6 +19,9 @@ export component Spinner inherits VerticalLayout {
     in property <bool> running: true;
     in property <duration> period: 850ms;
 
+    // Match Icon's geometry. Without a fixed wrapper width, use inside a badge
+    // stretches the layout while its fixed-size Image stays at the left edge.
+    width: root.size;
     alignment: center;
     horizontal-stretch: 0;
 

@@ -1,8 +1,24 @@
 # zapret2 on Windows
 
-zapret2 is an optional Windows 10/11 x64 engine. The existing zapret1 setup and
-Mac utunws adapter remain separate. Existing configurations default to zapret1.
+zapret2 is an optional **beta** Windows 10/11 x64 engine, disabled by default for
+both new and existing configurations. Enable **Settings → Bypass engine →
+zapret2 — beta feature** (Russian: **Настройки → Ядро обхода → zapret2 —
+бета-функция**) to reveal the engine selector on Home. Until enabled, Windows
+uses zapret1. Disabling the beta stops bypass and selects zapret1 again. The
+existing Mac utunws adapter remains separate; Mac has no beta engine toggle.
+
+Home has one connection card for installation, scanning, running and errors,
+with one main action for the current state. There is no simple/advanced Home
+switch. Manual strategy choice and launch remain secondary actions; versions,
+core updates and service operations are under **Technical details and service**.
+Bypass tuning is in Settings. Installation shows the selected engine and
+download progress when available. A scan shows its engine and current candidate;
+its main action remains Cancel.
+
 The Auto engine mode makes both installed catalogs available to strategy testing.
+Changing engine mode during a scan first cancels it and waits for its tasks and
+candidate process to stop before applying the new mode. Manual start and service
+operations remain unavailable during the scan.
 An engine is stopped before another strategy starts; the successful selected
 strategy identifies its engine as well as its preset. Selecting an exclusive
 engine mode also removes an owned automatic service for the other engine, so
@@ -136,10 +152,12 @@ Use a development machine where you control the existing bypass processes and
 can authorize the app's normal elevation. Do not run these live checks in CI.
 
 1. Keep an existing `config.toml` with a selected zapret1 strategy. Open the new
-   application and check that the selection and other preferences survive.
+   application and check that the selection and other preferences survive, the
+   beta is disabled and the engine selector is hidden.
 2. In zapret1 mode, start/stop the old preset. Verify runtime status, logs and
    service operations still work.
-3. Select zapret2 and install it. Verify `version.txt`, the four `bin/` files,
+3. Enable **Settings → Bypass engine → zapret2 — beta feature**, then choose
+   zapret2 on Home and use **Install and connect**. Verify `version.txt`, the four `bin/` files,
    Lua files, lists and three catalog entries. Start one preset, check process
    status and connectivity, then Stop. No `winws2.exe` should remain owned by
    the application. A missing/quarantined executable must show a useful error.
@@ -155,7 +173,9 @@ can authorize the app's normal elevation. Do not run these live checks in CI.
    retains the saved selection and leaves no candidate running. A scan requested
    while a bypass is already running is refused without stopping it. Also test a
    manual switch to a missing/rejected executable; a known previous process is
-   restored on failure.
+   restored on failure. Change engine mode during a scan and confirm the old
+   scan is fully stopped before the mode changes. Disable the beta and confirm
+   zapret1 is selected and the engine selector disappears.
 7. Test changing from a running zapret1 service to zapret2 and back, including
    service restaging. Check the registered executable and all file arguments
    point to the appropriate protected directory.
@@ -169,7 +189,9 @@ can authorize the app's normal elevation. Do not run these live checks in CI.
 This development environment's Windows antivirus blocked access to the official
 v1.0.5.2 ZIP during packaging research. Its checksum manifest, release asset
 metadata, official sources and build workflow were inspected without changing
-antivirus settings. No real winws2 execution, DPI interception or zapret2 SCM
+antivirus settings. The application does not perform antivirus scanning or
+change Windows protection settings; this block came from the operating system.
+No real winws2 execution, DPI interception or zapret2 SCM
 startup smoke test was performed. End-to-end download, extraction and launch
 of that real archive therefore remain unverified here.
 

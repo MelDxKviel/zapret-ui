@@ -14,7 +14,7 @@ export component UpdateBanner inherits Rectangle {
     callback update_clicked();
     callback dismiss_clicked();
 
-    background: ThemePalette.accent-surface;
+    background: ThemePalette.surface;
     vertical-stretch: 0;
     height: row.preferred-height;
 
@@ -22,14 +22,14 @@ export component UpdateBanner inherits Rectangle {
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
-        background: ThemePalette.accent-border;
+        background: ThemePalette.border;
     }
 
     row := HorizontalLayout {
         padding-left: 32px;
         padding-right: 32px;
-        padding-top: 14px;
-        padding-bottom: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         spacing: 14px;
 
         // icon badge
@@ -39,14 +39,14 @@ export component UpdateBanner inherits Rectangle {
                 width: 32px;
                 height: 32px;
                 border-radius: ThemePalette.r-8;
-                background: ThemePalette.accent;
+                background: ThemePalette.surface-2;
                 border-width: 1px;
-                border-color: ThemePalette.accent-line;
+                border-color: ThemePalette.border;
                 Image {
                     source: @image-url("../../assets/icons/rocket.svg");
                     width: 16px;
                     height: 16px;
-                    colorize: ThemePalette.accent-ink;
+                    colorize: ThemePalette.text-2;
                 }
             }
         }
@@ -63,13 +63,7 @@ export component UpdateBanner inherits Rectangle {
                 font-weight: 600;
                 color: ThemePalette.text;
             }
-            Text {
-                text: I18n.t(I18n.lang, "update.app_desc");
-                font-family: ThemePalette.font-sans;
-                font-size: ThemePalette.fs-12;
-                color: ThemePalette.text-2;
-                wrap: word-wrap;
-            }
+
         }
 
         // action
@@ -80,7 +74,8 @@ export component UpdateBanner inherits Rectangle {
                 text: root.downloading
                     ? I18n.t(I18n.lang, "update.downloading")
                     : I18n.t(I18n.lang, "common.update");
-                variant: "primary";
+                variant: "default";
+                size: "sm";
                 busy: root.downloading;
                 icon: @image-url("../../assets/icons/download.svg");
                 clicked => { root.update_clicked(); }

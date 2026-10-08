@@ -73,6 +73,10 @@ impl Language {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Explicit opt-in for the Windows zapret2 beta. Saved engine preferences
+    /// remain available while disabled, but effective selection stays on zapret1.
+    #[serde(default)]
+    pub zapret2_enabled: bool,
     #[serde(default)]
     pub engine_mode: crate::contracts::EngineMode,
     #[serde(default)]
@@ -144,6 +148,7 @@ pub fn default_install_dir() -> Option<PathBuf> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            zapret2_enabled: false,
             engine_mode: crate::contracts::EngineMode::default(),
             zapret2_install_dir_override: None,
             strategy_test_results: Vec::new(),
@@ -168,6 +173,14 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    pub fn effective_engine_mode(&self) -> crate::contracts::EngineMode {
+        if self.zapret2_enabled {
+            self.engine_mode
+        } else {
+            crate::contracts::EngineMode::Zapret1
+        }
+    }
+
     #[cfg(windows)]
     pub fn validate_engine_directories(&self) -> anyhow::Result<()> {
         fn resolved(path: &Path) -> anyhow::Result<String> {

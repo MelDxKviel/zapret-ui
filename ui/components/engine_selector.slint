@@ -1,25 +1,25 @@
 import { ThemePalette } from "../tokens.slint";
 import { I18n } from "../i18n.slint";
 import { AppButton } from "button.slint";
+import { Segmented } from "segmented.slint";
 
+// A single choice control; install/update tools belong to Settings.
 export component EngineSelector inherits Rectangle {
     in property <string> mode;
     in property <string> active;
     in property <string> version;
     in property <bool> busy;
     in property <bool> installed;
+    in property <bool> management: false;
     callback selected(string);
     callback install;
     callback update;
-    background: ThemePalette.surface;
-    border-width: 1px;
-    border-color: ThemePalette.border;
-    border-radius: ThemePalette.r-10;
+    background: transparent;
+    vertical-stretch: 0;
     VerticalLayout {
-        padding: 12px;
-        spacing: 8px;
+        spacing: 12px;
         HorizontalLayout {
-            spacing: 8px;
+            spacing: 12px;
             Text {
                 text: I18n.t(I18n.lang, "engine.title");
                 font-family: ThemePalette.font-sans;
@@ -27,48 +27,34 @@ export component EngineSelector inherits Rectangle {
                 color: ThemePalette.text-2;
                 vertical-alignment: center;
             }
-            AppButton {
-                text: I18n.t(I18n.lang, "engine.zapret1"); size: "sm";
-                variant: root.mode == "zapret1" ? "primary" : "default";
+            Segmented {
+                selected: root.mode;
                 enabled: !root.busy;
-                clicked => { root.selected("zapret1"); }
-            }
-            AppButton {
-                text: I18n.t(I18n.lang, "engine.zapret2"); size: "sm";
-                variant: root.mode == "zapret2" ? "primary" : "default";
-                enabled: !root.busy;
-                clicked => { root.selected("zapret2"); }
-            }
-            AppButton {
-                text: I18n.t(I18n.lang, "engine.auto"); size: "sm";
-                variant: root.mode == "auto" ? "primary" : "default";
-                enabled: !root.busy;
-                clicked => { root.selected("auto"); }
+                seg-height: 30px;
+                options: [
+                    { value: "zapret1", label: I18n.t(I18n.lang, "engine.zapret1") },
+                    { value: "zapret2", label: I18n.t(I18n.lang, "engine.zapret2_beta") },
+                    { value: "auto", label: I18n.t(I18n.lang, "engine.auto") },
+                ];
+                changed(mode) => { root.selected(mode); }
             }
             Rectangle { horizontal-stretch: 1; }
+        }
+        if root.management : HorizontalLayout {
+            spacing: 16px;
+            Text {
+                text: root.installed ? root.version : I18n.t(I18n.lang, "sidebar.status_not_installed");
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-11;
+                color: ThemePalette.text-3;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
             AppButton {
                 text: root.installed ? I18n.t(I18n.lang, "engine.update") : I18n.t(I18n.lang, "engine.install");
-                size: "sm";
-                enabled: !root.busy;
+                size: "sm"; enabled: !root.busy;
                 clicked => { if root.installed { root.update(); } else { root.install(); } }
-            }
-        }
-        HorizontalLayout {
-            spacing: 12px;
-            Text {
-                text: root.active != "" ? I18n.t(I18n.lang, "engine.active") + root.active : I18n.t(I18n.lang, "engine.hint");
-                font-family: ThemePalette.font-sans;
-                font-size: ThemePalette.fs-11;
-                color: root.active != "" ? ThemePalette.accent-text : ThemePalette.text-3;
-                overflow: elide;
-            }
-            Text {
-                text: root.version;
-                font-family: ThemePalette.font-mono;
-                font-size: ThemePalette.fs-10;
-                color: ThemePalette.text-3;
-                horizontal-alignment: right;
-                overflow: elide;
             }
         }
     }

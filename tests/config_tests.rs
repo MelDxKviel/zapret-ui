@@ -7,6 +7,11 @@ use zapret_ui::state::AppState;
 #[test]
 fn test_config_default() {
     let config = AppConfig::default();
+    assert!(!config.zapret2_enabled);
+    assert_eq!(
+        config.effective_engine_mode(),
+        contracts::EngineMode::Zapret1
+    );
     assert_eq!(config.last_strategy, None);
     assert!(!config.autostart);
     assert!(config.autoupdate_check);
@@ -221,6 +226,7 @@ fn engine_preferences_roundtrip_and_preserve_legacy_configuration() {
     };
     let mut legacy = toml::Value::try_from(&config).unwrap();
     for key in [
+        "zapret2_enabled",
         "engine_mode",
         "zapret2_install_dir_override",
         "strategy_test_results",
@@ -231,11 +237,13 @@ fn engine_preferences_roundtrip_and_preserve_legacy_configuration() {
     let loaded = AppConfig::load_from_path(&path);
     assert_eq!(loaded, config);
     assert_eq!(loaded.engine_mode, EngineMode::Zapret1);
+    assert!(!loaded.zapret2_enabled);
     assert_ne!(
         loaded.engine_install_dir(EngineKind::Zapret2),
         loaded.install_dir()
     );
     config.engine_mode = EngineMode::Auto;
+    config.zapret2_enabled = true;
     config.zapret2_install_dir_override = Some(dir.path().join("second-core"));
     config.strategy_test_results = vec![StrategyTestResult {
         id: "zapret2:multisplit".into(),
@@ -251,6 +259,62 @@ fn engine_preferences_roundtrip_and_preserve_legacy_configuration() {
     config.save_to_path(&path).unwrap();
     assert_eq!(AppConfig::load_from_path(&path), config);
     assert!(!path.with_extension("toml.bak").exists());
+}
+
+#[test]
+fn zapret2_beta_defaults_off_without_erasing_saved_preferences() {
+    use contracts::{EngineKind, EngineMode};
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+    let saved = AppConfig {
+        engine_mode: EngineMode::Auto,
+        last_strategy: Some("zapret2:multisplit".into()),
+        simple_last_good: Some("zapret2:multisplit".into()),
+        favorites: vec!["general".into(), "zapret2:user-custom".into()],
+        zapret2_install_dir_override: Some(directory.path().join("beta-core")),
+        ..Default::default()
+    };
+    let mut old = toml::Value::try_from(&saved).unwrap();
+    old.as_table_mut().unwrap().remove("zapret2_enabled");
+    fs::write(&path, toml::to_string(&old).unwrap()).unwrap();
+    let mut loaded = AppConfig::load_from_path(&path);
+    assert_eq!(loaded, saved);
+    assert!(!loaded.zapret2_enabled);
+    assert_eq!(loaded.engine_mode, EngineMode::Auto);
+    assert_eq!(loaded.effective_engine_mode(), EngineMode::Zapret1);
+    assert_eq!(
+        loaded.engine_install_dir(EngineKind::Zapret2),
+        directory.path().join("beta-core")
+    );
+    loaded.save_to_path(&path).unwrap();
+    assert_eq!(AppConfig::load_from_path(&path), saved);
+
+    loaded.zapret2_enabled = true;
+    loaded.save_to_path(&path).unwrap();
+    let enabled = AppConfig::load_from_path(&path);
+    assert_eq!(enabled, loaded);
+    assert!(enabled.zapret2_enabled);
+    assert_eq!(enabled.effective_engine_mode(), EngineMode::Auto);
+    assert_eq!(enabled.favorites, saved.favorites);
+    assert_eq!(enabled.last_strategy, saved.last_strategy);
+}
+
+#[test]
+fn zapret2_beta_gate_controls_every_engine_mode() {
+    use contracts::EngineMode;
+    for engine_mode in [EngineMode::Zapret1, EngineMode::Zapret2, EngineMode::Auto] {
+        let mut config = AppConfig {
+            engine_mode,
+            ..Default::default()
+        };
+        assert_eq!(config.effective_engine_mode(), EngineMode::Zapret1);
+        assert_eq!(config.engine_mode, engine_mode);
+        config.zapret2_enabled = true;
+        assert_eq!(config.effective_engine_mode(), engine_mode);
+        config.zapret2_enabled = false;
+        assert_eq!(config.effective_engine_mode(), EngineMode::Zapret1);
+        assert_eq!(config.engine_mode, engine_mode);
+    }
 }
 
 #[test]

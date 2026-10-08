@@ -226,7 +226,7 @@ impl ConnectivityTester {
         &self,
         strategies: &[Strategy],
         on_each: TestResultCb,
-        on_progress: TestProgressCb,
+        on_progress: &TestProgressCb,
     ) -> anyhow::Result<Vec<StrategyTestResult>> {
         let targets = self.load_targets();
         let mut baseline = None;
@@ -235,7 +235,13 @@ impl ConnectivityTester {
             if self.cancel.load(Ordering::SeqCst) {
                 break;
             }
-            on_progress(index as u32 + 1, strategies.len() as u32, &strategy.id);
+            if baseline.is_none() {
+                // Index zero means the no-bypass baseline, not the first
+                // candidate. Never label an engine as starting during baseline.
+                on_progress(0, strategies.len() as u32, "");
+            } else {
+                on_progress(index as u32 + 1, strategies.len() as u32, &strategy.id);
+            }
             if self.cancel.load(Ordering::SeqCst) {
                 break;
             }
@@ -255,6 +261,10 @@ impl ConnectivityTester {
                     summarize(baseline.as_ref().unwrap()).0,
                     targets.len()
                 );
+                on_progress(index as u32 + 1, strategies.len() as u32, &strategy.id);
+                if self.cancel.load(Ordering::SeqCst) {
+                    break;
+                }
             }
             let baseline = baseline.as_ref().unwrap();
             let endpoints = match self.runner.start(strategy).await {
@@ -385,7 +395,7 @@ impl StrategyTester for ConnectivityTester {
         self.cancel.store(false, Ordering::SeqCst);
         self.results.lock().unwrap().clear();
         let prior = self.prior_strategy(&strategies).await?;
-        let scan = self.scan_windows(&strategies, on_each, on_progress).await;
+        let scan = self.scan_windows(&strategies, on_each, &on_progress).await;
         match scan {
             Ok(results) => {
                 if self.cancel.load(Ordering::SeqCst) {
@@ -529,7 +539,7 @@ impl StrategyTester for ConnectivityTester {
         let prior = self.prior_strategy(&candidates).await?;
         let outcome = async {
             let results = self
-                .scan_windows(&candidates, Box::new(|_| {}), on_progress)
+                .scan_windows(&candidates, Box::new(|_| {}), &on_progress)
                 .await?;
             if self.cancel.load(Ordering::SeqCst) {
                 return Ok(AutoEngageOutcome::Cancelled);
@@ -543,6 +553,11 @@ impl StrategyTester for ConnectivityTester {
                     .expect("scan results belong to the supplied candidates");
                 // A previously tested candidate may fail on restart. Always
                 // release it before considering the next ranked candidate.
+                on_progress(
+                    candidates.len() as u32,
+                    candidates.len() as u32,
+                    &strategy.id,
+                );
                 self.runner.stop().await?;
                 if self.cancel.load(Ordering::SeqCst) {
                     return Ok(AutoEngageOutcome::Cancelled);

@@ -312,6 +312,30 @@ or the build breaks. `DESIGN.md` is the design spec the UI was ported from.
 `StatusDot` pulses only while `testing`. A permanent `active` pulse forced a
 full-window redraw every frame for the whole bypass session.
 
+#### Icon geometry and visual verification (required)
+
+- Reuse `Icon` and `Spinner`; keep their wrapper width bound to `size`, with
+  `horizontal-stretch: 0`. The inner Image must have explicit width and height.
+  A fixed-size Image inside an unconstrained layout can stay at the left edge
+  while its wrapper stretches. `alignment: center` on a VerticalLayout only
+  centers along its vertical axis; it does not horizontally center that Image.
+- In a badge, center the sized wrapper on both axes relative to the badge. In
+  a layout row, let the layout position it. Do not mix layout positioning with
+  guessed pixel offsets or add per-page nudges to hide a shared component bug.
+  Fix the shared geometry and check every affected use, including busy buttons.
+- After editing an icon, shared component or surrounding layout, rebuild
+  `examples/ui_only.rs`, render snapshots and actually inspect the images before
+  declaring the UI finished. Compilation and unit tests do not verify alignment.
+  Review the affected screens at the minimum 920×640 and a larger window, in
+  dark/light themes and RU/EN. Include idle, starting/loading and active states
+  when they swap Icon/Spinner; check centers, clipping, text gaps and button
+  alignment. Keep snapshots under ignored `target/ui-review/`. If a theme,
+  display scale or platform cannot be checked, state that limitation.
+- Use the existing `ZAPRET_UI_PREVIEW_PAGE`, `SIZE`, `THEME`, `LANG`, `STATE`
+  and `SNAPSHOT` hooks (each with the `ZAPRET_UI_PREVIEW_` prefix) for reproducible
+  mock screenshots. Extend the mock states when necessary; do not launch real
+  bypass processes or alter system settings just to inspect layout.
+
 The native tray/menu-bar wrapper lives in `src/tray.rs`. Tray callbacks run on
 the UI thread without polling. Do not replace Slint's global native-menu event
 handler: the Logs and hosts TextEdit context menus need it for Copy/Paste.

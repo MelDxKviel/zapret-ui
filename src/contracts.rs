@@ -224,6 +224,7 @@ pub struct HostsCheck {
 #[derive(Clone, Debug)]
 pub enum BackendCmd {
     SetEngineMode(EngineMode),
+    SetZapret2Enabled(bool),
     InstallAndEngage,
     Quit,
     Install,
@@ -240,6 +241,8 @@ pub enum BackendCmd {
     AutoEngage,
     /// Cancel an in-flight [`BackendCmd::AutoEngage`] (tap the dial again).
     CancelAutoEngage,
+    /// Cancel either scan, independent of the page or action that started it.
+    CancelScan,
     Stop,
     ServiceInstall(String /* strategy_id */),
     ServiceRemove,
@@ -336,8 +339,30 @@ impl StrategyTestResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScanKind {
+    Auto,
+    Test,
+}
+
+impl ScanKind {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Test => "test",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum UiEvent {
+    /// Owns scan presentation until cleanup and the terminal status are applied.
+    ScanStarted {
+        kind: ScanKind,
+        total: u32,
+    },
+    ScanFinished,
+    Zapret2Enabled(bool),
     EngineMode(EngineMode),
     TelegramStatus(TelegramProxyStatus),
     TelegramSettings(TelegramProxySettings),
@@ -391,6 +416,7 @@ pub enum UiEvent {
     AutoEngageProgress {
         index: u32,
         total: u32,
+        strategy: String,
     },
     /// A simple-mode auto-engage run finished without finding a working strategy
     /// (distinct from a user cancel) — flips the dial to its error state.

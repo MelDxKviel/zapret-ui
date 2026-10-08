@@ -168,6 +168,19 @@ fn main() -> anyhow::Result<()> {
     let ui = MainWindow::new()?;
     ui.set_supports_engine_selection(cfg!(windows));
     {
+        let weak = ui.as_weak();
+        ui.on_cancel_scan_clicked(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_scan_kind("".into());
+                ui.set_scan_engine("".into());
+                ui.set_scan_strategy("".into());
+                ui.set_test_running(false);
+                ui.set_status_running_mode("None".into());
+                ui.set_is_busy(false);
+            }
+        });
+    }
+    {
         let w = ui.as_weak();
         ui.on_set_engine_mode(move |mode| {
             if let Some(ui) = w.upgrade() {
@@ -285,11 +298,31 @@ fn main() -> anyhow::Result<()> {
         let rebuild = rebuild_strategies.clone();
         ui.on_set_engine_mode(move |mode| {
             if let Some(ui) = w.upgrade() {
+                ui.set_scan_kind("".into());
+                ui.set_test_running(false);
                 ui.set_engine_mode(mode);
                 ui.set_status_running_mode("None".into());
                 ui.set_status_active_engine("".into());
                 ui.set_selected_item(StrategyItem::default());
                 ui.set_selected_strategy("".into());
+                ui.set_is_busy(false);
+                rebuild();
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        let rebuild = rebuild_strategies.clone();
+        ui.on_set_zapret2_enabled(move |enabled| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_zapret2_enabled(enabled);
+                if !enabled {
+                    ui.set_engine_mode("zapret1".into());
+                }
+                ui.set_scan_kind("".into());
+                ui.set_test_running(false);
+                ui.set_status_running_mode("None".into());
+                ui.set_status_active_engine("".into());
                 ui.set_is_busy(false);
                 rebuild();
             }
@@ -473,15 +506,34 @@ fn main() -> anyhow::Result<()> {
         let ui_weak = ui.as_weak();
         ui.on_auto_engage_clicked(move || {
             println!("UI: Auto-engage clicked");
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_scan_kind("auto".into());
+                ui.set_scan_index(0);
+                ui.set_scan_total(3);
+            }
             for step in 1..=3 {
                 let ui_weak = ui_weak.clone();
                 slint::Timer::single_shot(
                     std::time::Duration::from_millis(600 * step),
                     move || {
                         if let Some(ui) = ui_weak.upgrade() {
+                            if ui.get_scan_kind() != "auto" {
+                                return;
+                            }
+                            ui.set_scan_index(step as i32);
+                            ui.set_scan_engine(
+                                if ui.get_engine_mode() == "zapret2" {
+                                    "zapret2"
+                                } else {
+                                    "zapret1"
+                                }
+                                .into(),
+                            );
+                            ui.set_scan_strategy("TLS · multisplit".into());
                             ui.set_engage_index(step as i32);
                             ui.set_engage_total(3);
                             if step == 3 {
+                                ui.set_scan_kind("".into());
                                 ui.set_active_item(StrategyItem {
                                     id: "general (ALT2)".into(),
                                     display_name: "general (ALT2)".into(),
@@ -830,6 +882,7 @@ fn main() -> anyhow::Result<()> {
     //   ZAPRET_UI_PREVIEW_PAGE=tester ZAPRET_UI_PREVIEW_SIZE=940x900 cargo run --example ui_only
     // The tester page also gets its mock results filled in so the ranked list renders.
     if let Ok(engine) = std::env::var("ZAPRET_UI_PREVIEW_ENGINE") {
+        ui.set_zapret2_enabled(cfg!(windows));
         ui.set_engine_mode(engine.into());
         rebuild_strategies();
     }
@@ -875,24 +928,52 @@ fn main() -> anyhow::Result<()> {
         match state.as_str() {
             "active" => {
                 set_mock_running(&ui);
-                ui.set_status_active_strategy("general (ALT2)".into());
+                let strategy = if ui.get_engine_mode() == "zapret2" {
+                    MockCatalog.by_id("zapret2:multisplit").unwrap()
+                } else {
+                    MockCatalog.by_id("general (ALT2)").unwrap()
+                };
+                ui.set_status_active_strategy(strategy.id.as_str().into());
                 ui.set_status_winws_pid(4242);
                 ui.set_status_uptime(3725);
                 ui.set_active_item(StrategyItem {
-                    id: "general (ALT2)".into(),
-                    display_name: "general (ALT2)".into(),
-                    pretty: "general".into(),
-                    alt: "ALT2".into(),
+                    id: strategy.id.as_str().into(),
+                    display_name: strategy.display_name.as_str().into(),
+                    pretty: strategy.display_name.as_str().into(),
                     ..Default::default()
                 });
             }
+            "baseline" => {
+                ui.set_scan_kind("auto".into());
+                ui.set_scan_index(0);
+                ui.set_scan_total(25);
+                ui.set_is_busy(true);
+            }
+            "starting" => {
+                ui.set_pending_op("start".into());
+                ui.set_is_busy(true);
+            }
+            "installing" => {
+                ui.set_status_installed(false);
+                ui.set_pending_op("install".into());
+                ui.set_is_busy(true);
+                ui.set_progress(0.42);
+            }
             "busy" => {
+                ui.set_scan_kind("auto".into());
+                ui.set_scan_index(2);
+                ui.set_scan_total(25);
+                ui.set_scan_engine("zapret2".into());
+                ui.set_scan_strategy("TLS / HTTP · multisplit".into());
                 ui.set_pending_op("start".into());
                 ui.set_is_busy(true);
                 ui.set_engage_index(2);
                 ui.set_engage_total(3);
             }
-            "error" => ui.set_simple_failed(true),
+            "error" => {
+                ui.set_simple_failed(true);
+                ui.set_core_error("Не удалось запустить zapret2: winws2.exe отсутствует в каталоге ядра. Повторите установку в настройках.".into());
+            }
             "uninstalled" => ui.set_status_installed(false),
             _ => {}
         }
