@@ -147,7 +147,7 @@ impl Installer for Zapret2Installer {
             .install_dir
             .parent()
             .context("zapret2 installation needs a parent directory")?;
-        std::fs::create_dir_all(parent)?;
+        let work_root = prepare_work_dir(&self.install_dir)?;
         let lock_path = parent.join("zapret2.install.lock");
         // A crash releases this exclusive Windows handle. No stale-lock heuristic.
         let _lock = {
@@ -161,8 +161,8 @@ impl Installer for Zapret2Installer {
             }
         }
         let work = tempfile::Builder::new()
-            .prefix("zapret2-work-")
-            .tempdir_in(parent)?;
+            .prefix("install-")
+            .tempdir_in(&work_root)?;
         on_progress(InstallStage::Resolving, 0, None);
         let release = self.release().await?;
         let manifest = self
@@ -295,7 +295,10 @@ fn extract_runtime(
     tag: &str,
     checksums: &HashMap<String, String>,
 ) -> Result<()> {
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(zip_path)?)?;
+    let archive_file = std::fs::File::open(zip_path)
+        .with_context(|| format!("Cannot open zapret2 archive {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(archive_file)
+        .with_context(|| format!("Cannot read zapret2 archive {}", zip_path.display()))?;
     if archive.len() > MAX_ENTRIES {
         bail!("zapret2 ZIP has too many entries");
     }
@@ -362,7 +365,12 @@ fn extract_runtime(
         }
         let destination = staged.join(&target);
         std::fs::create_dir_all(destination.parent().context("Missing runtime parent")?)?;
-        std::fs::write(&destination, &bytes)?;
+        std::fs::write(&destination, &bytes).with_context(|| {
+            format!(
+                "Cannot write zapret2 runtime file {}",
+                destination.display()
+            )
+        })?;
         if target.starts_with("bin/") {
             verify_x64_pe(&destination)?;
         }
@@ -376,7 +384,12 @@ fn extract_runtime(
 }
 
 fn verify_x64_pe(path: &Path) -> Result<()> {
-    let mut file = std::fs::File::open(path)?;
+    let mut file = std::fs::File::open(path).with_context(|| {
+        format!(
+            "Cannot open zapret2 runtime file {} to check its architecture",
+            path.display()
+        )
+    })?;
     let mut dos = [0u8; 64];
     file.read_exact(&mut dos)
         .context("Truncated Windows runtime file")?;
@@ -507,25 +520,103 @@ fn preserve_user_state(current: &Path, staged: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A persistent sibling keeps every downloaded/staged/rollback binary inside
+/// one exact engine-specific directory, on the installation's volume.
+pub(crate) fn work_dir_for_install(installed: &Path) -> Result<PathBuf> {
+    if installed
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        bail!("zapret2 installation path must not contain parent traversal");
+    }
+    let name = installed
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| super::safe_relative(name) && !name.contains('/'))
+        .context("zapret2 installation needs a regular directory name")?;
+    Ok(installed.with_file_name(format!("{name}-work")))
+}
+
+/// Check every existing directory component before creating or renaming files.
+/// In particular, a pre-existing work-root junction must never redirect writes.
+pub(crate) fn validate_plain_directory_path(path: &Path) -> Result<()> {
+    if path
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        bail!(
+            "Directory path must not contain parent traversal: {}",
+            path.display()
+        );
+    }
+    for component in std::path::absolute(path)?.ancestors() {
+        match std::fs::symlink_metadata(component) {
+            Ok(meta) if !meta.is_dir() || super::is_link(&meta) => {
+                bail!(
+                    "Directory must not be a file, link or junction: {}",
+                    component.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Cannot inspect directory {}", component.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn prepare_work_dir(installed: &Path) -> Result<PathBuf> {
+    let root = work_dir_for_install(installed)?;
+    validate_plain_directory_path(installed)?;
+    validate_plain_directory_path(&root)?;
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("Cannot create zapret2 work directory {}", root.display()))?;
+    validate_plain_directory_path(&root)?;
+    Ok(root)
+}
+
 fn atomic_promote(staged: &Path, installed: &Path) -> Result<()> {
+    atomic_promote_with(staged, installed, |from, to| std::fs::rename(from, to))
+}
+
+fn atomic_promote_with(
+    staged: &Path,
+    installed: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<()> {
     if !super::is_valid_install_dir(staged) {
         bail!("Cannot promote incomplete zapret2 runtime");
     }
-    // Outside the auto-cleaned staging directory: even a failed rollback must
-    // leave the previous installation available for manual recovery.
+    let work_root = prepare_work_dir(installed)?;
+    validate_plain_directory_path(staged)?;
+    let stage_path = std::path::absolute(staged)?
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
+    let root_path = std::path::absolute(&work_root)?
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
+    if !stage_path.starts_with(&format!("{}\\", root_path.trim_end_matches(['/', '\\']))) {
+        bail!("zapret2 staging must remain inside its dedicated work directory");
+    }
+    // Outside the auto-cleaned TempDir: failed rollback retains the old core.
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let backup = installed.with_extension(format!("old.{}.{nonce}", std::process::id()));
+    let backup = work_root.join(format!("previous.{}.{nonce}", std::process::id()));
     let had_previous = installed.exists();
     if had_previous {
-        std::fs::rename(installed, &backup)
+        rename(installed, &backup)
             .context("Cannot replace zapret2: stop its process or service first")?;
     }
-    if let Err(error) = std::fs::rename(staged, installed) {
+    if let Err(error) = rename(staged, installed) {
         if had_previous {
-            if let Err(rollback) = std::fs::rename(&backup, installed) {
+            if let Err(rollback) = rename(&backup, installed) {
                 bail!("zapret2 promotion failed ({error}); rollback failed ({rollback}); previous core retained at {}", backup.display());
             }
         }
@@ -666,9 +757,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let zip = dir.path().join("core.zip");
         let hashes = fixture_zip(&zip, "v1.0");
-        let staged = dir.path().join("staged");
-        extract_runtime(&zip, &staged, "v1.0", &hashes).unwrap();
         let installed = dir.path().join("installed");
+        let staged = prepare_work_dir(&installed).unwrap().join("staged");
+        extract_runtime(&zip, &staged, "v1.0", &hashes).unwrap();
         std::fs::create_dir(&installed).unwrap();
         std::fs::write(installed.join("previous"), "previous core").unwrap();
         let lock = std::fs::OpenOptions::new()
@@ -684,6 +775,86 @@ mod tests {
             "previous core"
         );
         drop(lock);
+    }
+
+    #[test]
+    fn work_directory_is_a_dedicated_sibling() {
+        for name in ["zapret2", "custom-core", "core.v2"] {
+            let installed = Path::new(r"C:\cores").join(name);
+            assert_eq!(
+                work_dir_for_install(&installed).unwrap(),
+                Path::new(r"C:\cores").join(format!("{name}-work"))
+            );
+        }
+        for path in [r"C:\", r"C:\cores\..\zapret2", r"C:\cores\zapret2."] {
+            assert!(work_dir_for_install(Path::new(path)).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn existing_file_cannot_redirect_work_directory_creation() {
+        let parent = tempfile::tempdir().unwrap();
+        let installed = parent.path().join("zapret2");
+        let work = work_dir_for_install(&installed).unwrap();
+        std::fs::write(&work, "unrelated file").unwrap();
+        assert!(prepare_work_dir(&installed).is_err());
+        assert_eq!(std::fs::read_to_string(work).unwrap(), "unrelated file");
+        assert!(!installed.exists());
+    }
+
+    #[test]
+    fn failed_rollback_backup_survives_temporary_work_cleanup() {
+        let parent = tempfile::tempdir().unwrap();
+        let installed = parent.path().join("zapret2");
+        std::fs::create_dir(&installed).unwrap();
+        std::fs::write(installed.join("previous"), "previous core").unwrap();
+        let work_root = prepare_work_dir(&installed).unwrap();
+        let temporary = tempfile::tempdir_in(&work_root).unwrap();
+        let staged = temporary.path().join("staged");
+        let zip = temporary.path().join("fixture.zip");
+        let hashes = fixture_zip(&zip, "v1.0");
+        extract_runtime(&zip, &staged, "v1.0", &hashes).unwrap();
+        let error = atomic_promote_with(&staged, &installed, |from, to| {
+            if from == installed {
+                std::fs::rename(from, to)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected rename failure",
+                ))
+            }
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("rollback failed"));
+        drop(temporary);
+        let backups: Vec<_> = std::fs::read_dir(&work_root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(backups[0].join("previous")).unwrap(),
+            "previous core"
+        );
+        assert!(!staged.exists());
+    }
+
+    #[test]
+    fn archive_and_runtime_open_errors_name_the_blocked_file() {
+        let parent = tempfile::tempdir().unwrap();
+        let archive = parent.path().join("missing.zip");
+        let error = extract_runtime(
+            &archive,
+            &parent.path().join("staged"),
+            "v1.0",
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("missing.zip"));
+        assert!(error.to_string().contains("Cannot open zapret2 archive"));
+        let error = verify_x64_pe(&parent.path().join("winws2.exe")).unwrap_err();
+        assert!(error.to_string().contains("winws2.exe"));
+        assert!(error.to_string().contains("architecture"));
     }
 
     #[test]

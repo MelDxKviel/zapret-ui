@@ -489,15 +489,105 @@ fn remove_dir_all_recovering(path: &Path, ctx: &str) -> anyhow::Result<()> {
     }
 }
 
-fn staging_dir_for(dst: &Path) -> anyhow::Result<PathBuf> {
-    let parent = dst
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Service install dir {:?} has no parent", dst))?;
+fn service_work_root(dst: &Path, engine: EngineKind) -> anyhow::Result<PathBuf> {
+    if engine == EngineKind::Zapret2 {
+        crate::zapret::zapret2::installer::work_dir_for_install(dst)
+    } else {
+        dst.parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| anyhow::anyhow!("Service install dir {:?} has no parent", dst))
+    }
+}
+
+fn staging_dir_for(dst: &Path, engine: EngineKind) -> anyhow::Result<PathBuf> {
+    let parent = service_work_root(dst, engine)?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     Ok(parent.join(format!("zapret.stage.{}.{}", std::process::id(), stamp)))
+}
+
+fn validate_zapret2_service_paths(source: &Path, dst: &Path) -> anyhow::Result<PathBuf> {
+    let root = service_work_root(dst, EngineKind::Zapret2)?;
+    for path in [source, dst, root.as_path()] {
+        crate::zapret::zapret2::installer::validate_plain_directory_path(path)?;
+    }
+    let source = std::path::absolute(source)?;
+    for protected in [dst, root.as_path()] {
+        let protected = std::path::absolute(protected)?;
+        if is_under_dir_ci(&source, &protected) || is_under_dir_ci(&protected, &source) {
+            anyhow::bail!("zapret2 service source must be separate from its protected installation and work directories");
+        }
+    }
+    Ok(root)
+}
+
+fn reject_service_work_links(path: &Path) -> anyhow::Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if crate::zapret::zapret2::is_link(&meta) {
+        anyhow::bail!(
+            "Protected zapret2 work directory must not contain links or junctions: {}",
+            path.display()
+        );
+    }
+    if meta.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            reject_service_work_links(&entry?.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn protected_app_root_for(dst: &Path) -> anyhow::Result<&Path> {
+    dst.parent()
+        .filter(|parent| {
+            parent
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.eq_ignore_ascii_case("zapret-ui"))
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Protected service directory must be inside the zapret-ui application directory"
+            )
+        })
+}
+
+/// Replace permissions on this directory only. In particular, securing the
+/// application parent must not recursively change existing engine directories.
+fn lock_down_service_root(dir: &Path, inherit_children: bool) -> anyhow::Result<()> {
+    crate::zapret::zapret2::installer::validate_plain_directory_path(dir)?;
+    run_icacls(
+        dir,
+        &["/setowner", "*S-1-5-32-544", "/Q"],
+        "Setting protected service directory owner",
+    )?;
+    run_icacls(
+        dir,
+        &["/reset", "/Q"],
+        "Resetting protected service directory permissions",
+    )?;
+    run_icacls(
+        dir,
+        &["/inheritance:r", "/Q"],
+        "Removing inherited protected service directory permissions",
+    )?;
+    let grants = if inherit_children {
+        [
+            "*S-1-5-32-544:(OI)(CI)F",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-545:(OI)(CI)RX",
+        ]
+    } else {
+        ["*S-1-5-32-544:F", "*S-1-5-18:F", "*S-1-5-32-545:RX"]
+    };
+    run_icacls(
+        dir,
+        &["/grant:r", grants[0], grants[1], grants[2], "/Q"],
+        "Granting restricted protected service directory permissions",
+    )?;
+    crate::zapret::zapret2::installer::validate_plain_directory_path(dir)
 }
 
 fn lock_down_service_dir(dir: &Path) -> anyhow::Result<()> {
@@ -578,9 +668,9 @@ fn prepare_protected_dir_for_engine(
 ) -> anyhow::Result<ProtectedDir> {
     let dst = crate::zapret::paths::service_install_dir_for_engine(engine);
     let mut protected = stage_protected_dir(user_install_dir, engine)?;
-    if let Err(error) =
-        promote_service_dir(&protected.path, &dst, |from, to| std::fs::rename(from, to))
-    {
+    if let Err(error) = promote_service_dir(&protected.path, &dst, engine, |from, to| {
+        std::fs::rename(from, to)
+    }) {
         let _ =
             remove_dir_all_recovering(&protected.path, "Cleaning unpromoted service staging dir");
         return Err(error);
@@ -595,7 +685,28 @@ fn stage_protected_dir(
     engine: EngineKind,
 ) -> anyhow::Result<ProtectedDir> {
     let dst = crate::zapret::paths::service_install_dir_for_engine(engine);
-    let stage = staging_dir_for(&dst)?;
+    let stage = staging_dir_for(&dst, engine)?;
+    if engine == EngineKind::Zapret2 {
+        let work_root = validate_zapret2_service_paths(user_install_dir, &dst)?;
+        // A writable parent permits DELETE_CHILD even when a child's DACL is
+        // restrictive. Protect only our app directory, never ProgramData itself
+        // or the existing engine subtrees, before creating the new work root.
+        let app_root = protected_app_root_for(&dst)?;
+        std::fs::create_dir_all(app_root)?;
+        lock_down_service_root(app_root, false)?;
+        std::fs::create_dir_all(&work_root)?;
+        crate::zapret::zapret2::installer::validate_plain_directory_path(&work_root)?;
+        reject_service_work_links(&work_root)?;
+        // This predictable directory may have been created by an ordinary
+        // user. Remove that owner's implicit WRITE_DAC and unrelated explicit
+        // grants before applying the existing restrictive, inheritable ACL.
+        // Only reset the root; retained rollback files keep their own ACLs.
+        // Protect the persistent work root before any replacement bytes exist.
+        // Every new staging directory inherits the same admin-only write ACL.
+        lock_down_service_root(&work_root, true)?;
+        crate::zapret::zapret2::installer::validate_plain_directory_path(&work_root)?;
+        reject_service_work_links(&work_root)?;
+    }
 
     let before = collect_file_digests(user_install_dir).map_err(|e| {
         anyhow::anyhow!(
@@ -646,9 +757,10 @@ fn stage_protected_dir(
 fn promote_service_dir(
     stage: &Path,
     dst: &Path,
+    engine: EngineKind,
     rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> anyhow::Result<()> {
-    let backup = promote_service_dir_retaining(stage, dst, rename)?;
+    let backup = promote_service_dir_retaining(stage, dst, engine, rename)?;
     cleanup_service_backup(backup.as_deref());
     Ok(())
 }
@@ -656,9 +768,23 @@ fn promote_service_dir(
 fn promote_service_dir_retaining(
     stage: &Path,
     dst: &Path,
+    engine: EngineKind,
     mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
 ) -> anyhow::Result<Option<PathBuf>> {
-    let backup = dst.with_file_name(format!(
+    let root = service_work_root(dst, engine)?;
+    if engine == EngineKind::Zapret2 {
+        crate::zapret::zapret2::installer::validate_plain_directory_path(&root)?;
+        crate::zapret::zapret2::installer::validate_plain_directory_path(dst)?;
+        crate::zapret::zapret2::installer::validate_plain_directory_path(stage)?;
+        if !is_under_dir_ci(&std::path::absolute(stage)?, &std::path::absolute(&root)?)
+            || path_ci(&std::path::absolute(stage)?) == path_ci(&std::path::absolute(&root)?)
+        {
+            anyhow::bail!(
+                "zapret2 service staging must remain inside its dedicated work directory"
+            );
+        }
+    }
+    let backup = root.join(format!(
         "zapret.previous.{}.{}",
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
@@ -1054,23 +1180,26 @@ pub async fn install_service_protected_for_engine(
         return Err(error);
     }
     let destination = crate::zapret::paths::service_install_dir_for_engine(engine);
-    let backup = match promote_service_dir_retaining(&protected.path, &destination, |from, to| {
-        std::fs::rename(from, to)
-    }) {
-        Ok(backup) => backup,
-        Err(error) => {
-            let _ = remove_dir_all_recovering(
-                &protected.path,
-                "Cleaning unpromoted service staging dir",
-            );
-            if let Some(previous) = &previous {
-                if let Err(restore) = restore_prior_service(previous, &owned_dirs) {
-                    anyhow::bail!("{error:#}; previous service could not be restored: {restore:#}");
+    let backup =
+        match promote_service_dir_retaining(&protected.path, &destination, engine, |from, to| {
+            std::fs::rename(from, to)
+        }) {
+            Ok(backup) => backup,
+            Err(error) => {
+                let _ = remove_dir_all_recovering(
+                    &protected.path,
+                    "Cleaning unpromoted service staging dir",
+                );
+                if let Some(previous) = &previous {
+                    if let Err(restore) = restore_prior_service(previous, &owned_dirs) {
+                        anyhow::bail!(
+                            "{error:#}; previous service could not be restored: {restore:#}"
+                        );
+                    }
                 }
+                return Err(error);
             }
-            return Err(error);
-        }
-    };
+        };
     protected.path = destination.clone();
     let install = async {
         let strategy = resolve_service_strategy(user_install_dir, &protected, strategy_id, engine)?;
@@ -1749,16 +1878,17 @@ mod tests {
     fn rollback_preserves_exact_previous_protected_files_until_start_succeeds() {
         let root = tempfile::tempdir().unwrap();
         let destination = root.path().join("zapret2");
-        let stage = root.path().join("stage");
+        let stage = staging_dir_for(&destination, EngineKind::Zapret2).unwrap();
         std::fs::create_dir_all(&destination).unwrap();
         std::fs::create_dir_all(&stage).unwrap();
         std::fs::write(destination.join("winws2.exe"), "previous executable").unwrap();
         std::fs::write(destination.join(".zapret-ui-strategy"), "zapret2:previous").unwrap();
         std::fs::write(stage.join("winws2.exe"), "rejected executable").unwrap();
-        let backup = promote_service_dir_retaining(&stage, &destination, |from, to| {
-            std::fs::rename(from, to)
-        })
-        .unwrap();
+        let backup =
+            promote_service_dir_retaining(&stage, &destination, EngineKind::Zapret2, |from, to| {
+                std::fs::rename(from, to)
+            })
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(backup.as_ref().unwrap().join("winws2.exe")).unwrap(),
             "previous executable"
@@ -1773,6 +1903,71 @@ mod tests {
             "zapret2:previous"
         );
         assert!(!backup.unwrap().exists());
+    }
+
+    #[test]
+    fn only_zapret2_service_files_use_the_dedicated_work_root() {
+        let parent = Path::new(r"C:\ProgramData\zapret-ui");
+        let first = parent.join("zapret");
+        let second = parent.join("zapret2");
+        assert_eq!(
+            service_work_root(&first, EngineKind::Zapret1).unwrap(),
+            parent
+        );
+        assert_eq!(
+            service_work_root(&second, EngineKind::Zapret2).unwrap(),
+            parent.join("zapret2-work")
+        );
+        assert_eq!(
+            staging_dir_for(&first, EngineKind::Zapret1)
+                .unwrap()
+                .parent(),
+            Some(parent)
+        );
+        assert_eq!(
+            staging_dir_for(&second, EngineKind::Zapret2)
+                .unwrap()
+                .parent(),
+            Some(parent.join("zapret2-work").as_path())
+        );
+    }
+
+    #[test]
+    fn protected_parent_is_the_app_directory_never_program_data() {
+        let dst = Path::new(r"C:\ProgramData\zapret-ui\zapret2");
+        assert_eq!(
+            protected_app_root_for(dst).unwrap(),
+            Path::new(r"C:\ProgramData\zapret-ui")
+        );
+        for invalid in [r"C:\ProgramData\zapret2", r"C:\ProgramData\zapret-ui"] {
+            assert!(protected_app_root_for(Path::new(invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn zapret2_service_refuses_source_overlapping_protected_work() {
+        let parent = tempfile::tempdir().unwrap();
+        let dst = parent.path().join("zapret2");
+        let work = service_work_root(&dst, EngineKind::Zapret2).unwrap();
+        for source in [
+            parent.path().to_path_buf(),
+            dst.clone(),
+            dst.join("child"),
+            work.clone(),
+            work.join("stage"),
+        ] {
+            assert!(
+                validate_zapret2_service_paths(&source, &dst).is_err(),
+                "{}",
+                source.display()
+            );
+        }
+        assert_eq!(
+            validate_zapret2_service_paths(&parent.path().join("user-core"), &dst).unwrap(),
+            work
+        );
+        std::fs::write(&work, "not a directory").unwrap();
+        assert!(validate_zapret2_service_paths(&parent.path().join("user-core"), &dst).is_err());
     }
 
     #[test]
@@ -1879,7 +2074,7 @@ mod protected_promotion_tests {
         std::fs::create_dir(&stage).unwrap();
         std::fs::write(dst.join("winws.exe"), "old").unwrap();
         std::fs::write(stage.join("winws.exe"), "new").unwrap();
-        let result = promote_service_dir(&stage, &dst, |from, to| {
+        let result = promote_service_dir(&stage, &dst, EngineKind::Zapret1, |from, to| {
             if from == stage {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -1910,7 +2105,10 @@ mod protected_promotion_tests {
         std::fs::create_dir(&stage).unwrap();
         std::fs::write(dst.join("winws.exe"), "old").unwrap();
         std::fs::write(stage.join("winws.exe"), "new").unwrap();
-        promote_service_dir(&stage, &dst, |from, to| std::fs::rename(from, to)).unwrap();
+        promote_service_dir(&stage, &dst, EngineKind::Zapret1, |from, to| {
+            std::fs::rename(from, to)
+        })
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(dst.join("winws.exe")).unwrap(),
             "new"

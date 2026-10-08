@@ -16,7 +16,6 @@ import { TelegramPage } from "pages/telegram.slint";
 import { AdminBanner } from "components/admin_banner.slint";
 import { UpdateBanner } from "components/update_banner.slint";
 import { AppButton } from "components/button.slint";
-import { EngineSelector } from "components/engine_selector.slint";
 import { HomePage } from "pages/home.slint";
 import { StrategiesPage } from "pages/strategies.slint";
 import { TesterPage } from "pages/tester.slint";
@@ -635,54 +634,8 @@ export component MainWindow inherits Window {
                     dismiss_clicked => { root.app_update_dismissed = true; }
                 }
 
-                // page stack
-                if root.supports_engine_selection && root.zapret2_enabled && (root.current_page == "strategies" || root.current_page == "tester") : VerticalLayout {
-                    padding-left: 24px;
-                    padding-right: 24px;
-                    padding-top: 12px;
-                    vertical-stretch: 0;
-                    EngineSelector {
-                        management: root.current_page == "settings";
-                        mode: root.engine_mode;
-                        active: root.status_active_engine;
-                        version: root.status_installed_version;
-                        installed: root.status_installed;
-                        busy: root.is_busy && root.scan_kind == "";
-                        selected(mode) => { if (mode != root.engine_mode) { root.is_busy = true; root.set_engine_mode(mode); } }
-                        install => { root.is_busy = true; root.install_clicked(); }
-                        update => { root.is_busy = true; root.update_clicked(); }
-                    }
-                }
-                if root.scan_kind != "" && root.current_page != "home" && root.current_page != "tester" : Rectangle {
-                    height: 56px;
-                    background: ThemePalette.info-soft;
-                    HorizontalLayout {
-                        padding-left: 24px; padding-right: 24px; spacing: 16px;
-                        Text {
-                            text: I18n.t(I18n.lang, "connection.scanning") + (root.scan_total > 0 ? " · \{root.scan_index}/\{root.scan_total}" : "");
-                            font-family: ThemePalette.font-sans; font-size: ThemePalette.fs-13;
-                            color: ThemePalette.info-text; vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                        AppButton { text: I18n.t(I18n.lang, "connection.cancel"); size: "sm"; clicked => { root.cancel_scan_clicked(); } }
-                    }
-                }
-                if root.core_error != "" && root.current_page != "home" : Rectangle {
-                    min-height: 56px;
-                    background: ThemePalette.danger-soft;
-                    HorizontalLayout {
-                        padding: 16px; spacing: 12px;
-                        Text {
-                            text: root.core_error;
-                            font-family: ThemePalette.font-sans;
-                            font-size: ThemePalette.fs-12;
-                            color: ThemePalette.danger-text;
-                            wrap: word-wrap;
-                            horizontal-stretch: 1;
-                        }
-                        AppButton { text: I18n.t(I18n.lang, "connection.dismiss_error"); size: "sm"; clicked => { root.core_error = ""; } }
-                    }
-                }
+                // Core controls and errors belong to Home/Settings, never a
+                // global header that pushes down unrelated pages.
                 Rectangle {
                     vertical-stretch: 1;
                     clip: true;
@@ -690,6 +643,19 @@ export component MainWindow inherits Window {
             if root.current_page == "home" : Fade {
                 HomePage {
                     width: 100%; height: 100%;
+                    ui_mode: root.ui_mode;
+                    mode_changed(mode) => { root.ui_mode = mode; root.set_ui_mode(mode); }
+                    show_core_tuning: !root.supports_engine_selection || root.engine_mode == "zapret1";
+                    game_filter <=> root.game_filter;
+                    ipset_mode <=> root.ipset_mode;
+                    ipset_lines: root.ipset_lines;
+                    ipset_age_days: root.ipset_age_days;
+                    ipset_busy: root.ipset_busy;
+                    ipset_msg: root.ipset_msg;
+                    ipset_ok: root.ipset_ok;
+                    game_filter_changed(v) => { root.set_game_filter(v); }
+                    ipset_mode_changed(v) => { root.set_ipset_mode(v); }
+                    update_ipset_clicked => { root.update_ipset_clicked(); }
                     status: root.status;
                     chosen_item: root.chosen_item;
                     has_strategy: root.has_strategy;
@@ -699,10 +665,10 @@ export component MainWindow inherits Window {
                     strategy_count: root.total_strategy_count;
                     app_version: root.app_version;
                     uptime: root.uptime;
-                    supports_engine_selection: root.supports_engine_selection && root.zapret2_enabled;
+                    supports_engine_selection: root.supports_engine_selection;
                     engine_mode: root.engine_mode;
                     active_engine: root.status_active_engine;
-                    start_engine: I18n.macos ? "utunws" : root.engine_mode == "auto" ? I18n.t(I18n.lang, "engine.auto") : root.engine_mode;
+                    start_engine: I18n.macos ? "utunws" : root.engine_mode;
                     scan_kind: root.scan_kind;
                     scan_index: root.scan_index;
                     scan_total: root.scan_total;
@@ -724,7 +690,10 @@ export component MainWindow inherits Window {
                     dismiss_error_clicked => { root.core_error = ""; }
                     start_clicked => { root.core_error = ""; root.pending_op = "start"; root.is_busy = true; root.start_clicked(root.selected_item.id); }
                     stop_clicked => { root.core_error = ""; root.pending_op = "stop"; root.is_busy = true; root.stop_clicked(); }
-                    install_clicked => { root.core_error = ""; root.pending_op = "install"; root.is_busy = true; root.install_and_engage(); }
+                    install_clicked => {
+                        root.core_error = ""; root.pending_op = "install"; root.is_busy = true;
+                        if root.ui_mode == "simple" { root.install_and_engage(); } else { root.install_clicked(); }
+                    }
                     check_update_clicked => { root.check_update_clicked(); }
                     update_clicked => { root.core_error = ""; root.is_busy = true; root.update_clicked(); }
                     open_folder_clicked => { root.open_folder_clicked(); }
@@ -809,7 +778,12 @@ export component MainWindow inherits Window {
                 SettingsPage {
                     supports_engine_selection: root.supports_engine_selection;
                     zapret2_enabled <=> root.zapret2_enabled;
-                    core_busy: root.is_busy && root.scan_kind == "";
+                    core_busy: root.is_busy;
+                    engine_busy: root.is_busy && root.scan_kind == "";
+                    core_error: root.core_error;
+                    core_installing: root.pending_op == "install";
+                    core_progress: root.progress;
+                    dismiss_core_error => { root.core_error = ""; }
                     engine_mode: root.engine_mode;
                     core_version: root.status_installed_version;
                     zapret2_changed(enabled) => { root.core_error = ""; root.is_busy = true; root.set_zapret2_enabled(enabled); }

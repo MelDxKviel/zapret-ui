@@ -1,28 +1,36 @@
 # zapret2 on Windows
 
-zapret2 is an optional **beta** Windows 10/11 x64 engine, disabled by default for
-both new and existing configurations. Enable **Settings → Bypass engine →
-zapret2 — beta feature** (Russian: **Настройки → Ядро обхода → zapret2 —
-бета-функция**) to reveal the engine selector on Home. Until enabled, Windows
-uses zapret1. Disabling the beta stops bypass and selects zapret1 again. The
-existing Mac utunws adapter remains separate; Mac has no beta engine toggle.
+zapret2 is an optional **beta** Windows 10/11 x64 engine. Home and
+**Settings → Bypass engine** always show two choices: **zapret1** and
+**zapret2 · Beta**. Selecting zapret2 opts into it directly; there is no separate
+beta toggle or Auto engine choice. zapret1 remains the default. The Mac utunws
+adapter remains the sole Mac engine, without a Windows engine selector.
 
-Home has one connection card for installation, scanning, running and errors,
-with one main action for the current state. There is no simple/advanced Home
-switch. Manual strategy choice and launch remain secondary actions; versions,
-core updates and service operations are under **Technical details and service**.
-Bypass tuning is in Settings. Installation shows the selected engine and
-download progress when available. A scan shows its engine and current candidate;
-its main action remains Cancel.
+Home preserves the saved **Simple / Full** choice, with a compact switch in its
+heading. Simple mode offers installation and automatic strategy selection in
+one action. Full mode makes **Start selected** the primary action and places
+automatic strategy selection beside it. App/core/latest versions, strategy
+count, uptime, process mode and PID are visible directly. Service controls,
+strategy description, supported filters and installation/update/folder actions
+are also shown without a disclosure step. Tuning remains available in Settings.
 
-The Auto engine mode makes both installed catalogs available to strategy testing.
-Changing engine mode during a scan first cancels it and waits for its tasks and
-candidate process to stop before applying the new mode. Manual start and service
-operations remain unavailable during the scan.
+Both modes share installation, scan, running and error states. Installation
+shows the selected engine and download progress when available. A scan shows
+its engine and current candidate, with Cancel always available. Engine controls
+are confined to Home and Settings; the Strategies and Tester pages retain their
+own tools without a repeated global engine/error panel.
+
+Automatic strategy selection and detailed testing use only the selected
+engine's catalog. Results arrive incrementally on the same Tester page,
+including baseline comparisons, reachability and latency. Cancelling automatic
+selection keeps the completed result rows available for review. Changing engine
+during a scan first cancels it and waits for its tasks and candidate process to
+stop before applying the new choice. Manual start and service operations remain
+unavailable during the scan.
 An engine is stopped before another strategy starts; the successful selected
-strategy identifies its engine as well as its preset. Selecting an exclusive
-engine mode also removes an owned automatic service for the other engine, so
-Windows cannot start that excluded engine again at the next boot. Reinstall a
+strategy identifies its engine as well as its preset. Selecting an engine also
+removes an owned automatic service for the other engine, so Windows cannot start
+that other engine again at the next boot. Reinstall a
 service explicitly for the newly selected preset if system startup is desired.
 
 ## Official distribution and integrity
@@ -57,9 +65,11 @@ it is not a separate maintainer signature. A GitHub asset-page markup change can
 require an adapter update; there is no unchecked-download fallback.
 
 Download and extraction have byte/count limits. Unsafe paths, duplicate runtime
-paths, symlinks and junctions are rejected. Installation stages the complete
-replacement beside the live directory, preserves user data, then renames it into
-place. Failure before promotion leaves the old installation intact; promotion
+paths, symlinks and junctions are rejected. Downloads, extraction and rollback
+backups use the sibling `<install-name>-work` directory, normally
+`%APPDATA%\zapret-ui\zapret2-work`, on the same volume as the installation.
+Installation stages the complete replacement there, preserves user data, then
+renames it into place. Failure before promotion leaves the old installation intact; promotion
 failure rolls it back. If an external filesystem change prevents rollback, the
 old directory is retained for recovery. No upstream `.cmd`, `.bat`, shell script
 or Cygwin setup helper is executed.
@@ -67,7 +77,8 @@ or Cygwin setup helper is executed.
 `version.txt` records the release tag and `release.json` records verified archive
 and manifest digests. zapret2 uses its own installation directory, normally
 `%APPDATA%\zapret-ui\zapret2`, next to the existing zapret1 directory. In service
-mode it is restaged to the separate protected ProgramData copy. Both loaded Lua
+mode it is restaged to the separate protected ProgramData copy, with staging
+and rollback files in `%ProgramData%\zapret-ui\zapret2-work`. Both loaded Lua
 paths and all referenced data paths are absolute, so SCM's working directory
 does not affect them. Upstream `nfq2/nfqws.c` invokes `service_run()` automatically
 on Windows; no extra `--service` switch is required.
@@ -152,30 +163,36 @@ Use a development machine where you control the existing bypass processes and
 can authorize the app's normal elevation. Do not run these live checks in CI.
 
 1. Keep an existing `config.toml` with a selected zapret1 strategy. Open the new
-   application and check that the selection and other preferences survive, the
-   beta is disabled and the engine selector is hidden.
+   application and check that the strategy, Simple/Full choice and other
+   preferences survive. Home and Settings must both show zapret1 and zapret2
+   Beta as the only engine choices.
 2. In zapret1 mode, start/stop the old preset. Verify runtime status, logs and
    service operations still work.
-3. Enable **Settings → Bypass engine → zapret2 — beta feature**, then choose
-   zapret2 on Home and use **Install and connect**. Verify `version.txt`, the four `bin/` files,
+3. Select zapret2 on Home or in **Settings → Bypass engine**, then install it.
+   Full mode installs without automatic selection; Simple mode's **Install and
+   connect** continues into strategy selection. Verify `version.txt`, the four `bin/` files,
    Lua files, lists and three catalog entries. Start one preset, check process
    status and connectivity, then Stop. No `winws2.exe` should remain owned by
    the application. A missing/quarantined executable must show a useful error.
 4. Copy a preset to `strategies/my-provider.json`, add a domain to the user list,
    and restart the app to refresh the catalog. Update the core and confirm both custom files remain
    unchanged. A deliberately damaged archive/checksum must leave the old core.
-5. With both cores installed, select Auto and run strategy testing. Results must
-   identify both engines, compare with the stopped baseline, rank connectivity
-   and latency, and leave the selected working strategy running. Observe that
-   owned `winws.exe` and `winws2.exe` never run together.
+5. With both cores installed, select zapret2 and run strategy testing. Results
+   must appear incrementally on Tester, contain only zapret2 candidates, compare
+   with the stopped baseline, rank connectivity and latency, and leave the
+   selected working strategy running. Repeat with zapret1 after stopping the
+   bypass. Automatic selection from Home must use the same results page and
+   respect the selected engine. Observe that owned `winws.exe` and `winws2.exe`
+   never run together.
 6. Stop the current bypass before starting a scan, then cancel during baseline,
    candidate probing and winner launch. Confirm the UI leaves its busy state,
-   retains the saved selection and leaves no candidate running. A scan requested
+   retains the saved selection and completed result rows, and leaves no
+   candidate running. A scan requested
    while a bypass is already running is refused without stopping it. Also test a
    manual switch to a missing/rejected executable; a known previous process is
-   restored on failure. Change engine mode during a scan and confirm the old
-   scan is fully stopped before the mode changes. Disable the beta and confirm
-   zapret1 is selected and the engine selector disappears.
+   restored on failure. Change engine during a scan and confirm the old scan is
+   fully stopped before the selection changes. Switch back to zapret1 and
+   confirm both engine choices remain visible.
 7. Test changing from a running zapret1 service to zapret2 and back, including
    service restaging. Check the registered executable and all file arguments
    point to the appropriate protected directory.
@@ -189,8 +206,9 @@ can authorize the app's normal elevation. Do not run these live checks in CI.
 This development environment's Windows antivirus blocked access to the official
 v1.0.5.2 ZIP during packaging research. Its checksum manifest, release asset
 metadata, official sources and build workflow were inspected without changing
-antivirus settings. The application does not perform antivirus scanning or
-change Windows protection settings; this block came from the operating system.
+antivirus settings. The application does not perform antivirus scanning,
+automatically create Defender exclusions or change Windows protection settings;
+this block came from the operating system.
 No real winws2 execution, DPI interception or zapret2 SCM
 startup smoke test was performed. End-to-end download, extraction and launch
 of that real archive therefore remain unverified here.

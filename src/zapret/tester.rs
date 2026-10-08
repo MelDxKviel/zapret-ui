@@ -50,7 +50,6 @@ pub struct ConnectivityTester {
     runner: Arc<dyn Runner>,
     install_dir: PathBuf,
     cancel: Arc<AtomicBool>,
-    #[cfg(windows)]
     results: std::sync::Mutex<Vec<StrategyTestResult>>,
     #[cfg(windows)]
     settle_wait: Duration,
@@ -67,13 +66,17 @@ impl ConnectivityTester {
             runner,
             install_dir,
             cancel: Arc::new(AtomicBool::new(false)),
-            #[cfg(windows)]
             results: std::sync::Mutex::new(Vec::new()),
             #[cfg(windows)]
             settle_wait: INIT_WAIT,
             #[cfg(all(test, windows))]
             probe_override: None,
         }
+    }
+
+    fn publish_result(&self, result: StrategyTestResult, on_each: &TestResultCb) {
+        self.results.lock().unwrap().push(result.clone());
+        on_each(result);
     }
 
     /// Load HTTPS endpoints from `utils/targets.txt`, falling back to defaults.
@@ -303,9 +306,8 @@ impl ConnectivityTester {
                 result.regressed,
                 result.avg_latency_ms
             );
-            on_each(result.clone());
+            self.publish_result(result.clone(), &on_each);
             results.push(result);
-            *self.results.lock().unwrap() = results.clone();
         }
         self.runner.stop().await?;
         rank_results(&mut results);
@@ -378,11 +380,26 @@ fn rank_results(results: &mut [StrategyTestResult]) {
     }
 }
 
+#[cfg(not(windows))]
+fn rank_results(results: &mut [StrategyTestResult]) {
+    // Preserve macOS reachability/latency ordering; it does not use a baseline.
+    results.sort_by(|a, b| {
+        b.ok.cmp(&a.ok).then_with(|| {
+            let latency = |ms| if ms == 0 { u32::MAX } else { ms };
+            latency(a.avg_latency_ms).cmp(&latency(b.avg_latency_ms))
+        })
+    });
+    for (index, result) in results.iter_mut().enumerate() {
+        result.rank = index as u32 + 1;
+    }
+}
+
 #[async_trait::async_trait]
 impl StrategyTester for ConnectivityTester {
-    #[cfg(windows)]
     fn last_results(&self) -> Vec<StrategyTestResult> {
-        self.results.lock().unwrap().clone()
+        let mut results = self.results.lock().unwrap().clone();
+        rank_results(&mut results);
+        results
     }
 
     #[cfg(windows)]
@@ -415,6 +432,7 @@ impl StrategyTester for ConnectivityTester {
         on_progress: TestProgressCb,
     ) -> anyhow::Result<Vec<StrategyTestResult>> {
         self.cancel.store(false, Ordering::SeqCst);
+        self.results.lock().unwrap().clear();
 
         let targets = self.load_targets();
         let total = strategies.len() as u32;
@@ -458,7 +476,7 @@ impl StrategyTester for ConnectivityTester {
                     rank: 0,
                     ..Default::default()
                 };
-                on_each(result.clone());
+                self.publish_result(result.clone(), &on_each);
                 results.push(result);
                 continue;
             }
@@ -492,32 +510,14 @@ impl StrategyTester for ConnectivityTester {
                 rank: 0,
                 ..Default::default()
             };
-            on_each(result.clone());
+            self.publish_result(result.clone(), &on_each);
             results.push(result);
         }
 
         // Make sure nothing is left running after a test.
         self.runner.stop().await?;
 
-        // Rank: most endpoints reachable first, ties broken by lower latency.
-        results.sort_by(|a, b| {
-            b.ok.cmp(&a.ok).then_with(|| {
-                let al = if a.avg_latency_ms == 0 {
-                    u32::MAX
-                } else {
-                    a.avg_latency_ms
-                };
-                let bl = if b.avg_latency_ms == 0 {
-                    u32::MAX
-                } else {
-                    b.avg_latency_ms
-                };
-                al.cmp(&bl)
-            })
-        });
-        for (i, r) in results.iter_mut().enumerate() {
-            r.rank = i as u32 + 1;
-        }
+        rank_results(&mut results);
 
         if let Some(best) = results.first() {
             if best.ok > 0 {
@@ -528,10 +528,20 @@ impl StrategyTester for ConnectivityTester {
         Ok(results)
     }
 
-    #[cfg(windows)]
     async fn auto_engage(
         &self,
         candidates: Vec<Strategy>,
+        on_progress: TestProgressCb,
+    ) -> anyhow::Result<AutoEngageOutcome> {
+        self.auto_engage_with_results(candidates, Box::new(|_| {}), on_progress)
+            .await
+    }
+
+    #[cfg(windows)]
+    async fn auto_engage_with_results(
+        &self,
+        candidates: Vec<Strategy>,
+        on_each: TestResultCb,
         on_progress: TestProgressCb,
     ) -> anyhow::Result<AutoEngageOutcome> {
         self.cancel.store(false, Ordering::SeqCst);
@@ -539,7 +549,7 @@ impl StrategyTester for ConnectivityTester {
         let prior = self.prior_strategy(&candidates).await?;
         let outcome = async {
             let results = self
-                .scan_windows(&candidates, Box::new(|_| {}), &on_progress)
+                .scan_windows(&candidates, on_each, &on_progress)
                 .await?;
             if self.cancel.load(Ordering::SeqCst) {
                 return Ok(AutoEngageOutcome::Cancelled);
@@ -601,12 +611,14 @@ impl StrategyTester for ConnectivityTester {
     }
 
     #[cfg(not(windows))]
-    async fn auto_engage(
+    async fn auto_engage_with_results(
         &self,
         candidates: Vec<Strategy>,
+        on_each: TestResultCb,
         on_progress: TestProgressCb,
     ) -> anyhow::Result<AutoEngageOutcome> {
         self.cancel.store(false, Ordering::SeqCst);
+        self.results.lock().unwrap().clear();
 
         let targets = self.load_targets();
         let total = candidates.len() as u32;
@@ -644,6 +656,16 @@ impl StrategyTester for ConnectivityTester {
                     return Err(e);
                 }
                 tracing::warn!("[{index}/{total}] failed to start {}: {e}", strategy.id);
+                self.publish_result(
+                    StrategyTestResult {
+                        id: strategy.id.clone(),
+                        display_name: strategy.display_name.clone(),
+                        engine: strategy.engine,
+                        total: targets.len() as u32,
+                        ..Default::default()
+                    },
+                    &on_each,
+                );
                 continue;
             }
             // Let the desync engine settle (honouring cancellation).
@@ -662,6 +684,18 @@ impl StrategyTester for ConnectivityTester {
                 ok,
                 targets.len(),
                 avg
+            );
+            self.publish_result(
+                StrategyTestResult {
+                    id: strategy.id.clone(),
+                    display_name: strategy.display_name.clone(),
+                    engine: strategy.engine,
+                    ok,
+                    total: targets.len() as u32,
+                    avg_latency_ms: avg,
+                    ..Default::default()
+                },
+                &on_each,
             );
 
             if ok >= need {

@@ -294,13 +294,14 @@ fn zapret2_beta_defaults_off_without_erasing_saved_preferences() {
     let enabled = AppConfig::load_from_path(&path);
     assert_eq!(enabled, loaded);
     assert!(enabled.zapret2_enabled);
-    assert_eq!(enabled.effective_engine_mode(), EngineMode::Auto);
+    assert_eq!(enabled.engine_mode, EngineMode::Auto);
+    assert_eq!(enabled.effective_engine_mode(), EngineMode::Zapret1);
     assert_eq!(enabled.favorites, saved.favorites);
     assert_eq!(enabled.last_strategy, saved.last_strategy);
 }
 
 #[test]
-fn zapret2_beta_gate_controls_every_engine_mode() {
+fn only_an_explicit_enabled_zapret2_selection_changes_the_default_engine() {
     use contracts::EngineMode;
     for engine_mode in [EngineMode::Zapret1, EngineMode::Zapret2, EngineMode::Auto] {
         let mut config = AppConfig {
@@ -310,7 +311,12 @@ fn zapret2_beta_gate_controls_every_engine_mode() {
         assert_eq!(config.effective_engine_mode(), EngineMode::Zapret1);
         assert_eq!(config.engine_mode, engine_mode);
         config.zapret2_enabled = true;
-        assert_eq!(config.effective_engine_mode(), engine_mode);
+        let expected = if engine_mode == EngineMode::Zapret2 {
+            EngineMode::Zapret2
+        } else {
+            EngineMode::Zapret1
+        };
+        assert_eq!(config.effective_engine_mode(), expected);
         config.zapret2_enabled = false;
         assert_eq!(config.effective_engine_mode(), EngineMode::Zapret1);
         assert_eq!(config.engine_mode, engine_mode);
@@ -345,6 +351,25 @@ fn engine_directories_reject_same_or_nested_installations() {
         dir.path().to_path_buf(),
     ] {
         config.zapret2_install_dir_override = Some(path);
+        assert!(config.validate_engine_directories().is_err());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn zapret2_work_directory_cannot_overlap_zapret1() {
+    let dir = tempdir().unwrap();
+    let mut config = AppConfig {
+        install_dir_override: Some(dir.path().join("one")),
+        zapret2_install_dir_override: Some(dir.path().join("two")),
+        ..Default::default()
+    };
+    config.validate_engine_directories().unwrap();
+    for path in [
+        dir.path().join("two-work"),
+        dir.path().join("two-work/child"),
+    ] {
+        config.install_dir_override = Some(path);
         assert!(config.validate_engine_directories().is_err());
     }
 }

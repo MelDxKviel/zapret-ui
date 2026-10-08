@@ -406,5 +406,11 @@
   "connection.process_id": "PID",
   "connection.app_version": "Application version",
   "connection.installing": "Installing the engine",
-  "connection.installing_hint": "Downloading and preparing engine files."
+  "connection.installing_hint": "Downloading and preparing engine files.",
+  "home.installing_hint": "Downloading and preparing engine files.",
+  "home.core_updates_hint": "Check for a newer engine version",
+  "home.folder_hint": "Strategies and user lists",
+  "home.refresh_status": "Refresh status",
+  "home.no_description": "This preset has no description.",
+  "engine.selection_hint": "Choose an engine for launch and strategy testing. zapret2 is available as a beta and installs separately."
 }

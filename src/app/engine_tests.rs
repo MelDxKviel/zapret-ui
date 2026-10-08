@@ -43,6 +43,7 @@ fn scan_display_survives_status_errors_and_partial_results_until_explicit_comple
 fn duplicate_core_requests_are_coalesced_and_stop_cancels_either_scan() {
     for cmd in [
         BackendCmd::AutoEngage,
+        BackendCmd::AutoEngageFresh,
         BackendCmd::TestStrategies,
         BackendCmd::Start("general".into()),
         BackendCmd::InstallAndEngage,
@@ -159,7 +160,7 @@ async fn switching_mode_waits_for_the_actual_scan_task_to_finish_cleanup() {
 }
 
 #[test]
-fn beta_opt_in_gates_engine_selection_and_failed_persistence_preserves_preferences() {
+fn selecting_zapret2_opts_in_and_failed_persistence_preserves_preferences() {
     let mut config = AppConfig {
         engine_mode: EngineMode::Auto,
         last_strategy: Some("zapret2:remembered".into()),
@@ -167,7 +168,7 @@ fn beta_opt_in_gates_engine_selection_and_failed_persistence_preserves_preferenc
     };
     assert_eq!(
         proposed_engine_preferences(&config, &BackendCmd::SetEngineMode(EngineMode::Zapret2)),
-        None
+        Some((EngineMode::Zapret2, true))
     );
     assert_eq!(
         proposed_engine_preferences(&config, &BackendCmd::SetZapret2Enabled(true)),
@@ -175,23 +176,41 @@ fn beta_opt_in_gates_engine_selection_and_failed_persistence_preserves_preferenc
     );
     let original = config.clone();
     assert!(
-        save_engine_preferences(&mut config, EngineMode::Zapret1, true, |_| anyhow::bail!(
+        save_engine_preferences(&mut config, EngineMode::Zapret2, true, |_| anyhow::bail!(
             "disk full"
         ))
         .is_err()
     );
     assert_eq!(config, original);
-    save_engine_preferences(&mut config, EngineMode::Zapret1, true, |_| Ok(())).unwrap();
+    save_engine_preferences(&mut config, EngineMode::Zapret2, true, |_| Ok(())).unwrap();
+    assert!(config.zapret2_enabled);
+    assert_eq!(config.effective_engine_mode(), EngineMode::Zapret2);
     assert_eq!(config.last_strategy, original.last_strategy);
     assert_eq!(
         proposed_engine_preferences(&config, &BackendCmd::SetEngineMode(EngineMode::Zapret2)),
         Some((EngineMode::Zapret2, true))
     );
-    config.engine_mode = EngineMode::Zapret2;
     assert_eq!(
         proposed_engine_preferences(&config, &BackendCmd::SetZapret2Enabled(false)),
         Some((EngineMode::Zapret1, false))
     );
+}
+
+#[test]
+fn legacy_auto_commands_resolve_to_zapret1_without_cross_engine_scanning() {
+    for zapret2_enabled in [false, true] {
+        let mut config = AppConfig {
+            engine_mode: EngineMode::Zapret2,
+            zapret2_enabled,
+            ..Default::default()
+        };
+        let (mode, enabled) =
+            proposed_engine_preferences(&config, &BackendCmd::SetEngineMode(EngineMode::Auto))
+                .unwrap();
+        assert_eq!(mode, EngineMode::Zapret1);
+        save_engine_preferences(&mut config, mode, enabled, |_| Ok(())).unwrap();
+        assert_eq!(config.effective_engine_mode(), EngineMode::Zapret1);
+    }
 }
 
 #[derive(Default)]

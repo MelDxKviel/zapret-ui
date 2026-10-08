@@ -222,6 +222,7 @@ fn conflicts_with_running_test(cmd: &BackendCmd) -> bool {
             | BackendCmd::Update
             | BackendCmd::Start(_)
             | BackendCmd::AutoEngage
+            | BackendCmd::AutoEngageFresh
             | BackendCmd::Stop
             | BackendCmd::ServiceInstall(_)
             | BackendCmd::ServiceRemove
@@ -301,10 +302,10 @@ async fn cancel_scan_and_stop(
 
 fn proposed_engine_preferences(config: &AppConfig, cmd: &BackendCmd) -> Option<(EngineMode, bool)> {
     match cmd {
-        BackendCmd::SetEngineMode(mode)
-            if config.zapret2_enabled || *mode == EngineMode::Zapret1 =>
-        {
-            Some((*mode, config.zapret2_enabled))
+        BackendCmd::SetEngineMode(EngineMode::Zapret2) => Some((EngineMode::Zapret2, true)),
+        // Auto remains readable in older configs, but is no longer a GUI mode.
+        BackendCmd::SetEngineMode(EngineMode::Zapret1 | EngineMode::Auto) => {
+            Some((EngineMode::Zapret1, config.zapret2_enabled))
         }
         BackendCmd::SetZapret2Enabled(true) => Some((config.effective_engine_mode(), true)),
         BackendCmd::SetZapret2Enabled(false) => Some((EngineMode::Zapret1, false)),
@@ -324,6 +325,26 @@ fn save_engine_preferences(
     save(&updated)?;
     *config = updated;
     Ok(())
+}
+
+async fn complete_scan_results(
+    config: &Arc<RwLock<AppConfig>>,
+    event_tx: &broadcast::Sender<UiEvent>,
+    best: String,
+    results: Vec<crate::contracts::StrategyTestResult>,
+) {
+    let mut cfg = config.write().await;
+    // Cancellation or cleanup failure does not invalidate already measured
+    // candidates. If none finished, retain the previous saved diagnostics.
+    if !results.is_empty() {
+        cfg.strategy_test_results = results;
+        if let Err(error) = cfg.save() {
+            let _ = event_tx.send(UiEvent::Error(format!("{error:#}")));
+        }
+    }
+    let results = cfg.strategy_test_results.clone();
+    drop(cfg);
+    let _ = event_tx.send(UiEvent::TestComplete { best, results });
 }
 
 /// Commit scan completion and cancellation under the same lock. A cancellation
@@ -856,7 +877,7 @@ impl App {
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_auto_engage_clicked(move || {
-                dispatch(&cmd_tx_c, BackendCmd::AutoEngage);
+                dispatch(&cmd_tx_c, BackendCmd::AutoEngageFresh);
             });
         }
         {
@@ -1893,7 +1914,7 @@ impl App {
                                 )
                                 .await;
                                 if engage {
-                                    let _ = command_tx.try_send(BackendCmd::AutoEngage);
+                                    let _ = command_tx.try_send(BackendCmd::AutoEngageFresh);
                                 }
                             }
                             Err(e) => {
@@ -2024,7 +2045,7 @@ impl App {
                             let _ = event_tx.send(UiEvent::Error(msg));
                         }
                     }
-                    BackendCmd::AutoEngage => {
+                    BackendCmd::AutoEngage | BackendCmd::AutoEngageFresh => {
                         // Already running? Nothing to do — settle the status (the
                         // dial is already "active").
                         let status = runner.detect_running().await;
@@ -2048,11 +2069,12 @@ impl App {
                         // so the NEXT engage runs a full scan.
                         // Windows scans compare against a fresh no-bypass baseline.
                         // Keep the existing fast path on macOS.
-                        let last_good = if cfg!(windows) {
-                            None
-                        } else {
-                            config.read().await.simple_last_good.clone()
-                        };
+                        let last_good =
+                            if cfg!(windows) || matches!(cmd, BackendCmd::AutoEngageFresh) {
+                                None
+                            } else {
+                                config.read().await.simple_last_good.clone()
+                            };
                         let mut fast_started = false;
                         if let Some(id) = last_good {
                             match catalog.by_id(&id) {
@@ -2197,6 +2219,10 @@ impl App {
                         let notified_c = notified_running.clone();
                         let completion_c = scan_completion.clone();
                         scan_task = Some(tokio::spawn(async move {
+                            let ev_result = event_tx_c.clone();
+                            let on_each = Box::new(move |result| {
+                                let _ = ev_result.send(UiEvent::TestResult(result));
+                            });
                             let ev_progress = event_tx_c.clone();
                             let cancelled = auto_cancelled_c.clone();
                             let cancel_tester = tester_c.clone();
@@ -2213,7 +2239,9 @@ impl App {
                                     strategy: id.to_owned(),
                                 });
                             });
-                            let mut outcome = tester_c.auto_engage(candidates, on_progress).await;
+                            let mut outcome = tester_c
+                                .auto_engage_with_results(candidates, on_each, on_progress)
+                                .await;
                             match finish_scan(
                                 &runner_c,
                                 &auto_engaging_c,
@@ -2252,27 +2280,22 @@ impl App {
                                     let _ = event_tx_c.send(UiEvent::AutoEngageFailed);
                                 }
                             }
-                            #[cfg(windows)]
-                            {
-                                let results = tester_c.last_results();
-                                let best = if auto_cancelled_c.load(Ordering::SeqCst) {
-                                    String::new()
-                                } else {
-                                    runner_c
-                                        .detect_running()
-                                        .await
-                                        .active_strategy
-                                        .unwrap_or_default()
-                                };
-                                if !auto_cancelled_c.load(Ordering::SeqCst) {
-                                    let mut cfg = config_c.write().await;
-                                    cfg.strategy_test_results = results.clone();
-                                    if let Err(e) = cfg.save() {
-                                        let _ = event_tx_c.send(UiEvent::Error(format!("{e:#}")));
-                                    }
-                                }
-                                let _ = event_tx_c.send(UiEvent::TestComplete { best, results });
-                            }
+                            let best = if auto_cancelled_c.load(Ordering::SeqCst) {
+                                String::new()
+                            } else {
+                                runner_c
+                                    .detect_running()
+                                    .await
+                                    .active_strategy
+                                    .unwrap_or_default()
+                            };
+                            complete_scan_results(
+                                &config_c,
+                                &event_tx_c,
+                                best,
+                                tester_c.last_results(),
+                            )
+                            .await;
                             refresh_and_broadcast(
                                 &installer_c,
                                 &runner_c,
@@ -2926,26 +2949,21 @@ impl App {
                                         }
                                         let _ = cfg.save();
                                     }
-                                    if !test_cancelled_c.load(Ordering::SeqCst) {
-                                        let mut cfg = config_c.write().await;
-                                        cfg.strategy_test_results = results.clone();
-                                        if let Err(e) = cfg.save() {
-                                            let _ =
-                                                event_tx_c.send(UiEvent::Error(format!("{e:#}")));
-                                        }
-                                    }
-                                    let _ =
-                                        event_tx_c.send(UiEvent::TestComplete { best, results });
+                                    complete_scan_results(&config_c, &event_tx_c, best, results)
+                                        .await;
                                 }
                                 Err(e) => {
                                     let msg = tr_config(&config_c, "err.strategy_test_failed")
                                         .await
                                         .replace("{error}", &e.to_string());
                                     let _ = event_tx_c.send(UiEvent::Error(msg));
-                                    let _ = event_tx_c.send(UiEvent::TestComplete {
-                                        best: String::new(),
-                                        results: Vec::new(),
-                                    });
+                                    complete_scan_results(
+                                        &config_c,
+                                        &event_tx_c,
+                                        String::new(),
+                                        tester_c.last_results(),
+                                    )
+                                    .await;
                                 }
                             }
 

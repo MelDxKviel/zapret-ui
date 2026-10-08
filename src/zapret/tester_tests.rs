@@ -120,6 +120,118 @@ fn fixture(samples: Samples<'_>) -> (ConnectivityTester, Arc<MockRunner>, tempfi
     (tester, runner, tmp)
 }
 
+struct CandidateBarrier {
+    runner: Arc<MockRunner>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    block_once: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl Runner for CandidateBarrier {
+    async fn start(&self, strategy: &Strategy) -> anyhow::Result<u32> {
+        if strategy.id == "second" && self.block_once.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        self.runner.start(strategy).await
+    }
+
+    async fn stop(&self) -> anyhow::Result<()> {
+        self.runner.stop().await
+    }
+
+    async fn detect_running(&self) -> RuntimeStatus {
+        self.runner.detect_running().await
+    }
+}
+
+#[tokio::test]
+async fn auto_results_stream_before_the_next_candidate_finishes_and_final_snapshot_is_ranked() {
+    let (mut tester, runner, _tmp) = fixture(&[
+        ("first", &[Some(30), None, None]),
+        ("second", &[Some(10), Some(20), Some(30)]),
+    ]);
+    let barrier = Arc::new(CandidateBarrier {
+        runner,
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        block_once: AtomicBool::new(true),
+    });
+    tester.runner = barrier.clone();
+    let tester = Arc::new(tester);
+    let scanning = tester.clone();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        scanning
+            .auto_engage_with_results(
+                vec![
+                    candidate("first", EngineKind::Zapret1),
+                    candidate("second", EngineKind::Zapret1),
+                ],
+                Box::new(move |result| sent.send(result).unwrap()),
+                Box::new(|_, _, _| {}),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), barrier.entered.notified())
+        .await
+        .unwrap();
+    assert!(!task.is_finished());
+    let first = received.try_recv().unwrap();
+    assert_eq!((first.id.as_str(), first.ok, first.rank), ("first", 1, 0));
+    assert!(received.try_recv().is_err());
+    assert_eq!(tester.last_results().len(), 1);
+    barrier.release.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(outcome, AutoEngageOutcome::Engaged(id) if id == "second"));
+    assert_eq!(received.try_recv().unwrap().id, "second");
+    assert!(
+        received.try_recv().is_err(),
+        "winner restart duplicated a row"
+    );
+    let final_results = tester.last_results();
+    assert_eq!(final_results[0].id, "second");
+    assert_eq!(final_results[0].rank, 1);
+    assert_eq!(final_results[1].id, "first");
+    assert_eq!(final_results[1].rank, 2);
+}
+
+#[tokio::test]
+async fn cancelling_auto_keeps_only_the_already_streamed_complete_candidates() {
+    let (tester, runner, _tmp) = fixture(&[("first", &[Some(30), None, None])]);
+    let cancel = tester.cancel.clone();
+    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let outcome = tester
+        .auto_engage_with_results(
+            vec![
+                candidate("first", EngineKind::Zapret1),
+                candidate("second", EngineKind::Zapret1),
+            ],
+            Box::new(move |result| {
+                sent.send(result).unwrap();
+                cancel.store(true, Ordering::SeqCst);
+            }),
+            Box::new(|_, _, _| {}),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, AutoEngageOutcome::Cancelled));
+    assert_eq!(received.try_recv().unwrap().id, "first");
+    assert!(received.try_recv().is_err());
+    let results = tester.last_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!((results[0].id.as_str(), results[0].rank), ("first", 1));
+    assert_eq!(
+        runner.detect_running().await.running_mode,
+        RunningMode::None
+    );
+}
+
 #[tokio::test]
 async fn automatic_scan_tests_both_engines_and_keeps_best_instead_of_first_success() {
     let (tester, runner, _tmp) = fixture(&[

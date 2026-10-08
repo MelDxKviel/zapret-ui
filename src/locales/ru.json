@@ -406,5 +406,11 @@
   "connection.process_id": "PID",
   "connection.app_version": "Версия приложения",
   "connection.installing": "Устанавливаем ядро",
-  "connection.installing_hint": "Скачиваем и подготавливаем файлы ядра."
+  "connection.installing_hint": "Скачиваем и подготавливаем файлы ядра.",
+  "home.installing_hint": "Скачиваем и подготавливаем файлы ядра.",
+  "home.core_updates_hint": "Проверить новую версию ядра",
+  "home.folder_hint": "Стратегии и пользовательские списки",
+  "home.refresh_status": "Обновить статус",
+  "home.no_description": "Описание не указано в пресете.",
+  "engine.selection_hint": "Выберите ядро для запуска и подбора стратегий. zapret2 доступен как бета-версия и устанавливается отдельно."
 }

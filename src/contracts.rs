@@ -235,10 +235,10 @@ pub enum BackendCmd {
     /// Download the latest zapret-ui.exe, swap it in and relaunch.
     SelfUpdate,
     Start(String /* strategy_id */),
-    /// Simple-mode "just turn it on": try the available strategies in order
-    /// (last-known-good first) and leave the first one that restores
-    /// connectivity running — the user picks nothing.
+    /// Connect on startup or from the tray; may reuse a verified strategy.
     AutoEngage,
+    /// Explicit user selection: run fresh candidate checks and stream results.
+    AutoEngageFresh,
     /// Cancel an in-flight [`BackendCmd::AutoEngage`] (tap the dial again).
     CancelAutoEngage,
     /// Cancel either scan, independent of the page or action that started it.

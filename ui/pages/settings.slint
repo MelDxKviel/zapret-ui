@@ -104,6 +104,11 @@ export component SettingsPage inherits Rectangle {
     in property <bool> supports_engine_selection;
     in-out property <bool> zapret2_enabled;
     in property <bool> core_busy;
+    in property <bool> engine_busy;
+    in property <string> core_error;
+    in property <bool> core_installing;
+    in property <float> core_progress;
+    callback dismiss_core_error();
     in property <string> engine_mode;
     in property <string> core_version;
     callback zapret2_changed(bool);
@@ -206,37 +211,62 @@ export component SettingsPage inherits Rectangle {
                 if root.supports_engine_selection : SettingsGroup {
                     title: I18n.t(I18n.lang, "beta.group");
                     icon: @image-url("../../assets/icons/shield.svg");
-                    SettingsRow {
-                        label: I18n.t(I18n.lang, "beta.label");
-                        hint: I18n.t(I18n.lang, "beta.description");
-                        last: true;
-                        AppSwitch {
-                            checked <=> root.zapret2_enabled;
-                            enabled: !root.core_busy;
-                            toggled(enabled) => { root.zapret2_changed(enabled); }
-                        }
-                    }
-                    if root.zapret2_enabled : VerticalLayout {
-                        padding: 20px; padding-top: 0px; spacing: 12px;
-                        EngineSelector {
-                            management: true;
-                            mode: root.engine_mode;
-                            version: root.core_version;
-                            installed: root.installed;
-                            busy: root.core_busy;
-                            selected(mode) => { root.engine_selected(mode); }
-                            install => { root.install_core_clicked(); }
-                            update => { root.update_core_clicked(); }
-                        }
-                    }
-                    if !root.zapret2_enabled : SettingsRow {
-                        label: I18n.t(I18n.lang, "engine.zapret1");
-                        hint: root.core_version;
-                        last: true;
-                        AppButton {
-                            text: root.installed ? I18n.t(I18n.lang, "engine.update") : I18n.t(I18n.lang, "engine.install");
-                            enabled: !root.core_busy;
-                            clicked => { if root.installed { root.update_core_clicked(); } else { root.install_core_clicked(); } }
+                    Rectangle {
+                        height: engine-content.preferred-height;
+                        engine-content := VerticalLayout {
+                            padding: 20px; spacing: 14px;
+                            Text {
+                                text: I18n.t(I18n.lang, "engine.selection_hint");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: ThemePalette.text-2;
+                                wrap: word-wrap;
+                            }
+                            EngineSelector {
+                                management: true;
+                                mode: root.engine_mode;
+                                version: root.core_version;
+                                installed: root.installed;
+                                busy: root.core_busy;
+                                choice_busy: root.engine_busy;
+                                selected(mode) => { root.engine_selected(mode); }
+                                install => { root.install_core_clicked(); }
+                                update => { root.update_core_clicked(); }
+                            }
+                            if root.core_installing : Text {
+                                text: I18n.t(I18n.lang, "connection.installing") + " · " + root.engine_mode
+                                    + (root.core_progress > 0 ? " · " + round(min(1, root.core_progress) * 100) + "%" : "");
+                                font-family: ThemePalette.font-sans;
+                                font-size: ThemePalette.fs-12;
+                                color: ThemePalette.info-text;
+                                wrap: word-wrap;
+                            }
+                            if root.core_error != "" : Rectangle {
+                                height: core-error-content.preferred-height;
+                                border-radius: ThemePalette.r-8;
+                                background: ThemePalette.danger-soft;
+                                core-error-content := VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 10px;
+                                    Text {
+                                        text: root.core_error;
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.danger-text;
+                                        wrap: word-wrap;
+                                        max-height: 100px;
+                                        overflow: elide;
+                                    }
+                                    HorizontalLayout {
+                                        alignment: end;
+                                        AppButton {
+                                            text: I18n.t(I18n.lang, "connection.dismiss_error");
+                                            size: "sm"; variant: "ghost";
+                                            clicked => { root.dismiss_core_error(); }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

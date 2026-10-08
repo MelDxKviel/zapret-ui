@@ -73,8 +73,8 @@ impl Language {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Explicit opt-in for the Windows zapret2 beta. Saved engine preferences
-    /// remain available while disabled, but effective selection stays on zapret1.
+    /// Records an explicit Windows zapret2 beta selection. Kept for compatibility
+    /// with older configs where disabling beta left a saved zapret2 preference.
     #[serde(default)]
     pub zapret2_enabled: bool,
     #[serde(default)]
@@ -173,9 +173,11 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// GUI selection is always one engine. Preserve legacy Auto in stored data,
+    /// but resolve it to zapret1 rather than silently testing across both cores.
     pub fn effective_engine_mode(&self) -> crate::contracts::EngineMode {
-        if self.zapret2_enabled {
-            self.engine_mode
+        if self.zapret2_enabled && self.engine_mode == crate::contracts::EngineMode::Zapret2 {
+            crate::contracts::EngineMode::Zapret2
         } else {
             crate::contracts::EngineMode::Zapret1
         }
@@ -193,9 +195,15 @@ impl AppConfig {
                 .to_lowercase())
         }
         let first = resolved(&self.install_dir())?;
-        let second = resolved(&self.engine_install_dir(crate::contracts::EngineKind::Zapret2))?;
+        let second_dir = self.engine_install_dir(crate::contracts::EngineKind::Zapret2);
+        let second = resolved(&second_dir)?;
         anyhow::ensure!(first != second && !first.starts_with(&format!("{second}\\")) && !second.starts_with(&format!("{first}\\")),
             "zapret1 and zapret2 installation directories must be separate and must not contain one another");
+        let work = resolved(&crate::zapret::zapret2::installer::work_dir_for_install(
+            &second_dir,
+        )?)?;
+        anyhow::ensure!(first != work && !first.starts_with(&format!("{work}\\")) && !work.starts_with(&format!("{first}\\")),
+            "zapret1 installation and zapret2 work directories must be separate and must not contain one another");
         Ok(())
     }
 

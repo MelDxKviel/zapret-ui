@@ -9,6 +9,7 @@ export component EngineSelector inherits Rectangle {
     in property <string> active;
     in property <string> version;
     in property <bool> busy;
+    in property <bool> choice_busy: root.busy;
     in property <bool> installed;
     in property <bool> management: false;
     callback selected(string);
@@ -29,12 +30,11 @@ export component EngineSelector inherits Rectangle {
             }
             Segmented {
                 selected: root.mode;
-                enabled: !root.busy;
+                enabled: !root.choice_busy;
                 seg-height: 30px;
                 options: [
                     { value: "zapret1", label: I18n.t(I18n.lang, "engine.zapret1") },
                     { value: "zapret2", label: I18n.t(I18n.lang, "engine.zapret2_beta") },
-                    { value: "auto", label: I18n.t(I18n.lang, "engine.auto") },
                 ];
                 changed(mode) => { root.selected(mode); }
             }

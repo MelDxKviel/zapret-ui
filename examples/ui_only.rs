@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use zapret_ui::app::{I18n, LogLineItem, MainWindow, StrategyItem, TestResultItem};
 use zapret_ui::contracts::*;
 use zapret_ui::ports::*;
@@ -506,13 +506,21 @@ fn main() -> anyhow::Result<()> {
         let ui_weak = ui.as_weak();
         ui.on_auto_engage_clicked(move || {
             println!("UI: Auto-engage clicked");
+            let rows = Rc::new(slint::VecModel::<TestResultItem>::default());
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_scan_kind("auto".into());
                 ui.set_scan_index(0);
                 ui.set_scan_total(3);
+                ui.set_is_busy(true);
+                ui.set_test_running(true);
+                ui.set_test_current(0);
+                ui.set_test_total(3);
+                ui.set_test_best_id("".into());
+                ui.set_test_results(rows.clone().into());
             }
             for step in 1..=3 {
                 let ui_weak = ui_weak.clone();
+                let rows = rows.clone();
                 slint::Timer::single_shot(
                     std::time::Duration::from_millis(600 * step),
                     move || {
@@ -521,30 +529,66 @@ fn main() -> anyhow::Result<()> {
                                 return;
                             }
                             ui.set_scan_index(step as i32);
-                            ui.set_scan_engine(
-                                if ui.get_engine_mode() == "zapret2" {
-                                    "zapret2"
-                                } else {
-                                    "zapret1"
-                                }
-                                .into(),
-                            );
-                            ui.set_scan_strategy("TLS · multisplit".into());
+                            let engine = if ui.get_engine_mode() == "zapret2" {
+                                EngineKind::Zapret2
+                            } else {
+                                EngineKind::Zapret1
+                            };
+                            let strategy = MockCatalog::sample()
+                                .into_iter()
+                                .filter(|strategy| strategy.engine == engine)
+                                .nth(step as usize - 1)
+                                .unwrap();
+                            ui.set_scan_engine(engine.slug().into());
+                            ui.set_scan_strategy(strategy.display_name.as_str().into());
                             ui.set_engage_index(step as i32);
                             ui.set_engage_total(3);
+                            ui.set_test_current(step as i32);
+                            ui.set_test_current_strategy(strategy.id.as_str().into());
+                            let (pretty, alt) = split_alt(&strategy.display_name);
+                            ui.set_test_current_alt(alt.as_str().into());
+                            rows.push(TestResultItem {
+                                engine: engine.slug().into(),
+                                baseline: 1,
+                                improved: step as i32 * 4 - 1,
+                                regressed: 0,
+                                id: strategy.id.as_str().into(),
+                                display_name: strategy.display_name.as_str().into(),
+                                pretty: pretty.as_str().into(),
+                                alt: alt.as_str().into(),
+                                ok: step as i32 * 4,
+                                total: 12,
+                                latency: 210 - step as i32 * 10,
+                                rank: 0,
+                                is_best: false,
+                                favorite: false,
+                            });
                             if step == 3 {
+                                let mut ranked: Vec<_> = rows.iter().collect();
+                                ranked.sort_by_key(|row| std::cmp::Reverse(row.ok));
+                                for (index, row) in ranked.iter_mut().enumerate() {
+                                    row.rank = index as i32 + 1;
+                                    row.is_best = index == 0;
+                                }
+                                ui.set_test_best_id(strategy.id.as_str().into());
+                                ui.set_test_results(Rc::new(slint::VecModel::from(ranked)).into());
+                                ui.set_test_running(false);
+                                ui.set_test_current_strategy("".into());
+                                ui.set_test_current_alt("".into());
                                 ui.set_scan_kind("".into());
+                                ui.set_scan_engine("".into());
+                                ui.set_scan_strategy("".into());
                                 ui.set_active_item(StrategyItem {
-                                    id: "general (ALT2)".into(),
-                                    display_name: "general (ALT2)".into(),
+                                    id: strategy.id.as_str().into(),
+                                    display_name: strategy.display_name.into(),
                                     category: "".into(),
                                     description: "".into(),
-                                    pretty: "general".into(),
-                                    alt: "ALT2".into(),
+                                    pretty: pretty.into(),
+                                    alt: alt.into(),
                                     favorite: false,
                                 });
                                 set_mock_running(&ui);
-                                ui.set_status_active_strategy("general (ALT2)".into());
+                                ui.set_status_active_strategy(strategy.id.into());
                                 ui.set_status_winws_pid(4242);
                                 ui.set_is_busy(false);
                             }
@@ -990,9 +1034,12 @@ fn main() -> anyhow::Result<()> {
                 ui.invoke_telegram_start();
             }
         }
-        if page == "tester" {
+        if page == "tester" && std::env::var("ZAPRET_UI_PREVIEW_AUTO").as_deref() != Ok("true") {
             ui.invoke_test_start_clicked();
         }
+    }
+    if std::env::var("ZAPRET_UI_PREVIEW_AUTO").as_deref() == Ok("true") {
+        ui.invoke_auto_engage_clicked();
     }
     if let Ok(size) = std::env::var("ZAPRET_UI_PREVIEW_SIZE") {
         if let Some((w, h)) = size.split_once('x') {
@@ -1027,7 +1074,11 @@ fn main() -> anyhow::Result<()> {
             });
         }
         let weak = ui.as_weak();
-        slint::Timer::single_shot(std::time::Duration::from_millis(1000), move || {
+        let delay = std::env::var("ZAPRET_UI_PREVIEW_SNAPSHOT_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1000);
+        slint::Timer::single_shot(std::time::Duration::from_millis(delay), move || {
             if let Some(ui) = weak.upgrade() {
                 match ui.window().take_snapshot() {
                     Ok(pixels) => {

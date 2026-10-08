@@ -4,6 +4,7 @@ import { AppButton } from "../components/button.slint";
 import { StatusDot } from "../components/status_dot.slint";
 import { Icon } from "../components/icon.slint";
 import { Spinner } from "../components/spinner.slint";
+import { Segmented } from "../components/segmented.slint";
 import { EngineSelector } from "../components/engine_selector.slint";
 import { ScrollView } from "std-widgets.slint";
 // Windows service keeps the same three operational states in a secondary card.
@@ -180,32 +181,217 @@ component ServiceCard inherits Rectangle {
     }
 }
 
-component DetailRow inherits Rectangle {
+// ── A single stat cell in the strip ──
+component Stat inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    height: 20px;
-    HorizontalLayout {
-        spacing: 16px;
+    in property <color> value-color: ThemePalette.text;
+    in property <bool> last: false;
+    horizontal-stretch: 1;
+    background: transparent;
+    VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 6px;
+        alignment: center;
         Text {
             text: root.label;
-            font-family: ThemePalette.font-sans;
-            font-size: ThemePalette.fs-12;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-10;
             color: ThemePalette.text-3;
+            letter-spacing: 1px;
         }
         Text {
             text: root.value;
             font-family: ThemePalette.font-mono;
-            font-size: ThemePalette.fs-12;
-            color: ThemePalette.text-2;
-            horizontal-alignment: right;
-            horizontal-stretch: 1;
+            font-size: ThemePalette.fs-14;
+            font-weight: 500;
+            color: root.value-color;
             overflow: elide;
         }
+    }
+    if !root.last : Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: ThemePalette.divider;
+    }
+}
+
+// ── An install/update/folder action tile ──
+component ActionTile inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> sub;
+    in property <bool> highlight: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    horizontal-stretch: 1;
+    min-width: 0px;
+    preferred-width: 1px;
+    height: max(74px, tile-content.preferred-height);
+    border-radius: ThemePalette.r-12;
+    border-width: 1px;
+    border-color: root.highlight ? ThemePalette.accent-border : ThemePalette.border;
+    background: root.highlight
+        ? (ta.has-hover ? ThemePalette.surface-hover : ThemePalette.accent-surface)
+        : (ta.has-hover ? ThemePalette.surface-hover : ThemePalette.surface);
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background, border-color { duration: 120ms; }
+
+    tile-content := HorizontalLayout {
+        padding: 14px;
+        spacing: 12px;
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: ThemePalette.r-8;
+                background: root.highlight ? ThemePalette.accent : ThemePalette.surface-2;
+                Icon {
+                    source: root.icon;
+                    size: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: root.highlight ? ThemePalette.accent-ink : ThemePalette.text-2;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-family: ThemePalette.font-sans;
+                font-size: ThemePalette.fs-13;
+                font-weight: 600;
+                color: ThemePalette.text;
+                wrap: word-wrap;
+                max-height: 34px;
+                overflow: elide;
+            }
+            Text {
+                text: root.sub;
+                font-family: ThemePalette.font-mono;
+                font-size: ThemePalette.fs-11;
+                color: ThemePalette.text-3;
+                overflow: elide;
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// dl-row for the strategy-detail card
+component DetailRow inherits Rectangle {
+    in property <string> key;
+    in property <string> value;
+    in property <bool> last: false;
+    height: 33px;
+    HorizontalLayout {
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 12px;
+        // Key keeps its natural width; the value takes the rest and elides,
+        // so a long value can never overrun the key label.
+        Text {
+            text: root.key;
+            horizontal-stretch: 0;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-11;
+            color: ThemePalette.text-3;
+            letter-spacing: 0.8px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.value;
+            horizontal-stretch: 1;
+            font-family: ThemePalette.font-mono;
+            font-size: ThemePalette.fs-12;
+            color: ThemePalette.text;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+    }
+    if !root.last : Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: ThemePalette.divider;
+    }
+}
+
+// ── A titled card wrapping one DPI-filter control (game filter / ipset) ──
+component FilterCard inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> hint;
+    horizontal-stretch: 1;
+    background: ThemePalette.surface;
+    border-width: 1px;
+    border-color: ThemePalette.border;
+    border-radius: ThemePalette.r-16;
+    clip: true;
+    vertical-stretch: 0;
+    min-height: filter-content.preferred-height;
+    filter-content := VerticalLayout {
+        padding: 20px;
+        spacing: 16px;
+        alignment: start;
+        // header: icon badge + title / hint
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                horizontal-stretch: 0;
+                alignment: start;
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: ThemePalette.r-8;
+                    background: ThemePalette.surface-2;
+                    Icon {
+                        source: root.icon;
+                        size: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: ThemePalette.text-2;
+                    }
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text {
+                    text: root.title;
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-14;
+                    font-weight: 600;
+                    color: ThemePalette.text;
+                }
+                Text {
+                    text: root.hint;
+                    font-family: ThemePalette.font-sans;
+                    font-size: ThemePalette.fs-12;
+                    color: ThemePalette.text-2;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        @children
     }
 }
 
 export component HomePage inherits Rectangle {
-    // Keep the shared callback/property contract; tuning is now only in Settings.
+    // Both modes share status, installation, scan and engine selection state.
+    in property <string> ui_mode: "advanced";
     in property <bool> show_core_tuning: true;
     in property <AppStatus> status;
     in property <StrategyItem> chosen_item;
@@ -236,6 +422,7 @@ export component HomePage inherits Rectangle {
     in property <string> core_error;
     in property <float> download_progress: 0.0;
 
+    callback mode_changed(string);
     callback game_filter_changed(string);
     callback ipset_mode_changed(string);
     callback update_ipset_clicked();
@@ -258,7 +445,9 @@ export component HomePage inherits Rectangle {
     callback open_tester_clicked();
     callback open_settings_clicked();
 
-    property <bool> details-open: false;
+    property <bool> full: root.ui_mode != "simple";
+    property <bool> has-update: root.status.update_available;
+    property <bool> ipset-stale: root.installed && root.ipset_mode == "loaded" && root.ipset_age_days >= 14;
     property <bool> scanning: root.scan_kind != "";
     property <bool> installing: root.pending_op == "install";
     property <bool> working: root.is_busy || root.pending_op != "";
@@ -277,11 +466,12 @@ export component HomePage inherits Rectangle {
         I18n.t(I18n.lang, "connection.idle");
     property <string> state-hint:
         root.scanning ? I18n.t(I18n.lang, "connection.scan_hint") :
-        root.installing ? I18n.t(I18n.lang, "connection.installing_hint") :
+        root.installing ? I18n.t(I18n.lang, root.full ? "home.installing_hint" : "connection.installing_hint") :
         root.working ? I18n.t(I18n.lang, "connection.busy_hint") :
         root.running ? I18n.t(I18n.lang, "connection.active_hint") :
         root.show-error ? I18n.t(I18n.lang, "connection.error_hint") :
-        !root.installed ? I18n.t(I18n.lang, "connection.uninstalled_hint") :
+        !root.installed ? I18n.t(I18n.lang, root.full ? "home.hint_install" : "connection.uninstalled_hint") :
+        root.full ? I18n.t(I18n.lang, root.has_strategy ? "home.hint_engage" : "home.hint_pick") :
         I18n.t(I18n.lang, "connection.idle_hint");
     property <color> state-color:
         root.scanning || root.working ? ThemePalette.info-text :
@@ -299,7 +489,7 @@ export component HomePage inherits Rectangle {
         HorizontalLayout {
             Rectangle { horizontal-stretch: 1; }
             VerticalLayout {
-                width: min(sv.visible-width, 840px);
+                width: min(sv.visible-width, root.full ? 1040px : 840px);
                 horizontal-stretch: 0;
                 padding-left: 28px;
                 padding-right: 28px;
@@ -308,21 +498,37 @@ export component HomePage inherits Rectangle {
                 spacing: 18px;
                 alignment: start;
 
-                VerticalLayout {
-                    spacing: 6px;
-                    Text {
-                        text: I18n.t(I18n.lang, "connection.title");
-                        font-family: ThemePalette.font-sans;
-                        font-size: ThemePalette.fs-28;
-                        font-weight: 600;
-                        color: ThemePalette.text;
+                HorizontalLayout {
+                    spacing: 20px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 6px;
+                        Text {
+                            text: I18n.t(I18n.lang, root.full ? "home.title" : "connection.title");
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-28;
+                            font-weight: 600;
+                            color: ThemePalette.text;
+                        }
+                        Text {
+                            text: I18n.t(I18n.lang, root.full ? "home.subtitle" : "connection.subtitle");
+                            font-family: ThemePalette.font-sans;
+                            font-size: ThemePalette.fs-13;
+                            color: ThemePalette.text-3;
+                            wrap: word-wrap;
+                        }
                     }
-                    Text {
-                        text: I18n.t(I18n.lang, "connection.subtitle");
-                        font-family: ThemePalette.font-sans;
-                        font-size: ThemePalette.fs-13;
-                        color: ThemePalette.text-3;
-                        wrap: word-wrap;
+                    VerticalLayout {
+                        horizontal-stretch: 0;
+                        alignment: start;
+                        Segmented {
+                            selected: root.ui_mode;
+                            options: [
+                                { value: "simple", label: I18n.t(I18n.lang, "mode.simple") },
+                                { value: "advanced", label: I18n.t(I18n.lang, "mode.advanced") },
+                            ];
+                            changed(mode) => { root.mode_changed(mode); }
+                        }
                     }
                 }
 
@@ -472,7 +678,7 @@ export component HomePage inherits Rectangle {
                                     color: ThemePalette.text-3;
                                 }
                                 Text {
-                                    text: root.has_strategy ? root.chosen_item.display_name : I18n.t(I18n.lang, "connection.no_strategy");
+                                    text: root.has_strategy ? root.chosen_item.display_name : I18n.t(I18n.lang, root.full ? "home.no_strategy" : "connection.no_strategy");
                                     font-family: ThemePalette.font-sans;
                                     font-size: ThemePalette.fs-14;
                                     font-weight: 500;
@@ -523,33 +729,49 @@ export component HomePage inherits Rectangle {
                             }
                         }
 
-                        AppButton {
-                            width: connection-card.width - 48px;
-                            height: 48px;
-                            size: "lg";
-                            variant: root.scanning || root.running ? "default" : "primary";
-                            text: root.scanning ? I18n.t(I18n.lang, "connection.cancel")
-                                : root.installing ? I18n.t(I18n.lang, "connection.installing")
-                                : root.pending_op == "stop" ? I18n.t(I18n.lang, "connection.stopping")
-                                : root.pending_op == "start" ? I18n.t(I18n.lang, "connection.starting")
-                                : root.working ? I18n.t(I18n.lang, "connection.busy")
-                                : root.running ? I18n.t(I18n.lang, "connection.stop")
-                                : !root.installed ? I18n.t(I18n.lang, "connection.install_connect")
-                                : I18n.t(I18n.lang, "connection.connect");
-                            icon: root.scanning || root.running ? @image-url("../../assets/icons/stop.svg")
-                                : !root.installed ? @image-url("../../assets/icons/download.svg")
-                                : @image-url("../../assets/icons/play.svg");
-                            enabled: root.scanning || !root.working;
-                            busy: root.working && !root.scanning;
-                            clicked => {
-                                if root.scanning { root.cancel_scan_clicked(); }
-                                else if root.running { root.stop_clicked(); }
-                                else if !root.installed { root.install_clicked(); }
-                                else { root.engage_clicked(); }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            AppButton {
+                                width: root.full && !root.scanning ? (connection-card.width - 60px) / 2 : connection-card.width - 48px;
+                                height: 48px;
+                                size: "lg";
+                                variant: root.scanning || root.running ? "default" : "primary";
+                                text: root.scanning ? I18n.t(I18n.lang, "connection.cancel")
+                                    : root.installing ? I18n.t(I18n.lang, "connection.installing")
+                                    : root.pending_op == "stop" ? I18n.t(I18n.lang, "connection.stopping")
+                                    : root.pending_op == "start" ? I18n.t(I18n.lang, "connection.starting")
+                                    : root.working ? I18n.t(I18n.lang, "connection.busy")
+                                    : root.running ? I18n.t(I18n.lang, "connection.stop")
+                                    : !root.installed ? I18n.t(I18n.lang, root.full ? "home.btn_install" : "connection.install_connect")
+                                    : root.full ? I18n.t(I18n.lang, root.has_strategy ? "connection.manual_start" : "connection.choose_strategy")
+                                    : I18n.t(I18n.lang, "connection.connect");
+                                icon: root.scanning || root.running ? @image-url("../../assets/icons/stop.svg")
+                                    : !root.installed ? @image-url("../../assets/icons/download.svg")
+                                    : root.full && !root.has_strategy ? @image-url("../../assets/icons/arrow-right.svg")
+                                    : @image-url("../../assets/icons/play.svg");
+                                enabled: root.scanning || !root.working;
+                                busy: root.working && !root.scanning;
+                                clicked => {
+                                    if root.scanning { root.cancel_scan_clicked(); }
+                                    else if root.running { root.stop_clicked(); }
+                                    else if !root.installed { root.install_clicked(); }
+                                    else if root.full && !root.has_strategy { root.pick_strategy_clicked(); }
+                                    else if root.full { root.start_clicked(); }
+                                    else { root.engage_clicked(); }
+                                }
+                            }
+                            if root.full && !root.scanning : AppButton {
+                                width: (connection-card.width - 60px) / 2;
+                                height: 48px;
+                                size: "lg";
+                                text: I18n.t(I18n.lang, "connection.connect");
+                                icon: @image-url("../../assets/icons/search.svg");
+                                enabled: root.installed && !root.working && !root.running;
+                                clicked => { root.engage_clicked(); }
                             }
                         }
 
-                        if !root.scanning && !root.running && root.installed : HorizontalLayout {
+                        if !root.full && !root.scanning && !root.running && root.installed : HorizontalLayout {
                             alignment: center;
                             AppButton {
                                 text: I18n.t(I18n.lang, "connection.manual_start");
@@ -559,7 +781,271 @@ export component HomePage inherits Rectangle {
                                 clicked => { root.start_clicked(); }
                             }
                         }
+                        if root.full : HorizontalLayout {
+                            height: 52px;
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.uptime");
+                                value: root.running && !root.scanning ? root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s) : "—";
+                            }
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.mode");
+                                value: root.scanning || root.working ? root.state-label : !root.running ? "—"
+                                    : root.status.running_mode == "WindowsService" ? I18n.t(I18n.lang, "home.mode_service") : I18n.t(I18n.lang, "home.mode_user");
+                            }
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.pid");
+                                value: root.running && !root.scanning && root.status.winws_pid > 0 ? "\{root.status.winws_pid}" : "—";
+                                last: true;
+                            }
+                        }
                     }
+                }
+
+                if root.full : VerticalLayout {
+                    spacing: 0px;
+                    // Version metadata is secondary to the bypass action.
+                    Rectangle {
+                        height: 64px;
+                        background: transparent;
+                        HorizontalLayout {
+                            Stat { label: I18n.t(I18n.lang, "home.stat_app"); value: root.app_version; }
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.stat_core");
+                                value: root.installed ? root.status.installed_version : I18n.t(I18n.lang, "common.not_installed");
+                                value-color: root.installed ? ThemePalette.text : ThemePalette.text-3;
+                            }
+                            Stat {
+                                label: I18n.t(I18n.lang, "home.stat_latest");
+                                value: (root.status.latest_version != "" ? root.status.latest_version : "—") + (root.has-update ? " ↑" : "");
+                                value-color: root.has-update ? ThemePalette.accent-text : ThemePalette.text;
+                            }
+                            Stat { label: I18n.t(I18n.lang, "home.stat_strategies"); value: "\{root.strategy_count}"; last: true; }
+                        }
+                    }
+                    Rectangle { height: 24px; }
+
+                    // ── SERVICE + STRATEGY ROW ──
+                    HorizontalLayout {
+                        spacing: 16px;
+
+                        ServiceCard {
+                            horizontal-stretch: 14;
+                            status: root.status;
+                            is_busy: root.working || root.scanning;
+                            pending_op: root.pending_op;
+                            has_strategy: root.has_strategy;
+                            is_admin: root.is_admin;
+                            chosen_item: root.chosen_item;
+                            install_clicked => { root.service_install_clicked(); }
+                            start_clicked => { root.service_start_clicked(); }
+                            stop_clicked => { root.service_stop_clicked(); }
+                            remove_clicked => { root.service_remove_clicked(); }
+                        }
+
+                        // strategy detail
+                        Rectangle {
+                            horizontal-stretch: 10;
+                            background: ThemePalette.surface;
+                            border-width: 1px;
+                            border-color: ThemePalette.border;
+                            border-radius: ThemePalette.r-16;
+                            clip: true;
+                            vertical-stretch: 0;
+                            VerticalLayout {
+                                alignment: start;
+                                Rectangle {
+                                    height: 52px;
+                                    HorizontalLayout {
+                                        padding-left: 20px;
+                                        padding-right: 20px;
+                                        Text {
+                                            text: I18n.t(I18n.lang, "home.strategy_detail");
+                                            font-family: ThemePalette.font-sans;
+                                            font-size: ThemePalette.fs-14;
+                                            font-weight: 600;
+                                            color: ThemePalette.text;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Rectangle { y: parent.height - 1px; height: 1px; background: ThemePalette.divider; }
+                                }
+                                VerticalLayout {
+                                    padding: 20px;
+                                    spacing: 0px;
+                                    Text {
+                                        text: !root.has_strategy ? I18n.t(I18n.lang, "home.hint_pick")
+                                            : root.chosen_item.description != "" ? root.chosen_item.description
+                                            : I18n.t(I18n.lang, "home.no_description");
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-12;
+                                        color: ThemePalette.text-2;
+                                        wrap: word-wrap;
+                                    }
+                                    Rectangle { height: 12px; }
+                                    DetailRow { key: I18n.t(I18n.lang, "home.detail_id"); value: root.has_strategy ? root.chosen_item.id : "—"; }
+                                    DetailRow { key: I18n.t(I18n.lang, "home.detail_profile"); value: root.has_strategy ? root.chosen_item.pretty : "—"; }
+                                    DetailRow { key: I18n.t(I18n.lang, "home.detail_variant"); value: root.chosen_item.alt != "" ? root.chosen_item.alt : I18n.t(I18n.lang, "home.variant_default"); }
+                                    DetailRow { key: I18n.t(I18n.lang, "home.detail_core"); value: root.start_engine != "" ? root.start_engine : "—"; last: true; }
+                                    Rectangle { height: 12px; }
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        AppButton {
+                                            text: I18n.t(I18n.lang, "home.change_strategy");
+                                            size: "sm";
+                                            icon: @image-url("../../assets/icons/strategies.svg");
+                                            enabled: root.installed && !root.working && !root.scanning;
+                                            clicked => { root.pick_strategy_clicked(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 16px; }
+
+                    // ── DPI FILTERS (game filter + ipset, side by side) ──
+                    if root.show_core_tuning : HorizontalLayout {
+                        spacing: 16px;
+
+                        // GameFilter is absent from the macOS core.
+                        if !I18n.macos : FilterCard {
+                            icon: @image-url("../../assets/icons/gamepad.svg");
+                            title: I18n.t(I18n.lang, "common.game_filter");
+                            hint: root.installed
+                                ? I18n.t(I18n.lang, "home.game_filter_hint")
+                                : I18n.t(I18n.lang, "common.game_filter_hint_install");
+                            // A fixed-width Segmented placed directly in the card's
+                            // VerticalLayout would cap the whole card's max-width to its
+                            // own; wrapping it in a start-aligned row keeps it natural-
+                            // width yet lets the card fill its half of the row.
+                            HorizontalLayout {
+                                alignment: start;
+                                Segmented {
+                                    enabled: root.installed && !root.working && !root.scanning;
+                                    selected: root.game_filter;
+                                    options: [
+                                        { value: "off", label: I18n.t(I18n.lang, "common.gf_off") },
+                                        { value: "all", label: I18n.t(I18n.lang, "common.gf_all") },
+                                        { value: "tcp", label: I18n.t(I18n.lang, "common.gf_tcp") },
+                                        { value: "udp", label: I18n.t(I18n.lang, "common.gf_udp") },
+                                    ];
+                                    changed(v) => { root.game_filter = v; root.game_filter_changed(v); }
+                                }
+                            }
+                        }
+
+                        // ipset filter + update / staleness reminder
+                        FilterCard {
+                            icon: @image-url("../../assets/icons/shield.svg");
+                            title: I18n.t(I18n.lang, "settings.ipset_label");
+                            hint: root.installed
+                                ? I18n.t(I18n.lang, "home.ipset_hint")
+                                : I18n.t(I18n.lang, "common.game_filter_hint_install");
+                            HorizontalLayout {
+                                alignment: start;
+                                Segmented {
+                                    enabled: root.installed && !root.working && !root.scanning && root.ipset_mode != "unknown";
+                                    selected: root.ipset_mode;
+                                    options: [
+                                        { value: "loaded", label: I18n.t(I18n.lang, "settings.ipset_loaded") },
+                                        { value: "none", label: I18n.t(I18n.lang, "settings.ipset_none") },
+                                        { value: "any", label: I18n.t(I18n.lang, "settings.ipset_any") },
+                                    ];
+                                    changed(v) => { root.ipset_mode = v; root.ipset_mode_changed(v); }
+                                }
+                            }
+
+                            // update strip — turns into a warning-tinted nudge when the
+                            // loaded list is getting old.
+                            Rectangle {
+                                height: ipset-update-content.preferred-height;
+                                border-radius: ThemePalette.r-8;
+                                border-width: 1px;
+                                border-color: root.ipset-stale ? ThemePalette.warning : ThemePalette.border;
+                                background: root.ipset-stale ? ThemePalette.warning-soft : ThemePalette.surface-2;
+                                ipset-update-content := HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    padding-top: 10px;
+                                    padding-bottom: 10px;
+                                    spacing: 10px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Icon {
+                                            source: root.ipset-stale
+                                                ? @image-url("../../assets/icons/warning.svg")
+                                                : @image-url("../../assets/icons/download.svg");
+                                            size: 14px;
+                                            tint: root.ipset-stale ? ThemePalette.warning-text : ThemePalette.text-3;
+                                        }
+                                    }
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: root.ipset_msg != "" ? root.ipset_msg
+                                            : root.ipset-stale ? I18n.t(I18n.lang, "home.ipset_stale_a") + root.ipset_age_days + I18n.t(I18n.lang, "home.ipset_stale_b")
+                                            : root.ipset_mode == "loaded" ? I18n.t(I18n.lang, "home.ipset_loaded_a") + root.ipset_lines + I18n.t(I18n.lang, "home.ipset_loaded_b")
+                                            : I18n.t(I18n.lang, "home.ipset_update_hint");
+                                        font-family: ThemePalette.font-sans;
+                                        font-size: ThemePalette.fs-12;
+                                        color: root.ipset_msg != "" ? (root.ipset_ok ? ThemePalette.text-2 : ThemePalette.danger-text)
+                                            : root.ipset-stale ? ThemePalette.warning-text
+                                            : ThemePalette.text-3;
+                                        vertical-alignment: center;
+                                        wrap: word-wrap;
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        AppButton {
+                                            text: root.ipset_busy ? I18n.t(I18n.lang, "settings.updating") : I18n.t(I18n.lang, "common.update");
+                                            size: "sm";
+                                            variant: root.ipset-stale ? "primary" : "default";
+                                            icon: @image-url("../../assets/icons/download.svg");
+                                            enabled: root.installed && !root.working && !root.scanning && !root.ipset_busy;
+                                            busy: root.ipset_busy;
+                                            clicked => { root.update_ipset_clicked(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 16px; }
+
+                    // ── ACTION GRID ──
+                    HorizontalLayout {
+                        spacing: 10px;
+                        ActionTile {
+                            icon: @image-url("../../assets/icons/download.svg");
+                            title: root.installed ? I18n.t(I18n.lang, "home.reinstall") : I18n.t(I18n.lang, "home.install");
+                            sub: root.installed ? I18n.t(I18n.lang, "home.redownload") : I18n.t(I18n.lang, "home.fetch_prefix") + (root.status.latest_version != "" ? root.status.latest_version : I18n.t(I18n.lang, "common.latest_word"));
+                            highlight: !root.installed;
+                            // Disabled while the bypass runs: replacing the install dir
+                            // with winws.exe locked would fail / corrupt the install.
+                            enabled: !root.working && !root.scanning && !root.running;
+                            clicked => { root.install_clicked(); }
+                        }
+                        ActionTile {
+                            icon: @image-url("../../assets/icons/refresh.svg");
+                            title: root.has-update ? I18n.t(I18n.lang, "home.update_available") : I18n.t(I18n.lang, "home.check_updates");
+                            sub: root.has-update ? root.status.installed_version + " → " + root.status.latest_version : I18n.t(I18n.lang, "home.core_updates_hint");
+                            highlight: root.has-update;
+                            enabled: !root.working && !root.scanning && !root.running;
+                            clicked => {
+                                if (root.has-update) { root.update_clicked(); }
+                                else { root.check_update_clicked(); }
+                            }
+                        }
+                        ActionTile {
+                            icon: @image-url("../../assets/icons/folder.svg");
+                            title: I18n.t(I18n.lang, "home.open_folder");
+                            sub: I18n.t(I18n.lang, "home.folder_hint");
+                            enabled: root.installed && !root.working && !root.scanning;
+                            clicked => { root.open_folder_clicked(); }
+                        }
+                    }
+
                 }
 
                 HorizontalLayout {
@@ -579,72 +1065,13 @@ export component HomePage inherits Rectangle {
                         clicked => { root.open_settings_clicked(); }
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    AppButton {
-                        text: root.details-open ? I18n.t(I18n.lang, "connection.hide_details") : I18n.t(I18n.lang, "connection.details");
+                    if root.full : AppButton {
+                        text: I18n.t(I18n.lang, "home.refresh_status");
+                        icon: @image-url("../../assets/icons/refresh.svg");
                         variant: "ghost";
                         size: "sm";
-                        clicked => { root.details-open = !root.details-open; }
-                    }
-                }
-
-                if root.details-open : VerticalLayout {
-                    spacing: 16px;
-                    Rectangle {
-                        height: details-content.preferred-height;
-                        background: ThemePalette.surface;
-                        border-width: 1px;
-                        border-color: ThemePalette.border;
-                        border-radius: ThemePalette.r-12;
-                        details-content := VerticalLayout {
-                            padding: 20px;
-                            spacing: 12px;
-                            DetailRow {
-                                label: I18n.t(I18n.lang, "connection.version");
-                                value: root.status.installed_version != "" ? root.status.installed_version : "—";
-                            }
-                            DetailRow {
-                                label: I18n.t(I18n.lang, "connection.uptime");
-                                value: root.running ? root.pad2(root.up-h) + ":" + root.pad2(root.up-m) + ":" + root.pad2(root.up-s) : "—";
-                            }
-                            DetailRow {
-                                label: I18n.t(I18n.lang, "connection.process_id");
-                                value: root.running && root.status.winws_pid > 0 ? "\{root.status.winws_pid}" : "—";
-                            }
-                            DetailRow {
-                                label: I18n.t(I18n.lang, "connection.app_version");
-                                value: root.app_version;
-                            }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: start;
-                                AppButton {
-                                    text: root.status.update_available ? I18n.t(I18n.lang, "home.update_available") : I18n.t(I18n.lang, "home.check_updates");
-                                    variant: "ghost";
-                                    size: "sm";
-                                    enabled: !root.working && !root.scanning;
-                                    clicked => { if root.status.update_available { root.update_clicked(); } else { root.check_update_clicked(); } }
-                                }
-                                AppButton {
-                                    text: I18n.t(I18n.lang, "home.open_folder");
-                                    variant: "ghost";
-                                    size: "sm";
-                                    enabled: root.installed;
-                                    clicked => { root.open_folder_clicked(); }
-                                }
-                            }
-                        }
-                    }
-                    ServiceCard {
-                        status: root.status;
-                        is_busy: root.working || root.scanning;
-                        pending_op: root.pending_op;
-                        has_strategy: root.has_strategy;
-                        is_admin: root.is_admin;
-                        chosen_item: root.chosen_item;
-                        install_clicked => { root.service_install_clicked(); }
-                        start_clicked => { root.service_start_clicked(); }
-                        stop_clicked => { root.service_stop_clicked(); }
-                        remove_clicked => { root.service_remove_clicked(); }
+                        enabled: !root.working && !root.scanning;
+                        clicked => { root.refresh_clicked(); }
                     }
                 }
             }

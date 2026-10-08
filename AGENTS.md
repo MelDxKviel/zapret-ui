@@ -314,6 +314,13 @@ full-window redraw every frame for the whole bypass session.
 
 #### Icon geometry and visual verification (required)
 
+- Preserve the user's chosen information density and available controls. Do not
+  replace the full dashboard with a simplified view or hide existing service,
+  strategy, version and tuning information unless the user asks for it. Keep
+  Simple/Full a real saved choice. Core selection and installation errors belong
+  inside Home/Settings; do not add global control/error strips above unrelated
+  pages. Verify Strategies, Tester, Logs and Settings as well as Home after
+  changing the shared window layout.
 - Reuse `Icon` and `Spinner`; keep their wrapper width bound to `size`, with
   `horizontal-stretch: 0`. The inner Image must have explicit width and height.
   A fixed-size Image inside an unconstrained layout can stay at the left edge

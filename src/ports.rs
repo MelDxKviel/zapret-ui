@@ -120,6 +120,22 @@ pub trait StrategyTester: Send + Sync {
         on_progress: TestProgressCb,
     ) -> anyhow::Result<AutoEngageOutcome>;
 
+    /// Automatic selection with one result per completed candidate. Adapters
+    /// should emit results as they finish; legacy adapters replay their stored
+    /// results at completion. Winner restart attempts do not emit duplicate rows.
+    async fn auto_engage_with_results(
+        &self,
+        candidates: Vec<Strategy>,
+        on_each: TestResultCb,
+        on_progress: TestProgressCb,
+    ) -> anyhow::Result<AutoEngageOutcome> {
+        let outcome = self.auto_engage(candidates, on_progress).await;
+        for result in self.last_results() {
+            on_each(result);
+        }
+        outcome
+    }
+
     /// Probe the *currently running* strategy (no start/stop) after a short
     /// settle wait, returning whether it still restores connectivity. Used by
     /// simple-mode fast-engage to verify the remembered strategy in the
