@@ -368,8 +368,45 @@ fn engine_directories_reject_same_or_nested_installations() {
         dir.path().to_path_buf(),
     ] {
         config.zapret2_install_dir_override = Some(path);
-        assert!(config.validate_engine_directories().is_err());
+        assert!(
+            config.validate_engine_directories().is_err(),
+            "overlapping installation was accepted: {:?}",
+            config.zapret2_install_dir_override
+        );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn missing_engine_paths_resolve_their_existing_parent_aliases() {
+    let dir = tempfile::Builder::new()
+        .prefix("zapret engine directories ")
+        .tempdir()
+        .unwrap();
+    let canonical = dir.path().canonicalize().unwrap();
+    let first = canonical.join("one");
+    assert!(!first.exists());
+    for second in [
+        dir.path().join("one"),
+        dir.path().join("one/child"),
+        dir.path().to_path_buf(),
+    ] {
+        let config = AppConfig {
+            install_dir_override: Some(first.clone()),
+            zapret2_install_dir_override: Some(second.clone()),
+            ..Default::default()
+        };
+        assert!(
+            config.validate_engine_directories().is_err(),
+            "overlapping installation was accepted: {first:?}, {second:?}"
+        );
+    }
+    let separate = AppConfig {
+        install_dir_override: Some(first),
+        zapret2_install_dir_override: Some(dir.path().join("two")),
+        ..Default::default()
+    };
+    separate.validate_engine_directories().unwrap();
 }
 
 #[cfg(windows)]

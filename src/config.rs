@@ -155,7 +155,23 @@ impl AppConfig {
     #[cfg(windows)]
     pub fn validate_engine_directories(&self) -> anyhow::Result<()> {
         fn resolved(path: &Path) -> anyhow::Result<String> {
-            let path = path.canonicalize().or_else(|_| std::path::absolute(path))?;
+            let absolute = std::path::absolute(path)?;
+            // Resolve the existing prefix even before an installation exists.
+            // Otherwise a short name (RUNNER~1) or junction in that prefix can
+            // compare differently from an existing, fully canonicalized parent.
+            let mut resolved = None;
+            for ancestor in absolute.ancestors() {
+                match ancestor.canonicalize() {
+                    Ok(parent) => {
+                        resolved = Some(parent.join(absolute.strip_prefix(ancestor)?));
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            let path =
+                resolved.ok_or_else(|| anyhow::anyhow!("Cannot resolve installation path"))?;
             Ok(path
                 .to_string_lossy()
                 .trim_start_matches(r"\\?\")
