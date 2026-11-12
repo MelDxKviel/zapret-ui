@@ -40,6 +40,7 @@ enum Action {
     Startup,
     Stop,
     Save(TelegramProxySettings),
+    Reset(bool),
     Visible(bool),
     Autostart(bool),
 }
@@ -211,6 +212,24 @@ impl Controller {
                 self.persist(settings.clone()).await?;
                 let _ = self.events.send(UiEvent::TelegramSettings(settings));
             }
+            Action::Reset(all) => {
+                anyhow::ensure!(!self.proxy.is_running().await, "telegram.error_running");
+                let mut config = self.config.write().await;
+                let mut updated = config.clone();
+                let mut settings = if all {
+                    updated.telegram_autostart = false;
+                    TelegramProxySettings::default()
+                } else {
+                    updated.telegram_proxy.clone()
+                };
+                settings.secret.clear();
+                let settings = self.proxy.prepare_settings(settings)?;
+                updated.telegram_proxy = settings.clone();
+                self.save(&updated)?;
+                *config = updated;
+                self.publish_preferences(&config);
+                let _ = self.events.send(UiEvent::TelegramSettings(settings));
+            }
             Action::Visible(visible) => {
                 let mut config = self.config.write().await;
                 let mut updated = config.clone();
@@ -275,6 +294,8 @@ pub(super) fn bind(
     ui.on_telegram_start(move || c.dispatch(Action::Start));
     let c = controller.clone();
     ui.on_telegram_stop(move || c.dispatch(Action::Stop));
+    let c = controller.clone();
+    ui.on_telegram_reset(move |all| c.dispatch(Action::Reset(all)));
     let c = controller.clone();
     ui.on_set_telegram_visible(move |visible| c.dispatch(Action::Visible(visible)));
     let c = controller.clone();
@@ -471,6 +492,58 @@ mod tests {
         events: broadcast::Receiver<UiEvent>,
         saves: Arc<Mutex<Vec<AppConfig>>>,
         fail_save: Arc<AtomicBool>,
+    }
+
+    #[tokio::test]
+    async fn reset_replaces_secret_and_preserves_other_app_preferences() {
+        for all in [false, true] {
+            let config = AppConfig {
+                telegram_autostart: true,
+                telegram_proxy: TelegramProxySettings {
+                    port: 2443,
+                    secret: "00112233445566778899aabbccddeeff".into(),
+                    dc_overrides: String::new(),
+                    tcp_fallback: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let h = Harness::new(config.clone());
+            h.controller.handle(Action::Reset(all)).await.unwrap();
+            let saved = h.controller.config.read().await.clone();
+            assert_ne!(saved.telegram_proxy.secret, config.telegram_proxy.secret);
+            assert!(!saved.telegram_proxy.link().is_empty());
+            let mut expected = config;
+            if all {
+                expected.telegram_proxy = TelegramProxySettings::default();
+                expected.telegram_autostart = false;
+            }
+            expected.telegram_proxy.secret = saved.telegram_proxy.secret.clone();
+            assert_eq!(saved, expected);
+            assert_eq!(h.saves.lock().unwrap().len(), 1);
+            assert_eq!(h.proxy.starts.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn reset_refuses_running_proxy_and_failed_save_keeps_old_secret() {
+        let config = AppConfig {
+            telegram_proxy: TelegramProxySettings {
+                secret: "00112233445566778899aabbccddeeff".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let h = Harness::new(config.clone());
+        h.proxy.running.store(true, Ordering::SeqCst);
+        assert!(h.controller.handle(Action::Reset(true)).await.is_err());
+        assert_eq!(*h.controller.config.read().await, config);
+        assert!(h.saves.lock().unwrap().is_empty());
+        h.proxy.running.store(false, Ordering::SeqCst);
+        h.fail_save.store(true, Ordering::SeqCst);
+        assert!(h.controller.handle(Action::Reset(false)).await.is_err());
+        assert_eq!(*h.controller.config.read().await, config);
+        assert!(h.saves.lock().unwrap().is_empty());
     }
 
     impl Harness {

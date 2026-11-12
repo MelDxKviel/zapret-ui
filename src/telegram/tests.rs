@@ -15,6 +15,69 @@ fn free_port() -> u16 {
         .port()
 }
 
+fn client_init(secret: &[u8; 16], dc: i16) -> ([u8; 64], protocol::Cipher, protocol::Cipher) {
+    let mut init = [0; 64];
+    getrandom::fill(&mut init).unwrap();
+    init[56..60].fill(0xdd);
+    init[60..62].copy_from_slice(&dc.to_le_bytes());
+    let key = Sha256::digest([&init[8..40], secret].concat());
+    let mut encrypt = protocol::Cipher::new_from_slices(&key, &init[40..56]).unwrap();
+    let mut reverse = init[8..56].to_vec();
+    reverse.reverse();
+    let key = Sha256::digest([&reverse[..32], secret].concat());
+    let decrypt = protocol::Cipher::new_from_slices(&key, &reverse[32..]).unwrap();
+    let mut wire = init;
+    encrypt.apply_keystream(&mut wire);
+    init[56..].copy_from_slice(&wire[56..]);
+    (init, encrypt, decrypt)
+}
+
+#[tokio::test]
+async fn unreachable_upstream_is_reported_without_stopping_the_listener() {
+    timeout(Duration::from_secs(3), async {
+        let proxy = LocalTelegramProxy::default();
+        let settings = proxy
+            .prepare_settings(TelegramProxySettings {
+                port: free_port(),
+                tcp_fallback: false,
+                dc_overrides: String::new(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (tx, mut status) = tokio::sync::mpsc::unbounded_channel();
+        proxy
+            .start(
+                settings.clone(),
+                Arc::new(move |value| {
+                    let _ = tx.send(value);
+                }),
+            )
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, settings.port))
+            .await
+            .unwrap();
+        // DC203 has no WSS route; disabled TCP makes this deterministic/offline.
+        let (init, _, _) = client_init(&settings::decode_secret(&settings.secret).unwrap(), 203);
+        client.write_all(&init).await.unwrap();
+        loop {
+            let value = status.recv().await.unwrap();
+            if !value.error.is_empty() {
+                assert!(value.running);
+                assert_eq!(value.error, "telegram.error_upstream");
+                break;
+            }
+        }
+        assert!(proxy.is_running().await);
+        proxy.stop().await.unwrap();
+        let stopped = status.recv().await.unwrap();
+        assert!(!stopped.running);
+        assert!(stopped.error.is_empty());
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn lazy_start_stop_rebind_and_close_incomplete_clients() {
     let proxy = LocalTelegramProxy::default();
@@ -378,19 +441,7 @@ async fn live_telegram_roundtrip(dc: i16) {
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, settings.port))
             .await
             .unwrap();
-        let mut init = [0; 64];
-        getrandom::fill(&mut init).unwrap();
-        init[56..60].fill(0xdd);
-        init[60..62].copy_from_slice(&dc.to_le_bytes());
-        let key = Sha256::digest([&init[8..40], &secret].concat());
-        let mut encrypt = protocol::Cipher::new_from_slices(&key, &init[40..56]).unwrap();
-        let mut reverse = init[8..56].to_vec();
-        reverse.reverse();
-        let key = Sha256::digest([&reverse[..32], &secret].concat());
-        let mut decrypt = protocol::Cipher::new_from_slices(&key, &reverse[32..]).unwrap();
-        let mut wire = init;
-        encrypt.apply_keystream(&mut wire);
-        init[56..].copy_from_slice(&wire[56..]);
+        let (init, mut encrypt, mut decrypt) = client_init(&secret, dc);
         client.write_all(&init).await.unwrap();
 
         let now = std::time::SystemTime::now()

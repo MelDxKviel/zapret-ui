@@ -5,6 +5,23 @@ use zapret_ui::contracts::{self, RunningMode, RuntimeStatus};
 use zapret_ui::state::AppState;
 
 #[test]
+fn retired_simple_dashboard_preference_keeps_other_saved_settings() {
+    let expected = AppConfig {
+        language: Language::En,
+        last_strategy: Some("general (ALT2)".into()),
+        simple_last_good: Some("general (ALT2)".into()),
+        ..Default::default()
+    };
+    let legacy = format!(
+        "ui_mode = \"Simple\"\n{}",
+        toml::to_string(&expected).unwrap()
+    );
+    let restored: AppConfig = toml::from_str(&legacy).unwrap();
+    assert_eq!(restored, expected);
+    assert!(!toml::to_string(&restored).unwrap().contains("ui_mode"));
+}
+
+#[test]
 fn test_config_default() {
     let config = AppConfig::default();
     assert!(!config.zapret2_enabled);

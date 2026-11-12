@@ -1,0 +1,371 @@
+import { ThemePalette, AppStatus, LogLineItem, MonitorTarget, TrafficSample, MonitorRound } from "../tokens.slint";
+import { I18n } from "../i18n.slint";
+import { AppButton } from "../components/button.slint";
+import { AppSwitch } from "../components/switch.slint";
+import { Icon } from "../components/icon.slint";
+import { ScrollView, ComboBox } from "std-widgets.slint";
+
+component SmallText inherits Text {
+    font-family: ThemePalette.font-sans; font-size: 12px;
+    color: ThemePalette.text-3; wrap: word-wrap;
+}
+component Card inherits Rectangle {
+    background: ThemePalette.surface; border-width: 1px;
+    border-color: ThemePalette.border; border-radius: ThemePalette.r-12;
+    vertical-stretch: 0;
+    @children
+}
+component CardTitle inherits Text {
+    font-family: ThemePalette.font-sans; font-size: 14px;
+    font-weight: 600; color: ThemePalette.text;
+}
+// Both series use the same speed and elapsed-time axes. Native vector paths
+// redraw only when data or geometry changes; history is bounded to 36 samples.
+component TrafficPlot inherits Rectangle {
+    in property <[TrafficSample]> samples;
+    in property <float> scale: 1;
+    property <float> span: max(1, root.samples[0].age);
+    background: ThemePalette.bg;
+    border-radius: 6px;
+    clip: true;
+    for level in [0.0, 0.5, 1.0] : Text {
+        x: 0px;
+        y: 8px + level * (root.height - 16px) - self.height / 2;
+        width: 30px;
+        height: 12px;
+        text: round(root.scale * (1 - level));
+        font-family: ThemePalette.font-mono;
+        font-size: 10px;
+        color: ThemePalette.text-4;
+        horizontal-alignment: right;
+    }
+    plot := Rectangle {
+        x: 40px; y: 8px;
+        width: root.width - 50px; height: root.height - 16px;
+        background: transparent;
+        for level in [0.0, 0.5, 1.0] : Rectangle {
+            y: 1px + level * (plot.height - 2px);
+            width: plot.width; height: 1px;
+            background: ThemePalette.divider;
+        }
+        for sample[index] in root.samples : Rectangle {
+            width: plot.width; height: plot.height;
+            background: transparent;
+            if index > 0 : Path {
+                width: plot.width; height: plot.height;
+                viewbox-width: 1; viewbox-height: 1; fit: fill;
+                fill: transparent;
+                stroke: ThemePalette.info;
+                stroke-width: 2px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+                MoveTo {
+                    x: 1 - root.samples[index - 1].age / root.span;
+                    y: 1 - min(1, max(0, root.samples[index - 1].rx / root.scale));
+                }
+                LineTo {
+                    x: 1 - sample.age / root.span;
+                    y: 1 - min(1, max(0, sample.rx / root.scale));
+                }
+            }
+            if index > 0 : Path {
+                width: plot.width; height: plot.height;
+                viewbox-width: 1; viewbox-height: 1; fit: fill;
+                fill: transparent;
+                stroke: ThemePalette.accent;
+                stroke-width: 2px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+                MoveTo {
+                    x: 1 - root.samples[index - 1].age / root.span;
+                    y: 1 - min(1, max(0, root.samples[index - 1].tx / root.scale));
+                }
+                LineTo {
+                    x: 1 - sample.age / root.span;
+                    y: 1 - min(1, max(0, sample.tx / root.scale));
+                }
+            }
+        }
+        if root.samples.length > 0 : Rectangle {
+            x: plot.width - 1px - self.width / 2;
+            y: 1px + (1 - min(1, max(0, root.samples[root.samples.length - 1].rx / root.scale))) * (plot.height - 2px) - self.height / 2;
+            width: 5px; height: 5px; border-radius: 2.5px;
+            background: ThemePalette.info;
+        }
+        if root.samples.length > 0 : Rectangle {
+            x: plot.width - 1px - self.width / 2;
+            y: 1px + (1 - min(1, max(0, root.samples[root.samples.length - 1].tx / root.scale))) * (plot.height - 2px) - self.height / 2;
+            width: 5px; height: 5px; border-radius: 2.5px;
+            background: ThemePalette.accent;
+        }
+    }
+    if root.samples.length == 0 : SmallText {
+        text: I18n.t(I18n.lang, "monitor.no_samples");
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+}
+component Metric inherits Card {
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit;
+    in property <string> hint;
+    in property <color> tint: ThemePalette.text;
+    horizontal-stretch: 1; min-width: 0px;
+    VerticalLayout {
+        padding: 18px; spacing: 9px;
+        SmallText { text: root.label; }
+        HorizontalLayout {
+            alignment: start; spacing: 6px;
+            Text {
+                text: root.value; font-family: ThemePalette.font-mono;
+                font-size: 25px; font-weight: 500; color: root.tint;
+                min-width: 0px; overflow: elide;
+            }
+            SmallText { text: root.unit; vertical-alignment: bottom; font-size: 11px; }
+        }
+        SmallText { text: root.hint; font-size: 11px; }
+    }
+}
+export component MonitorPage inherits Rectangle {
+    in property <AppStatus> status;
+    in property <bool> running;
+    in property <string> engine;
+    in property <string> strategy;
+    in property <[string]> interfaces;
+    in-out property <string> interface;
+    in property <string> ip;
+    in property <string> rx;
+    in property <string> tx;
+    in property <string> rx-total;
+    in property <string> tx-total;
+    in property <int> interface-errors;
+    in property <[TrafficSample]> history;
+    in property <float> scale;
+    in property <[MonitorTarget]> targets;
+    in property <[MonitorRound]> rounds;
+    in property <bool> checking;
+    in-out property <bool> auto;
+    in property <int> passed;
+    in property <int> latency;
+    in property <int> loss;
+    in property <string> checked-at;
+    in property <bool> checks-stale;
+    in property <string> sampled-at;
+    in property <string> game-filter;
+    in property <bool> supports-game-filter;
+    in property <string> ipset-mode;
+    in property <int> ipset-lines;
+    in property <bool> telegram-visible;
+    in property <bool> telegram-running;
+    in property <int> telegram-connections;
+    in property <string> telegram-error;
+    in property <[LogLineItem]> events;
+    callback probe();
+    callback select-interface(string);
+    callback navigate(string);
+    background: transparent;
+    VerticalLayout {
+        padding: 28px; spacing: 20px;
+        HorizontalLayout {
+            vertical-stretch: 0; spacing: 12px;
+            VerticalLayout {
+                horizontal-stretch: 1; spacing: 6px;
+                Text {
+                    text: I18n.t(I18n.lang, "monitor.title");
+                    font-family: ThemePalette.font-sans; font-size: 28px;
+                    font-weight: 600; color: ThemePalette.text;
+                }
+                SmallText { text: I18n.t(I18n.lang, "monitor.subtitle"); }
+            }
+            AppButton {
+                text: I18n.t(I18n.lang, "monitor.check");
+                icon: @image-url("../../assets/icons/refresh.svg");
+                busy: root.checking;
+                clicked => { root.probe(); }
+            }
+        }
+        sv := ScrollView {
+            viewport-width: sv.visible-width;
+            viewport-height: max(sv.visible-height, content.preferred-height);
+            content := VerticalLayout {
+                width: sv.visible-width; padding-right: 8px;
+                padding-bottom: 16px; spacing: 16px; alignment: start;
+                Card {
+                    VerticalLayout {
+                        padding: 16px; spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Icon { source: @image-url("../../assets/icons/monitor.svg"); size: 20px; tint: ThemePalette.info-text; }
+                            ComboBox {
+                                width: 220px;
+                                model: root.interfaces;
+                                current-value <=> root.interface;
+                                enabled: root.interfaces.length > 0;
+                                selected(value) => { root.select-interface(value); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            SmallText { text: root.ip == "" ? "—" : root.ip; font-family: ThemePalette.font-mono; font-size: 11px; vertical-alignment: center; }
+                        }
+                        SmallText { text: I18n.t(I18n.lang, "monitor.interface_hint"); font-size: 11px; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Metric {
+                        label: "↓ " + I18n.t(I18n.lang, "monitor.download"); value: root.rx;
+                        unit: root.rx == "—" ? "" : I18n.t(I18n.lang, "monitor.mbps");
+                        hint: I18n.t(I18n.lang, "monitor.received") + " " + root.rx-total;
+                        tint: ThemePalette.info-text;
+                    }
+                    Metric {
+                        label: "↑ " + I18n.t(I18n.lang, "monitor.upload"); value: root.tx;
+                        unit: root.tx == "—" ? "" : I18n.t(I18n.lang, "monitor.mbps");
+                        hint: I18n.t(I18n.lang, "monitor.sent") + " " + root.tx-total;
+                        tint: ThemePalette.accent-text;
+                    }
+                    Metric {
+                        label: I18n.t(I18n.lang, "monitor.connectivity");
+                        value: root.checked-at == "" ? "—" : root.passed + "/" + root.targets.length;
+                        hint: root.checked-at == "" ? I18n.t(I18n.lang, "monitor.not_checked") : I18n.t(I18n.lang, "monitor.response") + " " + (root.latency > 0 ? root.latency + " " + I18n.t(I18n.lang, "monitor.ms") : "—");
+                        tint: root.checked-at == "" ? ThemePalette.text-3 : root.passed == root.targets.length ? ThemePalette.accent-text : ThemePalette.warning-text;
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 18px; spacing: 12px;
+                        HorizontalLayout {
+                            CardTitle { text: I18n.t(I18n.lang, "monitor.traffic"); }
+                            Rectangle { horizontal-stretch: 1; }
+                            SmallText { text: "0–" + root.scale + " " + I18n.t(I18n.lang, "monitor.mbps"); font-family: ThemePalette.font-mono; font-size: 11px; }
+                        }
+                        TrafficPlot {
+                            height: 104px;
+                            samples: root.history;
+                            scale: root.scale;
+                        }
+                        if root.history.length > 1 : HorizontalLayout {
+                            padding-left: 40px; padding-right: 10px;
+                            SmallText {
+                                text: "−" + round(root.history[0].age) + " " + I18n.t(I18n.lang, "monitor.seconds");
+                                font-family: ThemePalette.font-mono; font-size: 10px;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            SmallText {
+                                text: "−" + round(root.history[0].age / 2) + " " + I18n.t(I18n.lang, "monitor.seconds");
+                                font-family: ThemePalette.font-mono; font-size: 10px;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            SmallText { text: I18n.t(I18n.lang, "monitor.now"); font-size: 10px; }
+                        }
+                        HorizontalLayout {
+                            spacing: 16px;
+                            SmallText { text: "↓ " + I18n.t(I18n.lang, "monitor.download"); color: ThemePalette.info-text; font-size: 11px; }
+                            SmallText { text: "↑ " + I18n.t(I18n.lang, "monitor.upload"); color: ThemePalette.accent-text; font-size: 11px; }
+                            Rectangle { horizontal-stretch: 1; }
+                            SmallText { text: root.sampled-at == "" ? "—" : root.sampled-at; font-family: ThemePalette.font-mono; font-size: 11px; }
+                        }
+                        SmallText { text: I18n.t(I18n.lang, "monitor.sampling_hint"); font-size: 11px; }
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 18px; spacing: 16px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            CardTitle { text: I18n.t(I18n.lang, "monitor.connectivity"); horizontal-stretch: 1; }
+                            SmallText { text: I18n.t(I18n.lang, "monitor.auto"); vertical-alignment: center; }
+                            VerticalLayout { alignment: center; width: 38px; AppSwitch { checked <=> root.auto; } }
+                        }
+                        SmallText { text: I18n.t(I18n.lang, "monitor.probe_hint"); font-size: 11px; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            SmallText { text: I18n.t(I18n.lang, "monitor.service_column"); horizontal-stretch: 1; }
+                            SmallText { text: I18n.t(I18n.lang, "monitor.state_column"); width: 90px; horizontal-alignment: center; }
+                            SmallText { text: I18n.t(I18n.lang, "monitor.response"); width: 62px; horizontal-alignment: right; }
+                            SmallText { text: I18n.t(I18n.lang, "monitor.failures"); width: 50px; horizontal-alignment: right; }
+                            SmallText { text: "×3"; width: 32px; horizontal-alignment: right; }
+                        }
+                        for target in root.targets : VerticalLayout {
+                            spacing: 12px;
+                            Rectangle { height: 1px; background: ThemePalette.divider; }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                VerticalLayout {
+                                    spacing: 5px; horizontal-stretch: 1; min-width: 0px;
+                                    Text { text: target.name; font-family: ThemePalette.font-sans; font-size: 13px; font-weight: 500; color: ThemePalette.text; }
+                                    SmallText {
+                                        text: target.detail != "" ? I18n.t(I18n.lang, target.detail) : target.host;
+                                        font-size: 11px; overflow: elide; wrap: no-wrap; min-width: 0px;
+                                        color: target.detail != "" ? ThemePalette.warning-text : ThemePalette.text-3;
+                                    }
+                                }
+                                Text {
+                                    text: I18n.t(I18n.lang, target.state == "ok" ? "monitor.reachable" : target.state == "partial" ? "monitor.partial" : target.state == "error" ? "monitor.unreachable" : "monitor.waiting");
+                                    width: 90px; font-family: ThemePalette.font-sans; font-size: 11px;
+                                    horizontal-alignment: center; vertical-alignment: center;
+                                    color: target.state == "ok" ? ThemePalette.accent-text : target.state == "partial" ? ThemePalette.warning-text : target.state == "error" ? ThemePalette.danger-text : ThemePalette.text-3;
+                                }
+                                VerticalLayout {
+                                    width: 62px; spacing: 4px; alignment: center;
+                                    SmallText { text: target.successes > 0 ? target.latency + " " + I18n.t(I18n.lang, "monitor.ms") : "—"; horizontal-alignment: right; font-family: ThemePalette.font-mono; color: ThemePalette.text; }
+                                    SmallText { text: target.successes > 1 ? "Δ " + target.jitter + " " + I18n.t(I18n.lang, "monitor.ms") : ""; horizontal-alignment: right; font-size: 10px; }
+                                }
+                                SmallText {
+                                    width: 50px; text: target.state == "" ? "—" : target.loss + "%";
+                                    horizontal-alignment: right; vertical-alignment: center;
+                                    font-family: ThemePalette.font-mono;
+                                    color: target.loss > 0 ? ThemePalette.warning-text : ThemePalette.text-2;
+                                }
+                                HorizontalLayout {
+                                    width: 32px; spacing: 4px;
+                                    for sample in target.samples : VerticalLayout {
+                                        alignment: center;
+                                        Rectangle { width: 8px; height: 18px; border-radius: 3px; background: sample > 0 ? ThemePalette.accent : sample < 0 ? ThemePalette.danger : ThemePalette.surface-2; }
+                                    }
+                                }
+                            }
+                        }
+                        SmallText {
+                            text: root.checked-at == "" ? I18n.t(I18n.lang, "monitor.not_checked") : I18n.t(I18n.lang, "monitor.checked") + " " + root.checked-at + " · " + I18n.t(I18n.lang, "monitor.failures") + " " + root.loss + "%";
+                            font-size: 11px;
+                        }
+                        if root.checks-stale : SmallText { text: I18n.t(I18n.lang, "monitor.stale"); color: ThemePalette.warning-text; }
+                    }
+                }
+                if root.rounds.length > 0 : Card {
+                    VerticalLayout {
+                        padding: 18px; spacing: 14px;
+                        CardTitle { text: I18n.t(I18n.lang, "monitor.check_history"); }
+                        for round in root.rounds : HorizontalLayout {
+                            spacing: 12px;
+                            SmallText { text: round.time; font-family: ThemePalette.font-mono; }
+                            Rectangle { horizontal-stretch: 1; }
+                            SmallText { text: round.passed + "/" + round.total + " " + I18n.t(I18n.lang, "monitor.requests"); color: round.passed == round.total ? ThemePalette.accent-text : ThemePalette.warning-text; }
+                            SmallText { text: round.latency > 0 ? round.latency + " " + I18n.t(I18n.lang, "monitor.ms") : "—"; width: 70px; horizontal-alignment: right; font-family: ThemePalette.font-mono; }
+                        }
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 18px; spacing: 14px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            CardTitle { text: I18n.t(I18n.lang, "monitor.bypass"); }
+                            SmallText { text: I18n.t(I18n.lang, root.running ? "monitor.active" : "monitor.stopped"); color: root.running ? ThemePalette.accent-text : ThemePalette.text-3; horizontal-stretch: 1; }
+                            AppButton { text: I18n.t(I18n.lang, "monitor.manage"); variant: "ghost"; clicked => { root.navigate("home"); } }
+                        }
+                        SmallText { text: root.engine + " · " + (root.strategy == "" ? I18n.t(I18n.lang, "monitor.no_strategy") : root.strategy); }
+                        SmallText {
+                            text: "IPSet · " + (root.ipset-mode == "loaded" ? root.ipset-lines + " " + I18n.t(I18n.lang, "monitor.entries") : I18n.t(I18n.lang, root.ipset-mode == "any" ? "settings.ipset_any" : root.ipset-mode == "none" ? "settings.ipset_none" : "monitor.unknown")) + " · " + I18n.t(I18n.lang, "monitor.interface_errors") + ": " + root.interface-errors;
+                        }
+                        if root.supports-game-filter : SmallText { text: I18n.t(I18n.lang, "common.game_filter") + " · " + I18n.t(I18n.lang, "common.gf_" + root.game-filter); }
+                        if root.telegram-visible : SmallText {
+                            text: I18n.t(I18n.lang, "telegram.title") + " · " + I18n.t(I18n.lang, root.telegram-error != "" ? "monitor.attention" : root.telegram-running ? "monitor.proxy_on" : "monitor.stopped_short") + (root.telegram-running ? " · " + root.telegram-connections + " " + I18n.t(I18n.lang, "monitor.clients") : "");
+                            color: root.telegram-error != "" ? ThemePalette.warning-text : ThemePalette.info-text;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

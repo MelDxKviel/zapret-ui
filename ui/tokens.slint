@@ -54,6 +54,20 @@ export struct TestResultItem {
     favorite: bool,   // starred by the user
 }
 
+export struct MonitorTarget {
+    name: string,
+    host: string,
+    state: string,
+    latency: int,
+    jitter: int,
+    loss: int,
+    successes: int,
+    detail: string,
+    samples: [int],
+}
+export struct TrafficSample { rx: float, tx: float, age: float }
+export struct MonitorRound { time: string, passed: int, total: int, latency: int }
+
 export global ThemePalette {
     in-out property <bool> is-dark: true;
 

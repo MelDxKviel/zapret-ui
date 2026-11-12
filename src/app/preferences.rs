@@ -1,6 +1,6 @@
 //! Save UI preferences in click order without waiting behind core downloads.
 //! A worker exists only while actions are pending; flush waits for all saves.
-use crate::config::{AppConfig, Language, UiMode};
+use crate::config::{AppConfig, Language};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -9,7 +9,6 @@ use tokio::sync::{Notify, RwLock};
 
 pub(super) enum Action {
     Language(Language),
-    UiMode(UiMode),
     SelectedStrategy(String),
 }
 
@@ -69,7 +68,6 @@ impl Controller {
                 let mut config = this.config.write().await;
                 match action {
                     Action::Language(language) => config.language = language,
-                    Action::UiMode(mode) => config.ui_mode = mode,
                     Action::SelectedStrategy(id) => config.last_strategy = Some(id),
                 }
                 if let Err(error) = (this.save)(&config) {
@@ -111,11 +109,10 @@ mod tests {
             config.clone(),
             Arc::new(move |config| {
                 config.save_to_path(&save_path)?;
-                snapshots.lock().unwrap().push((
-                    config.language,
-                    config.ui_mode,
-                    config.last_strategy.clone(),
-                ));
+                snapshots
+                    .lock()
+                    .unwrap()
+                    .push((config.language, config.last_strategy.clone()));
                 Ok(())
             }),
         );
@@ -125,7 +122,6 @@ mod tests {
         // start on either runtime thread, but cannot save or finish yet.
         let held = config.write().await;
         controller.dispatch(Action::Language(Language::En));
-        controller.dispatch(Action::UiMode(UiMode::Advanced));
         controller.dispatch(Action::SelectedStrategy("first".into()));
         controller.dispatch(Action::SelectedStrategy("last".into()));
         controller.dispatch(Action::Language(Language::Ru));
@@ -140,21 +136,23 @@ mod tests {
         assert_eq!(
             *history.lock().unwrap(),
             [
-                (Language::En, UiMode::Simple, None),
-                (Language::En, UiMode::Advanced, None),
-                (Language::En, UiMode::Advanced, Some("first".into())),
-                (Language::En, UiMode::Advanced, Some("last".into())),
-                (Language::Ru, UiMode::Advanced, Some("last".into())),
+                (Language::En, None),
+                (Language::En, Some("first".into())),
+                (Language::En, Some("last".into())),
+                (Language::Ru, Some("last".into())),
             ]
         );
         assert_eq!(AppConfig::load_from_path(&path), *config.read().await);
 
         // A later action must start a fresh worker and support another flush.
-        controller.dispatch(Action::UiMode(UiMode::Simple));
+        controller.dispatch(Action::SelectedStrategy("resumed".into()));
         tokio::time::timeout(Duration::from_secs(5), controller.flush())
             .await
             .unwrap();
-        assert_eq!(AppConfig::load_from_path(&path).ui_mode, UiMode::Simple);
-        assert_eq!(history.lock().unwrap().len(), 6);
+        assert_eq!(
+            AppConfig::load_from_path(&path).last_strategy.as_deref(),
+            Some("resumed")
+        );
+        assert_eq!(history.lock().unwrap().len(), 5);
     }
 }

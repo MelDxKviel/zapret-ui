@@ -20,6 +20,7 @@ slint::include_modules!();
 
 #[cfg(test)]
 mod engine_tests;
+mod monitor;
 mod preferences;
 #[cfg(target_os = "macos")]
 #[path = "../platform/macos/reopen.rs"]
@@ -649,6 +650,7 @@ impl App {
             rebuild_test_results(&ui);
         }
         let preferences = preferences::Controller::new(self.config.clone());
+        monitor::bind(&ui);
         let telegram = telegram::bind(
             &ui,
             self.telegram_proxy.clone(),
@@ -681,17 +683,6 @@ impl App {
             ui.on_set_language(move |code| {
                 preferences.dispatch(preferences::Action::Language(
                     crate::config::Language::from_code(&code),
-                ));
-            });
-        }
-
-        // Persist the dashboard mode (simple dial vs. advanced) when the user
-        // flips the toggle. The Slint side switches the view itself; we just save.
-        {
-            let preferences = preferences.clone();
-            ui.on_set_ui_mode(move |slug| {
-                preferences.dispatch(preferences::Action::UiMode(
-                    crate::config::UiMode::from_slug(&slug),
                 ));
             });
         }
@@ -738,7 +729,6 @@ impl App {
             ui.set_minimize_to_tray(c.minimize_to_tray);
             ui.set_autoengage(c.autoengage);
             ui.set_theme(c.theme.slug().into());
-            ui.set_ui_mode(c.ui_mode.slug().into());
             ui.set_install_dir(
                 c.engine_install_dir(
                     if cfg!(windows) && c.effective_engine_mode() == EngineMode::Zapret2 {
@@ -873,7 +863,7 @@ impl App {
                 dispatch(&cmd_tx_c, BackendCmd::Stop);
             });
         }
-        // Simple-mode dial: auto-pick a working strategy and turn the bypass on.
+        // Automatic action: auto-pick a working strategy and turn the bypass on.
         {
             let cmd_tx_c = self.cmd_tx.clone();
             ui.on_auto_engage_clicked(move || {
@@ -1327,6 +1317,9 @@ impl App {
                             UiEvent::Zapret2Enabled(enabled) => ui.set_zapret2_enabled(enabled),
                             UiEvent::TelegramStatus(status) => {
                                 ui.set_telegram_running(status.running);
+                                ui.set_telegram_connections(
+                                    status.connections.min(i32::MAX as u32) as i32,
+                                );
                                 ui.set_telegram_error(status.error.into());
                             }
                             UiEvent::TelegramSettings(settings) => {
@@ -1748,7 +1741,7 @@ impl App {
         tokio::spawn(async move {
             let test_running = Arc::new(AtomicBool::new(false));
             let test_cancelled = Arc::new(AtomicBool::new(false));
-            // Simple-mode auto-engage in flight. Like `test_running`, this both
+            // Automatic strategy selection in flight. Like `test_running`, this both
             // rejects conflicting commands and suppresses the periodic status
             // refresh (which would otherwise briefly flip the dial to "active" as
             // a candidate is probed). Shared into the spawned auto-engage task.
@@ -2107,7 +2100,7 @@ impl App {
                                         tokio::spawn(async move {
                                             match tester_c.verify().await {
                                                 Ok(true) => tracing::info!(
-                                                    "Simple-mode fast strategy verified: {id_c}"
+                                                    "Cached automatic strategy verified: {id_c}"
                                                 ),
                                                 Ok(false) => {
                                                     // Only forget it if it's still the
@@ -2122,7 +2115,7 @@ impl App {
                                                         cfg.simple_last_good = None;
                                                         let _ = cfg.save();
                                                         tracing::info!(
-                                                            "Simple-mode strategy {id_c} failed background verify; next engage will full-scan"
+                                                            "Cached automatic strategy {id_c} failed background verify; next engage will full-scan"
                                                         );
                                                     }
                                                 }

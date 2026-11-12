@@ -1,11 +1,11 @@
 use super::{
     protocol::{self, Cipher, Handshake, MAX_PACKET},
-    settings,
+    settings, tls,
 };
 use crate::contracts::TelegramProxySettings;
 use aes::cipher::StreamCipher;
 use anyhow::{bail, Result};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{future::BoxFuture, FutureExt, SinkExt, StreamExt};
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -15,7 +15,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{lookup_host, TcpSocket, TcpStream, ToSocketAddrs},
-    sync::Mutex,
+    sync::{Mutex, Semaphore},
     time::{timeout, Instant},
 };
 use tokio_tungstenite::{
@@ -25,7 +25,14 @@ use tokio_tungstenite::{
 };
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
-const MAX_WSS_ADDRESSES: usize = 16;
+const MAX_WSS_ADDRESSES: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum TlsMode {
+    Standard,
+    WithoutSni,
+    Fronted,
+}
 
 // Keep resolver order, but bound parallel attempts and avoid retrying the
 // override IP (or the same DNS address twice) after it has already failed.
@@ -103,35 +110,59 @@ pub(super) struct Routes {
     fallback: bool,
     timeout: Duration,
     tls: Arc<rustls::ClientConfig>,
+    tls_without_sni: Arc<rustls::ClientConfig>,
+    verifier: Arc<rustls::client::WebPkiServerVerifier>,
+    dials: Semaphore,
     /// Rate-limit diagnostics without a timer or work while the proxy is off.
     failure_logs: Mutex<BTreeMap<i16, Instant>>,
 }
 
 impl Routes {
     pub fn new(settings: &TelegramProxySettings) -> Result<Self> {
-        let roots =
-            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = Arc::new(rustls::RootCertStore::from_iter(
+            webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
+        ));
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            roots.clone(),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()?;
         let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
         .with_safe_default_protocol_versions()?
         .with_root_certificates(roots)
         .with_no_client_auth();
+        // Some networks filter the Telegram name in ClientHello. Omit SNI on
+        // the second attempt, but STILL authenticate the Telegram hostname.
+        // Unlike upstream's fronting mode this never disables certificate checks.
+        let mut tls_without_sni = tls.clone();
+        tls_without_sni.enable_sni = false;
         Ok(Self {
             overrides: settings::overrides(&settings.dc_overrides)?,
             fallback: settings.tcp_fallback,
             timeout: Duration::from_secs(u64::from(settings.connect_timeout_secs)),
             tls: Arc::new(tls),
+            tls_without_sni: Arc::new(tls_without_sni),
+            verifier,
+            dials: Semaphore::new(32),
             failure_logs: Mutex::new(BTreeMap::new()),
         })
     }
 
-    async fn connect_ws(&self, domain: &str, address: SocketAddr) -> Result<Ws> {
+    async fn connect_ws(&self, domain: &str, address: SocketAddr, mode: TlsMode) -> Result<Ws> {
+        let _dial = self.dials.acquire().await?;
         let socket = connect_tcp(address).await?;
         socket.set_nodelay(true)?;
         // The override changes only the destination IP. TLS still validates
         // Telegram's hostname and certificate.
-        let mut request = format!("wss://{domain}/apiws").into_client_request()?;
+        let wire_name = if mode == TlsMode::Fronted {
+            tls::FRONT_SNI
+        } else {
+            domain
+        };
+        let mut request = format!("wss://{wire_name}/apiws").into_client_request()?;
+        request.headers_mut().insert("Host", domain.parse()?);
         request
             .headers_mut()
             .insert("Sec-WebSocket-Protocol", "binary".parse()?);
@@ -144,7 +175,15 @@ impl Routes {
             request,
             socket,
             Some(ws_config),
-            Some(Connector::Rustls(self.tls.clone())),
+            Some(Connector::Rustls(match mode {
+                TlsMode::Standard => self.tls.clone(),
+                TlsMode::WithoutSni => self.tls_without_sni.clone(),
+                TlsMode::Fronted => Arc::new(tls::fronted_config(
+                    &self.tls,
+                    self.verifier.clone(),
+                    domain,
+                )?),
+            })),
         )
         .await?;
         Ok(ws)
@@ -158,25 +197,42 @@ impl Routes {
         failures: &mut Vec<String>,
     ) -> Option<Ws> {
         let mut attempts = futures_util::stream::FuturesUnordered::new();
-        let mut pending: BTreeSet<_> = candidates.iter().copied().collect();
+        let mut pending = BTreeSet::new();
         for address in candidates {
-            attempts.push(async move {
-                let result = self.connect_ws(domain, address).await;
-                (address, result)
-            });
+            for mode in [TlsMode::Standard, TlsMode::WithoutSni, TlsMode::Fronted] {
+                pending.insert((address, mode));
+                attempts.push(async move {
+                    // Hedge a filtered ClientHello without doubling healthy
+                    // connections. Losing futures drop and close their sockets.
+                    if mode != TlsMode::Standard {
+                        tokio::time::sleep(Duration::from_millis(if mode == TlsMode::WithoutSni {
+                            250
+                        } else {
+                            500
+                        }))
+                        .await;
+                    }
+                    let result = self.connect_ws(domain, address, mode).await;
+                    (address, mode, result)
+                });
+            }
         }
         match timeout(self.timeout, async {
-            while let Some((address, result)) = attempts.next().await {
-                pending.remove(&address);
+            while let Some((address, mode, result)) = attempts.next().await {
+                pending.remove(&(address, mode));
                 match result {
                     Ok(ws) => {
-                        tracing::debug!("Telegram DC{dc}: WSS {domain} connected via {address}");
+                        tracing::debug!(
+                            "Telegram DC{dc}: WSS {domain} connected via {address}, TLS={mode:?}"
+                        );
                         return Some(ws);
                     }
                     Err(error) => {
                         let reason = ws_failure(&error);
                         tracing::debug!("Telegram DC{dc}: WSS {domain} via {address}: {reason}");
-                        failures.push(format!("WSS {domain} via {address}: {reason}"));
+                        failures.push(format!(
+                            "WSS {domain} via {address}, TLS={mode:?}: {reason}"
+                        ));
                     }
                 }
             }
@@ -186,7 +242,7 @@ impl Routes {
         {
             Ok(result) => result,
             Err(_) => {
-                for address in pending {
+                for (address, _) in pending {
                     failures.push(format!("WSS {domain} via {address}: timed out"));
                 }
                 tracing::debug!("Telegram DC{dc}: WSS {domain} connection timed out");
@@ -195,65 +251,92 @@ impl Routes {
         }
     }
 
-    fn wss_route(&self, dc: i16) -> Option<(String, SocketAddr)> {
+    fn wss_domains(&self, dc: i16) -> Vec<String> {
         let id = dc.unsigned_abs();
-        let ip = (id != 203)
-            .then(|| self.overrides.get(&id).copied())
-            .flatten()?;
-        // The suffix selects a different Telegram backend role, not an
-        // interchangeable hostname. Never race media and regular sessions.
-        let suffix = if dc < 0 { "-1" } else { "" };
-        Some((
-            format!("kws{id}{suffix}.web.telegram.org"),
-            SocketAddr::new(IpAddr::V4(ip), 443),
-        ))
+        if !(1..=5).contains(&id) {
+            return Vec::new();
+        }
+        let mut domains = Vec::new();
+        if dc < 0 {
+            domains.push(format!("kws{id}-1.web.telegram.org"));
+        }
+        // tg-ws-proxy also falls back to the regular hostname for media.
+        // Preserve the signed DC in relay_init: the requested session stays media.
+        domains.push(format!("kws{id}.web.telegram.org"));
+        domains
     }
 
     async fn connect(&self, dc: i16) -> Result<Upstream> {
         let id = dc.unsigned_abs();
         let mut failures = Vec::new();
-        // The official WebSocket relay for DC2 must not be used as a relay for
-        // DC203. Other DCs need an explicit matching route; otherwise try their
-        // own TCP endpoint immediately instead of stalling on WSS guesses.
-        if let Some((domain, address)) = self.wss_route(dc) {
-            if let Some(ws) = self
-                .race_ws(dc, &domain, vec![address], &mut failures)
-                .await
-            {
-                self.failure_logs.lock().await.remove(&dc);
-                tracing::debug!("Telegram DC{dc}: WSS connected");
-                return Ok(Upstream::WebSocket(Box::new(ws)));
-            }
-
-            // DNS may have moved to another Telegram IP. Do not retry the same
-            // IP after it has already consumed the connection timeout.
-            let resolved = timeout(self.timeout, lookup_host((domain.as_str(), 443))).await;
-            let alternate = match resolved {
-                Ok(Ok(addresses)) => {
-                    let addresses = alternate_ws_addresses(addresses, address.ip());
-                    if addresses.is_empty() {
-                        failures.push(format!("DNS {domain}: no alternate addresses"));
+        // Overrides change only the destination IP, not whether WSS is enabled.
+        // An empty overrides field uses official Telegram DNS as promised by UI.
+        // All WSS paths share ONE deadline. A stalled override/DNS/media host
+        // must not postpone other paths or multiply the configured timeout.
+        let mut attempts: futures_util::stream::FuturesUnordered<
+            BoxFuture<'_, (Option<Ws>, Vec<String>)>,
+        > = futures_util::stream::FuturesUnordered::new();
+        for (index, domain) in self.wss_domains(dc).into_iter().enumerate() {
+            let override_ip = self.overrides.get(&id).copied();
+            if let Some(ip) = override_ip {
+                let domain = domain.clone();
+                attempts.push(
+                    async move {
+                        if index > 0 {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                        }
+                        let mut reasons = Vec::new();
+                        let ws = self
+                            .race_ws(dc, &domain, vec![SocketAddr::from((ip, 443))], &mut reasons)
+                            .await;
+                        (ws, reasons)
                     }
-                    addresses
+                    .boxed(),
+                );
+            }
+            attempts.push(
+                async move {
+                    if index > 0 {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    let mut reasons = Vec::new();
+                    let addresses = match lookup_host((domain.as_str(), 443)).await {
+                        Ok(addresses) => alternate_ws_addresses(
+                            addresses,
+                            IpAddr::V4(override_ip.unwrap_or(Ipv4Addr::UNSPECIFIED)),
+                        ),
+                        Err(error) => {
+                            reasons.push(format!("DNS {domain}: {}", io_failure(&error)));
+                            Vec::new()
+                        }
+                    };
+                    let ws = if addresses.is_empty() {
+                        None
+                    } else {
+                        self.race_ws(dc, &domain, addresses, &mut reasons).await
+                    };
+                    (ws, reasons)
                 }
-                Ok(Err(error)) => {
-                    failures.push(format!("DNS {domain}: {}", io_failure(&error)));
-                    Vec::new()
-                }
-                Err(_) => {
-                    failures.push(format!("DNS {domain}: timed out"));
-                    Vec::new()
-                }
-            };
-            if !alternate.is_empty() {
-                if let Some(ws) = self.race_ws(dc, &domain, alternate, &mut failures).await {
-                    self.failure_logs.lock().await.remove(&dc);
-                    tracing::debug!("Telegram DC{dc}: WSS connected via DNS");
-                    return Ok(Upstream::WebSocket(Box::new(ws)));
+                .boxed(),
+            );
+        }
+        let wss = timeout(self.timeout, async {
+            while let Some((ws, reasons)) = attempts.next().await {
+                failures.extend(reasons);
+                if ws.is_some() {
+                    return ws;
                 }
             }
-        } else {
-            failures.push("WSS not configured for this DC".into());
+            None
+        })
+        .await;
+        // Cancel losing futures now, before attempting TCP fallback.
+        drop(attempts);
+        if let Ok(Some(ws)) = wss {
+            self.failure_logs.lock().await.remove(&dc);
+            return Ok(Upstream::WebSocket(Box::new(ws)));
+        } else if wss.is_err() {
+            failures.push("WSS connection deadline exceeded".into());
         }
         if self.fallback {
             if let Some(ip) = dc_ip(id) {
@@ -285,7 +368,7 @@ impl Routes {
             tracing::warn!("Telegram DC{dc}: no reachable upstream; {reasons}");
             logs.insert(dc, Instant::now());
         }
-        Err(UpstreamUnavailable.into())
+        Err(UpstreamUnavailable(dc).into())
     }
 }
 
@@ -302,7 +385,7 @@ fn dc_ip(id: u16) -> Option<Ipv4Addr> {
 }
 
 #[derive(Debug)]
-pub(super) struct UpstreamUnavailable;
+pub(super) struct UpstreamUnavailable(pub i16);
 impl std::fmt::Display for UpstreamUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Telegram upstream unavailable")
@@ -319,6 +402,7 @@ pub(super) async fn serve(
     mut client: TcpStream,
     secret: [u8; 16],
     routes: Arc<Routes>,
+    ready: tokio::sync::mpsc::Sender<i16>,
 ) -> Result<()> {
     client.set_nodelay(true)?;
     let mut init = [0; 64];
@@ -332,10 +416,12 @@ pub(super) async fn serve(
                 ws.send(Message::Binary(init.to_vec().into())),
             )
             .await??;
+            let _ = ready.try_send(handshake.dc);
             bridge_ws(client, *ws, handshake, encrypt, decrypt).await
         }
         Upstream::Tcp(mut upstream) => {
             timeout(routes.timeout, upstream.write_all(&init)).await??;
+            let _ = ready.try_send(handshake.dc);
             bridge_tcp(client, upstream, handshake, encrypt, decrypt).await
         }
     }

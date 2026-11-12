@@ -3,16 +3,18 @@
 //! thread. Uses the app's Tokio runtime; stopping joins all connection tasks.
 mod protocol;
 mod settings;
+mod tls;
 mod transport;
 
 use crate::contracts::{TelegramProxySettings, TelegramProxyStatus};
 use crate::ports::{TelegramProxy, TelegramStatusCb};
 use anyhow::Result;
+use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{
     net::TcpSocket,
-    sync::{oneshot, Mutex},
+    sync::{mpsc, oneshot, Mutex},
     task::{JoinHandle, JoinSet},
 };
 
@@ -93,6 +95,7 @@ impl TelegramProxy for LocalTelegramProxy {
             anyhow::anyhow!("telegram.error_bind")
         })?;
         let (shutdown, mut stop) = oneshot::channel();
+        let (ready, mut upstream_ready) = mpsc::channel(usize::from(settings.max_connections));
         on_status(TelegramProxyStatus {
             running: true,
             ..Default::default()
@@ -100,14 +103,25 @@ impl TelegramProxy for LocalTelegramProxy {
         let task = tokio::spawn(async move {
             let mut clients: JoinSet<Result<()>> = JoinSet::new();
             let mut error = String::new();
+            let mut failed_dcs = BTreeSet::new();
             tracing::info!("Telegram proxy listening on 127.0.0.1:{}", settings.port);
             loop {
                 tokio::select! {
                     biased;
                     _ = &mut stop => { error.clear(); break; },
+                    Some(dc) = upstream_ready.recv() => {
+                        if failed_dcs.remove(&dc) && failed_dcs.is_empty() && error == "telegram.error_upstream" {
+                            error.clear();
+                            on_status(TelegramProxyStatus { running: true, connections: clients.len() as u32, error: error.clone() });
+                        }
+                    }
                     result = clients.join_next(), if !clients.is_empty() => {
                         match result {
                             Some(Ok(Err(e))) => {
+                                if let Some(failure) = e.downcast_ref::<transport::UpstreamUnavailable>() {
+                                    failed_dcs.insert(failure.0);
+                                    error = "telegram.error_upstream".into();
+                                }
                                 // Telegram retries individual connections automatically.
                                 // Keep transient failures in logs, without marking the
                                 // whole running proxy as failed.
@@ -128,7 +142,8 @@ impl TelegramProxy for LocalTelegramProxy {
                             }
                         };
                         let routes = routes.clone();
-                        clients.spawn(async move { transport::serve(socket, secret, routes).await });
+                        let ready = ready.clone();
+                        clients.spawn(async move { transport::serve(socket, secret, routes, ready).await });
                         on_status(TelegramProxyStatus { running: true, connections: clients.len() as u32, error: error.clone() });
                     }
                 }

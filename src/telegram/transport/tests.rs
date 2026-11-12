@@ -17,26 +17,36 @@ fn cipher(seed: u8) -> Cipher {
 }
 
 #[test]
-fn websocket_routes_keep_regular_and_media_backends_distinct() {
+fn websocket_routes_use_official_dns_and_media_fallback_without_manual_overrides() {
     let routes = Routes::new(&TelegramProxySettings {
         dc_overrides: "2:149.154.167.220 4:149.154.167.220 203:91.105.192.100".into(),
         ..Default::default()
     })
     .unwrap();
-    for (dc, domain) in [
-        (2, "kws2.web.telegram.org"),
-        (-2, "kws2-1.web.telegram.org"),
-        (4, "kws4.web.telegram.org"),
-        (-4, "kws4-1.web.telegram.org"),
-    ] {
+    let dns = Routes::new(&TelegramProxySettings {
+        dc_overrides: String::new(),
+        ..Default::default()
+    })
+    .unwrap();
+    for dc in 1..=5 {
+        let regular = format!("kws{dc}.web.telegram.org");
+        let media = format!("kws{dc}-1.web.telegram.org");
         assert_eq!(
-            routes.wss_route(dc),
-            Some((domain.into(), "149.154.167.220:443".parse().unwrap()))
+            routes.wss_domains(dc).as_slice(),
+            std::slice::from_ref(&regular)
         );
+        assert_eq!(routes.wss_domains(-dc), [media.clone(), regular.clone()]);
+        assert_eq!(
+            dns.wss_domains(dc).as_slice(),
+            std::slice::from_ref(&regular)
+        );
+        assert_eq!(dns.wss_domains(-dc), [media, regular]);
     }
-    for dc in [1, -1, 3, -3, 5, -5, 203, -203] {
-        assert_eq!(routes.wss_route(dc), None, "DC{dc}");
+    for dc in [0, 6, 203, -203, i16::MIN] {
+        assert!(routes.wss_domains(dc).is_empty(), "DC{dc}");
     }
+    assert!(routes.tls.enable_sni);
+    assert!(!routes.tls_without_sni.enable_sni);
 }
 
 #[test]
@@ -59,7 +69,10 @@ fn websocket_dns_candidates_include_distinct_ipv4_and_ipv6_addresses() {
     let bounded = alternate_ws_addresses(many, "149.154.167.220".parse().unwrap());
     assert_eq!(bounded.len(), MAX_WSS_ADDRESSES);
     assert_eq!(bounded[0], SocketAddr::from(([10, 0, 0, 1], 443)));
-    assert_eq!(bounded[15], SocketAddr::from(([10, 0, 0, 16], 443)));
+    assert_eq!(
+        bounded[MAX_WSS_ADDRESSES - 1],
+        SocketAddr::from(([10, 0, 0, MAX_WSS_ADDRESSES as u8], 443))
+    );
 }
 
 #[test]

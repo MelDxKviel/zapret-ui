@@ -6,15 +6,13 @@ zapret2 is an optional **beta** Windows 10/11 x64 engine. Home and
 beta toggle or Auto engine choice. zapret1 remains the default. The Mac utunws
 adapter remains the sole Mac engine, without a Windows engine selector.
 
-Home preserves the saved **Simple / Full** choice, with a compact switch in its
-heading. Simple mode offers installation and automatic strategy selection in
-one action. Full mode makes **Start selected** the primary action and places
-automatic strategy selection beside it. App/core/latest versions, strategy
+Home uses one full dashboard. **Start selected** launches the chosen preset;
+**Find and start** beside it performs automatic strategy selection. App/core/latest versions, strategy
 count, uptime, process mode and PID are visible directly. Service controls,
 strategy description, supported filters and installation/update/folder actions
 are also shown without a disclosure step. Tuning remains available in Settings.
 
-Both modes share installation, scan, running and error states. Installation
+The dashboard shows installation, scan, running and error states. Installation
 shows the selected engine and download progress when available. A scan shows
 its engine and current candidate, with Cancel always available. Engine controls
 are confined to Home and Settings; the Strategies and Tester pages retain their
@@ -163,14 +161,14 @@ Use a development machine where you control the existing bypass processes and
 can authorize the app's normal elevation. Do not run these live checks in CI.
 
 1. Keep an existing `config.toml` with a selected zapret1 strategy. Open the new
-   application and check that the strategy, Simple/Full choice and other
-   preferences survive. Home and Settings must both show zapret1 and zapret2
+   application and check that the strategy and other preferences survive; a legacy Simple preference
+   opens the full dashboard. Home and Settings must both show zapret1 and zapret2
    Beta as the only engine choices.
 2. In zapret1 mode, start/stop the old preset. Verify runtime status, logs and
    service operations still work.
 3. Select zapret2 on Home or in **Settings → Bypass engine**, then install it.
-   Full mode installs without automatic selection; Simple mode's **Install and
-   connect** continues into strategy selection. Verify `version.txt`, the four `bin/` files,
+   Installation prepares the selected core. **Find and start** then performs
+   automatic strategy selection. Verify `version.txt`, the four `bin/` files,
    Lua files, lists and three catalog entries. Start one preset, check process
    status and connectivity, then Stop. No `winws2.exe` should remain owned by
    the application. A missing/quarantined executable must show a useful error.

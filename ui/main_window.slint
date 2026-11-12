@@ -6,13 +6,14 @@ import "assets/fonts/Geist-Bold.ttf";
 import "assets/fonts/GeistMono-Regular.ttf";
 import "assets/fonts/GeistMono-Medium.ttf";
 
-import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem } from "tokens.slint";
+import { ThemePalette, AppStatus, StrategyItem, LogLineItem, TestResultItem, MonitorTarget, TrafficSample, MonitorRound } from "tokens.slint";
 import { Palette } from "std-widgets.slint";
 import { I18n } from "i18n.slint";
 import { BrandMark } from "components/brand_mark.slint";
 import { StatusDot } from "components/status_dot.slint";
 import { HostsDialog } from "components/hosts_dialog.slint";
 import { TelegramPage } from "pages/telegram.slint";
+import { MonitorPage } from "pages/monitor.slint";
 import { AdminBanner } from "components/admin_banner.slint";
 import { UpdateBanner } from "components/update_banner.slint";
 import { AppButton } from "components/button.slint";
@@ -23,7 +24,7 @@ import { SettingsPage } from "pages/settings.slint";
 import { LogsPage } from "pages/logs.slint";
 import { AboutPage } from "pages/about.slint";
 
-export { StrategyItem, AppStatus, LogLineItem, TestResultItem, I18n }
+export { StrategyItem, AppStatus, LogLineItem, TestResultItem, MonitorTarget, TrafficSample, MonitorRound, I18n }
 
 // ── Sidebar nav row ──
 component NavItem inherits Rectangle {
@@ -184,8 +185,10 @@ export component MainWindow inherits Window {
     in-out property <bool> telegram_settings_open: false;
     changed current_page => {
         if (root.current_page != "telegram") { root.telegram_settings_open = false; }
+        if (root.current_page == "monitor") { root.monitor_sample(); if (root.monitor_auto && root.window_visible) { root.monitor_probe(); } }
     }
     in-out property <bool> telegram_running: false;
+    in-out property <int> telegram_connections: 0;
     in-out property <bool> telegram_busy: false;
     in-out property <string> telegram_error: "";
     in-out property <string> telegram_port: "1443";
@@ -204,6 +207,7 @@ export component MainWindow inherits Window {
     }
     callback telegram_start();
     callback telegram_stop();
+    callback telegram_reset(bool);
     callback telegram_save(string, string, string, bool, string, string);
     callback telegram_connect();
     callback set_telegram_visible(bool);
@@ -217,6 +221,37 @@ export component MainWindow inherits Window {
     in-out property <string> strategies_query: "";
     in-out property <[LogLineItem]> log_lines: [];
     in-out property <string> log_text: "";
+    in-out property <[string]> monitor_interfaces: [];
+    in-out property <string> monitor_interface: "";
+    in-out property <string> monitor_ip: "";
+    in-out property <string> monitor_rx: "—";
+    in-out property <string> monitor_tx: "—";
+    in-out property <string> monitor_rx_total: "—";
+    in-out property <string> monitor_tx_total: "—";
+    in-out property <int> monitor_interface_errors: 0;
+    in-out property <[TrafficSample]> monitor_history: [];
+    in-out property <float> monitor_scale: 1;
+    in-out property <[MonitorRound]> monitor_rounds: [];
+    in-out property <[MonitorTarget]> monitor_targets: [
+        { name: "YouTube", host: "www.youtube.com", state: "", latency: 0, jitter: 0, loss: 0, successes: 0, detail: "", samples: [0, 0, 0] },
+        { name: "Discord", host: "discord.com", state: "", latency: 0, jitter: 0, loss: 0, successes: 0, detail: "", samples: [0, 0, 0] },
+        { name: "Telegram", host: "web.telegram.org", state: "", latency: 0, jitter: 0, loss: 0, successes: 0, detail: "", samples: [0, 0, 0] },
+        { name: "Google", host: "www.google.com", state: "", latency: 0, jitter: 0, loss: 0, successes: 0, detail: "", samples: [0, 0, 0] },
+        { name: "Cloudflare", host: "www.cloudflare.com", state: "", latency: 0, jitter: 0, loss: 0, successes: 0, detail: "", samples: [0, 0, 0] },
+    ];
+    in-out property <bool> monitor_checking: false;
+    in-out property <bool> monitor_auto: false;
+    changed monitor_auto => { if (root.monitor_auto && root.current_page == "monitor" && root.window_visible) { root.monitor_probe(); } }
+    in-out property <int> monitor_passed: 0;
+    in-out property <int> monitor_latency: 0;
+    in-out property <int> monitor_loss: 0;
+    in-out property <string> monitor_checked_at: "";
+    in-out property <string> monitor_checked_context: "";
+    out property <string> monitor_context: root.status_running_mode + ":" + root.status_winws_pid + ":" + root.status_active_strategy;
+    in-out property <string> monitor_sampled_at: "";
+    callback monitor_probe();
+    callback monitor_sample();
+    callback monitor_select_interface(string);
     // Keep log controls and the backend filter aligned across page navigation.
     in-out property <string> logs_query: "";
     in-out property <string> logs_level: "ALL";
@@ -246,8 +281,6 @@ export component MainWindow inherits Window {
     in-out property <StrategyItem> selected_item;
     in-out property <StrategyItem> active_item;
 
-    // ── Dashboard mode (simple one-button dial vs. full dashboard) ──
-    in-out property <string> ui_mode: "simple";   // "simple" | "advanced"
     // The last simple-mode auto-engage run failed to find a working strategy
     // (distinct from a user cancel) — flips the dial to its red error state.
     in-out property <bool> simple_failed: false;
@@ -322,6 +355,16 @@ export component MainWindow inherits Window {
         running: root.running && root.window_visible;
         triggered => { root.uptime += 1; }
     }
+    Timer {
+        interval: 3s;
+        running: root.current_page == "monitor" && root.window_visible;
+        triggered => { root.monitor_sample(); }
+    }
+    Timer {
+        interval: 15s;
+        running: root.current_page == "monitor" && root.window_visible && root.monitor_auto;
+        triggered => { root.monitor_probe(); }
+    }
 
     // ── Callbacks to Rust ──
     callback start_clicked(string);
@@ -331,8 +374,6 @@ export component MainWindow inherits Window {
     // Simple-mode dial: auto-pick a working strategy / cancel that run.
     callback auto_engage_clicked();
     callback cancel_engage_clicked();
-    // Persist the dashboard mode ("simple" | "advanced").
-    callback set_ui_mode(string);
     callback strategy_selected(string);
     callback install_clicked();
     callback check_update_clicked();
@@ -475,6 +516,12 @@ export component MainWindow inherits Window {
                         icon: @image-url("../assets/icons/rocket.svg");
                         active: root.current_page == "tester";
                         clicked => { root.current_page = "tester"; }
+                    }
+                    NavItem {
+                        label: I18n.t(I18n.lang, "monitor.title");
+                        icon: @image-url("../assets/icons/monitor.svg");
+                        active: root.current_page == "monitor";
+                        clicked => { root.current_page = "monitor"; }
                     }
                     NavItem {
                         label: I18n.t(I18n.lang, "nav.logs");
@@ -643,8 +690,6 @@ export component MainWindow inherits Window {
             if root.current_page == "home" : Fade {
                 HomePage {
                     width: 100%; height: 100%;
-                    ui_mode: root.ui_mode;
-                    mode_changed(mode) => { root.ui_mode = mode; root.set_ui_mode(mode); }
                     show_core_tuning: !root.supports_engine_selection || root.engine_mode == "zapret1";
                     game_filter <=> root.game_filter;
                     ipset_mode <=> root.ipset_mode;
@@ -692,7 +737,7 @@ export component MainWindow inherits Window {
                     stop_clicked => { root.core_error = ""; root.pending_op = "stop"; root.is_busy = true; root.stop_clicked(); }
                     install_clicked => {
                         root.core_error = ""; root.pending_op = "install"; root.is_busy = true;
-                        if root.ui_mode == "simple" { root.install_and_engage(); } else { root.install_clicked(); }
+                        root.install_clicked();
                     }
                     check_update_clicked => { root.check_update_clicked(); }
                     update_clicked => { root.core_error = ""; root.is_busy = true; root.update_clicked(); }
@@ -749,6 +794,45 @@ export component MainWindow inherits Window {
                 }
             }
 
+            if root.current_page == "monitor" : Fade {
+                MonitorPage {
+                    status: root.status;
+                    running: root.running;
+                    engine: !root.supports_engine_selection ? "utunws" : root.status_active_engine == "" ? root.engine_mode : root.status_active_engine;
+                    strategy: root.active_item.display_name;
+                    interfaces: root.monitor_interfaces;
+                    interface <=> root.monitor_interface;
+                    ip: root.monitor_ip;
+                    rx: root.monitor_rx;
+                    tx: root.monitor_tx;
+                    rx-total: root.monitor_rx_total;
+                    tx-total: root.monitor_tx_total;
+                    interface-errors: root.monitor_interface_errors;
+                    history: root.monitor_history;
+                    scale: root.monitor_scale;
+                    rounds: root.monitor_rounds;
+                    auto <=> root.monitor_auto;
+                    passed: root.monitor_passed;
+                    latency: root.monitor_latency;
+                    loss: root.monitor_loss;
+                    targets: root.monitor_targets;
+                    checking: root.monitor_checking;
+                    checked-at: root.monitor_checked_at;
+                    checks-stale: root.monitor_checked_at != "" && root.monitor_checked_context != root.monitor_context;
+                    sampled-at: root.monitor_sampled_at;
+                    game-filter: root.game_filter;
+                    supports-game-filter: root.supports_engine_selection && root.engine_mode == "zapret1";
+                    ipset-mode: root.ipset_mode;
+                    ipset-lines: root.ipset_lines;
+                    telegram-visible: root.show_telegram_proxy;
+                    telegram-running: root.telegram_running;
+                    telegram-connections: root.telegram_connections;
+                    telegram-error: root.telegram_error;
+                    probe => { root.monitor_probe(); }
+                    select-interface(value) => { root.monitor_select_interface(value); }
+                    navigate(page) => { root.current_page = page; }
+                }
+            }
             if root.current_page == "telegram" && root.show_telegram_proxy : Fade {
                 TelegramPage {
                     settings-open <=> root.telegram_settings_open;
@@ -770,6 +854,11 @@ export component MainWindow inherits Window {
                         root.telegram_busy = true;
                         root.telegram_error = "";
                         root.telegram_save(p, s, d, f, t, l);
+                    }
+                    reset-clicked(all) => {
+                        root.telegram_busy = true;
+                        root.telegram_error = "";
+                        root.telegram_reset(all);
                     }
                 }
             }

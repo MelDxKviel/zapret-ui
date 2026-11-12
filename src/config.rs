@@ -27,32 +27,6 @@ impl Theme {
     }
 }
 
-/// Dashboard presentation mode. `Simple` shows the one-button power dial that
-/// auto-picks a working strategy; `Advanced` shows the full control dashboard.
-/// Defaults to `Simple` so a first-time user has nothing to configure.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UiMode {
-    #[default]
-    Simple,
-    Advanced,
-}
-
-impl UiMode {
-    /// Slug exchanged with the Slint UI ("simple" | "advanced").
-    pub fn slug(&self) -> &'static str {
-        match self {
-            Self::Simple => "simple",
-            Self::Advanced => "advanced",
-        }
-    }
-    pub fn from_slug(s: &str) -> Self {
-        match s {
-            "advanced" => Self::Advanced,
-            _ => Self::Simple,
-        }
-    }
-}
-
 /// UI language. Defaults to Russian, switchable on the Settings page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
@@ -122,12 +96,8 @@ pub struct AppConfig {
     /// the platform's runner. `#[serde(default)]` keeps older configs loadable.
     #[serde(default)]
     pub autoengage: bool,
-    /// Dashboard presentation mode (simple one-button dial vs. full dashboard).
-    /// `#[serde(default)]` keeps older configs loadable (defaulting to Simple).
-    #[serde(default)]
-    pub ui_mode: UiMode,
-    /// Simple-mode memory: the strategy a full auto-engage scan last proved
-    /// working. When set, the dial fast-starts it (and verifies in the
+    /// Automatic selection cache: the strategy a full auto-engage scan last proved
+    /// working. When set, the automatic action fast-starts it (and verifies in the
     /// background) instead of re-scanning; a failed background verify clears it,
     /// so the next engage runs a full scan. `None` until the first scan succeeds.
     #[serde(default)]
@@ -166,7 +136,6 @@ impl Default for AppConfig {
             favorites: Vec::new(),
             notifications_enabled: true,
             autoengage: false,
-            ui_mode: UiMode::default(),
             simple_last_good: None,
         }
     }

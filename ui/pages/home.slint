@@ -390,8 +390,6 @@ component FilterCard inherits Rectangle {
 }
 
 export component HomePage inherits Rectangle {
-    // Both modes share status, installation, scan and engine selection state.
-    in property <string> ui_mode: "advanced";
     in property <bool> show_core_tuning: true;
     in property <AppStatus> status;
     in property <StrategyItem> chosen_item;
@@ -422,7 +420,6 @@ export component HomePage inherits Rectangle {
     in property <string> core_error;
     in property <float> download_progress: 0.0;
 
-    callback mode_changed(string);
     callback game_filter_changed(string);
     callback ipset_mode_changed(string);
     callback update_ipset_clicked();
@@ -445,7 +442,6 @@ export component HomePage inherits Rectangle {
     callback open_tester_clicked();
     callback open_settings_clicked();
 
-    property <bool> full: root.ui_mode != "simple";
     property <bool> has-update: root.status.update_available;
     property <bool> ipset-stale: root.installed && root.ipset_mode == "loaded" && root.ipset_age_days >= 14;
     property <bool> scanning: root.scan_kind != "";
@@ -466,13 +462,12 @@ export component HomePage inherits Rectangle {
         I18n.t(I18n.lang, "connection.idle");
     property <string> state-hint:
         root.scanning ? I18n.t(I18n.lang, "connection.scan_hint") :
-        root.installing ? I18n.t(I18n.lang, root.full ? "home.installing_hint" : "connection.installing_hint") :
+        root.installing ? I18n.t(I18n.lang, "home.installing_hint") :
         root.working ? I18n.t(I18n.lang, "connection.busy_hint") :
         root.running ? I18n.t(I18n.lang, "connection.active_hint") :
         root.show-error ? I18n.t(I18n.lang, "connection.error_hint") :
-        !root.installed ? I18n.t(I18n.lang, root.full ? "home.hint_install" : "connection.uninstalled_hint") :
-        root.full ? I18n.t(I18n.lang, root.has_strategy ? "home.hint_engage" : "home.hint_pick") :
-        I18n.t(I18n.lang, "connection.idle_hint");
+        !root.installed ? I18n.t(I18n.lang, "home.hint_install") :
+        I18n.t(I18n.lang, root.has_strategy ? "home.hint_engage" : "home.hint_pick");
     property <color> state-color:
         root.scanning || root.working ? ThemePalette.info-text :
         root.running ? ThemePalette.accent-text :
@@ -489,7 +484,7 @@ export component HomePage inherits Rectangle {
         HorizontalLayout {
             Rectangle { horizontal-stretch: 1; }
             VerticalLayout {
-                width: min(sv.visible-width, root.full ? 1040px : 840px);
+                width: min(sv.visible-width, 1040px);
                 horizontal-stretch: 0;
                 padding-left: 28px;
                 padding-right: 28px;
@@ -504,32 +499,21 @@ export component HomePage inherits Rectangle {
                         horizontal-stretch: 1;
                         spacing: 6px;
                         Text {
-                            text: I18n.t(I18n.lang, root.full ? "home.title" : "connection.title");
+                            text: I18n.t(I18n.lang, "home.title");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-28;
                             font-weight: 600;
                             color: ThemePalette.text;
                         }
                         Text {
-                            text: I18n.t(I18n.lang, root.full ? "home.subtitle" : "connection.subtitle");
+                            text: I18n.t(I18n.lang, "home.subtitle");
                             font-family: ThemePalette.font-sans;
                             font-size: ThemePalette.fs-13;
                             color: ThemePalette.text-3;
                             wrap: word-wrap;
                         }
                     }
-                    VerticalLayout {
-                        horizontal-stretch: 0;
-                        alignment: start;
-                        Segmented {
-                            selected: root.ui_mode;
-                            options: [
-                                { value: "simple", label: I18n.t(I18n.lang, "mode.simple") },
-                                { value: "advanced", label: I18n.t(I18n.lang, "mode.advanced") },
-                            ];
-                            changed(mode) => { root.mode_changed(mode); }
-                        }
-                    }
+
                 }
 
                 connection-card := Rectangle {
@@ -678,7 +662,7 @@ export component HomePage inherits Rectangle {
                                     color: ThemePalette.text-3;
                                 }
                                 Text {
-                                    text: root.has_strategy ? root.chosen_item.display_name : I18n.t(I18n.lang, root.full ? "home.no_strategy" : "connection.no_strategy");
+                                    text: root.has_strategy ? root.chosen_item.display_name : I18n.t(I18n.lang, "home.no_strategy");
                                     font-family: ThemePalette.font-sans;
                                     font-size: ThemePalette.fs-14;
                                     font-weight: 500;
@@ -732,7 +716,7 @@ export component HomePage inherits Rectangle {
                         HorizontalLayout {
                             spacing: 12px;
                             AppButton {
-                                width: root.full && !root.scanning ? (connection-card.width - 60px) / 2 : connection-card.width - 48px;
+                                width: !root.scanning ? (connection-card.width - 60px) / 2 : connection-card.width - 48px;
                                 height: 48px;
                                 size: "lg";
                                 variant: root.scanning || root.running ? "default" : "primary";
@@ -742,12 +726,11 @@ export component HomePage inherits Rectangle {
                                     : root.pending_op == "start" ? I18n.t(I18n.lang, "connection.starting")
                                     : root.working ? I18n.t(I18n.lang, "connection.busy")
                                     : root.running ? I18n.t(I18n.lang, "connection.stop")
-                                    : !root.installed ? I18n.t(I18n.lang, root.full ? "home.btn_install" : "connection.install_connect")
-                                    : root.full ? I18n.t(I18n.lang, root.has_strategy ? "connection.manual_start" : "connection.choose_strategy")
-                                    : I18n.t(I18n.lang, "connection.connect");
+                                    : !root.installed ? I18n.t(I18n.lang, "home.btn_install")
+                                    : I18n.t(I18n.lang, root.has_strategy ? "connection.manual_start" : "connection.choose_strategy");
                                 icon: root.scanning || root.running ? @image-url("../../assets/icons/stop.svg")
                                     : !root.installed ? @image-url("../../assets/icons/download.svg")
-                                    : root.full && !root.has_strategy ? @image-url("../../assets/icons/arrow-right.svg")
+                                    : !root.has_strategy ? @image-url("../../assets/icons/arrow-right.svg")
                                     : @image-url("../../assets/icons/play.svg");
                                 enabled: root.scanning || !root.working;
                                 busy: root.working && !root.scanning;
@@ -755,12 +738,11 @@ export component HomePage inherits Rectangle {
                                     if root.scanning { root.cancel_scan_clicked(); }
                                     else if root.running { root.stop_clicked(); }
                                     else if !root.installed { root.install_clicked(); }
-                                    else if root.full && !root.has_strategy { root.pick_strategy_clicked(); }
-                                    else if root.full { root.start_clicked(); }
-                                    else { root.engage_clicked(); }
+                                    else if !root.has_strategy { root.pick_strategy_clicked(); }
+                                    else { root.start_clicked(); }
                                 }
                             }
-                            if root.full && !root.scanning : AppButton {
+                            if !root.scanning : AppButton {
                                 width: (connection-card.width - 60px) / 2;
                                 height: 48px;
                                 size: "lg";
@@ -771,17 +753,8 @@ export component HomePage inherits Rectangle {
                             }
                         }
 
-                        if !root.full && !root.scanning && !root.running && root.installed : HorizontalLayout {
-                            alignment: center;
-                            AppButton {
-                                text: I18n.t(I18n.lang, "connection.manual_start");
-                                size: "sm";
-                                variant: "ghost";
-                                enabled: root.has_strategy && !root.working;
-                                clicked => { root.start_clicked(); }
-                            }
-                        }
-                        if root.full : HorizontalLayout {
+
+                        HorizontalLayout {
                             height: 52px;
                             Stat {
                                 label: I18n.t(I18n.lang, "home.uptime");
@@ -801,7 +774,7 @@ export component HomePage inherits Rectangle {
                     }
                 }
 
-                if root.full : VerticalLayout {
+                VerticalLayout {
                     spacing: 0px;
                     // Version metadata is secondary to the bypass action.
                     Rectangle {
@@ -1065,7 +1038,7 @@ export component HomePage inherits Rectangle {
                         clicked => { root.open_settings_clicked(); }
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    if root.full : AppButton {
+                    AppButton {
                         text: I18n.t(I18n.lang, "home.refresh_status");
                         icon: @image-url("../../assets/icons/refresh.svg");
                         variant: "ghost";

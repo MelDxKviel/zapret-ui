@@ -3,7 +3,10 @@
 use std::rc::Rc;
 
 use slint::{ComponentHandle, Model};
-use zapret_ui::app::{I18n, LogLineItem, MainWindow, StrategyItem, TestResultItem};
+use zapret_ui::app::{
+    I18n, LogLineItem, MainWindow, MonitorRound, MonitorTarget, StrategyItem, TestResultItem,
+    TrafficSample,
+};
 use zapret_ui::contracts::*;
 use zapret_ui::ports::*;
 
@@ -379,6 +382,146 @@ fn main() -> anyhow::Result<()> {
     // Telegram preview is entirely local mock state: no socket, crypto or config.
     {
         let weak = ui.as_weak();
+        ui.on_telegram_reset(move |all| {
+            let weak = weak.clone();
+            slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+            if let Some(ui) = weak.upgrade() {
+                if all {
+                    let defaults = TelegramProxySettings::default();
+                    ui.set_telegram_port(defaults.port.to_string().into());
+                    ui.set_telegram_dc_overrides(defaults.dc_overrides.into());
+                    ui.set_telegram_fallback(defaults.tcp_fallback);
+                    ui.set_telegram_timeout(defaults.connect_timeout_secs.to_string().into());
+                    ui.set_telegram_limit(defaults.max_connections.to_string().into());
+                    ui.set_telegram_autostart(false);
+                }
+                // Fixed preview key. No randomness, persistence or listener.
+                ui.set_telegram_secret("ffeeddccbbaa99887766554433221100".into());
+                ui.set_telegram_link(format!("tg://proxy?server=127.0.0.1&port={}&secret=ddffeeddccbbaa99887766554433221100", ui.get_telegram_port()).into());
+                ui.set_telegram_busy(false);
+            }
+            });
+        });
+    }
+    ui.on_monitor_sample(|| {});
+    ui.set_monitor_interfaces(
+        Rc::new(slint::VecModel::from(vec![
+            "Wi-Fi".into(),
+            "Ethernet".into(),
+        ]))
+        .into(),
+    );
+    ui.set_monitor_interface("Wi-Fi".into());
+    ui.set_monitor_ip("192.168.1.42".into());
+    ui.set_monitor_rx("8.42".into());
+    ui.set_monitor_tx("1.37".into());
+    ui.set_monitor_rx_total("1.24 GiB".into());
+    ui.set_monitor_tx_total("238.4 MiB".into());
+    ui.set_monitor_sampled_at("14:32:05".into());
+    ui.set_monitor_scale(20.0);
+    let samples = [
+        3.2, 5.4, 4.1, 7.5, 11.0, 8.2, 6.4, 12.5, 17.8, 9.6, 7.4, 11.2, 6.8, 8.42,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, rx)| TrafficSample {
+        rx,
+        tx: 0.4 + (i % 5) as f32 * 0.45,
+        age: (13 - i) as f32 * 3.0,
+    })
+    .collect::<Vec<_>>();
+    ui.set_monitor_history(Rc::new(slint::VecModel::from(samples)).into());
+    {
+        let weak = ui.as_weak();
+        ui.on_monitor_select_interface(move |name| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_monitor_interface(name);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_monitor_probe(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            if ui.get_monitor_checking() {
+                return;
+            }
+            ui.set_monitor_checking(true);
+            let weak = weak.clone();
+            // Settle the mock round before the snapshot's scroll hook runs.
+            slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+                if let Some(ui) = weak.upgrade() {
+                    let failed = std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("error");
+                    let targets = [
+                        ("YouTube", "www.youtube.com", 84),
+                        ("Discord", "discord.com", 112),
+                        ("Telegram", "web.telegram.org", 96),
+                        ("Google", "www.google.com", 37),
+                        ("Cloudflare", "www.cloudflare.com", 46),
+                    ]
+                    .map(|(name, host, latency)| {
+                        let successes = if failed && name == "Telegram" {
+                            0
+                        } else if failed && name == "Discord" {
+                            2
+                        } else {
+                            3
+                        };
+                        MonitorTarget {
+                            name: name.into(),
+                            host: host.into(),
+                            state: if successes == 0 {
+                                "error"
+                            } else if successes < 3 {
+                                "partial"
+                            } else {
+                                "ok"
+                            }
+                            .into(),
+                            latency: if successes == 0 { 0 } else { latency },
+                            jitter: 14,
+                            successes,
+                            loss: (3 - successes) * 100 / 3,
+                            detail: if successes < 3 { "monitor.timeout" } else { "" }.into(),
+                            samples: Rc::new(slint::VecModel::from(if successes == 0 {
+                                vec![-1, -1, -1]
+                            } else if successes == 2 {
+                                vec![1, -1, 1]
+                            } else {
+                                vec![1, 1, 1]
+                            }))
+                            .into(),
+                        }
+                    });
+                    ui.set_monitor_targets(
+                        Rc::new(slint::VecModel::from(Vec::from(targets))).into(),
+                    );
+                    ui.set_monitor_checking(false);
+                    ui.set_monitor_checked_at("14:32:08".into());
+                    ui.set_monitor_checked_context(ui.get_monitor_context());
+                    ui.set_monitor_passed(if failed { 3 } else { 5 });
+                    ui.set_monitor_latency(75);
+                    ui.set_monitor_loss(if failed { 26 } else { 0 });
+                    let history = [
+                        ("14:32:08", if failed { 11 } else { 15 }),
+                        ("14:31:53", 14),
+                        ("14:31:38", 15),
+                    ]
+                    .map(|(time, passed)| MonitorRound {
+                        time: time.into(),
+                        passed,
+                        total: 15,
+                        latency: 75,
+                    });
+                    ui.set_monitor_rounds(
+                        Rc::new(slint::VecModel::from(Vec::from(history))).into(),
+                    );
+                }
+            });
+        });
+    }
+    {
+        let weak = ui.as_weak();
         ui.on_telegram_start(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_telegram_running(true);
@@ -498,10 +641,7 @@ fn main() -> anyhow::Result<()> {
             });
         });
     }
-    // Simple-mode dial (mock): the default dashboard mode. Simulate the
-    // auto-engage flow (connecting → active) so the dial states are previewable.
-    ui.set_ui_mode("simple".into());
-    ui.on_set_ui_mode(|m| println!("UI: Set ui mode: {}", m));
+    // Automatic strategy selection (mock), available on the full dashboard.
     {
         let ui_weak = ui.as_weak();
         ui.on_auto_engage_clicked(move || {
@@ -808,7 +948,7 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Admin gating preview. Elevated by default so the simple-mode dial shows
+    // Admin gating preview. Elevated by default so the automatic action shows
     // its happy path (off → connecting → active); flip to `false` to preview the
     // admin banner and the dial's "needs administrator" error state.
     ui.set_is_admin(true);
@@ -939,11 +1079,7 @@ fn main() -> anyhow::Result<()> {
     if let Ok(lang) = std::env::var("ZAPRET_UI_PREVIEW_LANG") {
         ui.global::<I18n>().set_lang(lang.into());
     }
-    if let Ok(mode) = std::env::var("ZAPRET_UI_PREVIEW_MODE") {
-        if matches!(mode.as_str(), "simple" | "advanced") {
-            ui.set_ui_mode(mode.into());
-        }
-    }
+
     if let Ok(id) = std::env::var("ZAPRET_UI_PREVIEW_SELECTED") {
         if let Some(strategy) = MockCatalog.by_id(&id) {
             let (pretty, alt) = zapret_ui::contracts::split_alt(&strategy.id);
@@ -1030,8 +1166,53 @@ fn main() -> anyhow::Result<()> {
         });
         if page.starts_with("telegram") {
             ui.set_telegram_settings_open(page == "telegram-settings");
-            if page == "telegram-active" {
+            if page == "telegram-active"
+                || std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("active")
+            {
                 ui.invoke_telegram_start();
+            }
+            if std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("starting") {
+                ui.set_telegram_busy(true);
+            }
+            if std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("error") {
+                ui.set_telegram_running(true);
+                ui.set_telegram_error("telegram.error_upstream".into());
+            }
+        }
+        if page == "monitor"
+            && matches!(
+                std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref(),
+                Ok("active" | "error")
+            )
+        {
+            ui.invoke_monitor_probe();
+            ui.set_telegram_running(true);
+            ui.set_telegram_connections(6);
+        }
+        if page == "monitor"
+            && std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("checking")
+        {
+            ui.set_monitor_checking(true);
+        }
+        if page == "monitor" {
+            match std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() {
+                Ok("empty") => {
+                    ui.set_monitor_history(Default::default());
+                    ui.set_monitor_rx("—".into());
+                    ui.set_monitor_tx("—".into());
+                    ui.set_monitor_sampled_at("".into());
+                }
+                Ok("single") => {
+                    ui.set_monitor_history(
+                        Rc::new(slint::VecModel::from(vec![TrafficSample {
+                            rx: 8.42,
+                            tx: 1.37,
+                            age: 0.0,
+                        }]))
+                        .into(),
+                    );
+                }
+                _ => {}
             }
         }
         if page == "tester" && std::env::var("ZAPRET_UI_PREVIEW_AUTO").as_deref() != Ok("true") {
@@ -1052,7 +1233,13 @@ fn main() -> anyhow::Result<()> {
     // Optional renderer snapshot for reproducible visual QA, no desktop capture.
     if let Ok(path) = std::env::var("ZAPRET_UI_PREVIEW_SNAPSHOT") {
         // Exercise the actual wheel event path when reviewing clipped forms.
-        if std::env::var("ZAPRET_UI_PREVIEW_SCROLL").as_deref() == Ok("bottom") {
+        let scroll = std::env::var("ZAPRET_UI_PREVIEW_SCROLL").unwrap_or_default();
+        if matches!(scroll.as_str(), "bottom" | "services") {
+            let delta_y = if scroll == "services" {
+                -430.0
+            } else {
+                -10000.0
+            };
             let weak = ui.as_weak();
             slint::Timer::single_shot(std::time::Duration::from_millis(400), move || {
                 if let Some(ui) = weak.upgrade() {
@@ -1065,7 +1252,7 @@ fn main() -> anyhow::Result<()> {
                             size.height as f32 / scale / 2.0,
                         ),
                         delta_x: 0.0,
-                        delta_y: -10000.0,
+                        delta_y,
                     };
                     if let Err(e) = window.try_dispatch_event(event) {
                         eprintln!("Preview scroll failed: {e}");

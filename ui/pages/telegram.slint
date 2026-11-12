@@ -3,6 +3,7 @@ import { I18n } from "../i18n.slint";
 import { AppButton } from "../components/button.slint";
 import { AppInput } from "../components/input.slint";
 import { AppSwitch } from "../components/switch.slint";
+import { Icon } from "../components/icon.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component Caption inherits Text {
@@ -35,9 +36,12 @@ export component TelegramPage inherits Rectangle {
     callback connect-clicked();
     callback copy-clicked();
     callback save-clicked(string, string, string, bool, string, string);
+    callback reset-clicked(bool);
 
     in-out property <bool> settings-open: false;
     property <bool> saving: false;
+    property <bool> resetting: false;
+    property <string> reset-kind: "";
     property <string> draft-port;
     property <string> draft-secret;
     property <string> draft-dc;
@@ -45,6 +49,10 @@ export component TelegramPage inherits Rectangle {
     property <string> draft-timeout;
     property <string> draft-limit;
     changed busy => {
+        if (!root.busy && root.resetting) {
+            root.resetting = false;
+            if (root.error == "") { root.load-draft(); root.reset-kind = ""; }
+        }
         if (!root.busy && root.saving) {
             root.saving = false;
             if (root.error == "") { root.settings-open = false; }
@@ -106,6 +114,30 @@ export component TelegramPage inherits Rectangle {
                     max-width: 600px;
                     spacing: 18px;
                     alignment: root.settings-open ? start : center;
+                    if root.error != "" : Rectangle {
+                        vertical-stretch: 0;
+                        background: ThemePalette.danger-soft;
+                        border-width: 1px;
+                        border-color: ThemePalette.danger-line;
+                        border-radius: ThemePalette.r-10;
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+                            Icon {
+                                source: @image-url("../../assets/icons/warning.svg");
+                                size: 16px;
+                                tint: ThemePalette.danger-text;
+                            }
+                            Caption {
+                                // Measure wrapped text at its actual row width;
+                                // otherwise the alert can keep a one-line height.
+                                width: min(sv.visible-width - 8px, 600px) - 54px;
+                                text: I18n.t(I18n.lang, root.error);
+                                color: ThemePalette.danger-text;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
                     if !root.settings-open : Rectangle {
                         vertical-stretch: 0;
                         background: ThemePalette.surface;
@@ -285,39 +317,68 @@ export component TelegramPage inherits Rectangle {
                                 VerticalLayout {
                                     spacing: 5px;
                                     horizontal-stretch: 1;
+                                    min-width: 0px;
                                     Label { text: I18n.t(I18n.lang, "telegram.fallback"); }
                                     Caption { text: I18n.t(I18n.lang, "telegram.fallback_hint"); }
                                 }
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
+                                    width: 38px;
                                     AppSwitch { checked <=> root.draft-fallback; enabled: !root.running && !root.busy; }
+                                }
+                            }
+                            Rectangle { height: 1px; background: ThemePalette.divider; }
+                            VerticalLayout {
+                                spacing: 12px;
+                                Label { text: I18n.t(I18n.lang, "telegram.reset_title"); }
+                                Caption { text: I18n.t(I18n.lang, "telegram.reset_hint"); }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+                                    AppButton {
+                                        text: I18n.t(I18n.lang, "telegram.new_secret");
+                                        icon: @image-url("../../assets/icons/refresh.svg");
+                                        enabled: !root.running && !root.busy;
+                                        clicked => { root.reset-kind = "secret"; }
+                                    }
+                                }
+                                AppButton {
+                                    text: I18n.t(I18n.lang, "telegram.reset_all");
+                                    icon: @image-url("../../assets/icons/trash.svg");
+                                    enabled: !root.running && !root.busy;
+                                    clicked => { root.reset-kind = "all"; }
+                                }
+                                if root.reset-kind != "" : VerticalLayout {
+                                    spacing: 12px;
+                                    Caption {
+                                        text: I18n.t(I18n.lang, root.reset-kind == "all" ? "telegram.confirm_reset" : "telegram.confirm_secret");
+                                        color: ThemePalette.warning-text;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        alignment: start;
+                                        AppButton {
+                                            text: I18n.t(I18n.lang, "telegram.confirm");
+                                            variant: "telegram";
+                                            enabled: !root.running;
+                                            busy: root.busy;
+                                            clicked => {
+                                                root.resetting = true;
+                                                root.reset-clicked(root.reset-kind == "all");
+                                            }
+                                        }
+                                        AppButton {
+                                            text: I18n.t(I18n.lang, "telegram.cancel");
+                                            enabled: !root.busy;
+                                            clicked => { root.reset-kind = ""; }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    if root.error != "" : Rectangle {
-                        vertical-stretch: 0;
-                        background: ThemePalette.danger-soft;
-                        border-width: 1px;
-                        border-color: ThemePalette.danger-line;
-                        border-radius: ThemePalette.r-10;
-                        HorizontalLayout {
-                            padding: 14px;
-                            spacing: 10px;
-                            Image {
-                                source: @image-url("../../assets/icons/warning.svg");
-                                width: 16px;
-                                height: 16px;
-                                colorize: ThemePalette.danger-text;
-                            }
-                            Caption {
-                                text: I18n.t(I18n.lang, root.error);
-                                color: ThemePalette.danger-text;
-                                horizontal-stretch: 1;
-                            }
-                        }
-                    }
+
                 }
             }
         }
