@@ -9,7 +9,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const REPO: &str = "https://github.com/bol-van/zapret2";
-const MAX_DOWNLOAD: u64 = 128 * 1024 * 1024;
+const WINDOWS_SOURCE: &str =
+    "https://raw.githubusercontent.com/bol-van/zapret-win-bundle/master/zapret-winws";
+const MAX_DOWNLOAD: u64 = 32 * 1024 * 1024;
+const MAX_BINARY: u64 = 16 * 1024 * 1024;
 const MAX_EXTRACTED: u64 = 512 * 1024 * 1024;
 const MAX_ENTRIES: usize = 20_000;
 const BINARIES: &[&str] = &[
@@ -22,8 +25,17 @@ const BINARIES: &[&str] = &[
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Release {
     tag: String,
-    archive_sha256: String,
     manifest_sha256: String,
+    source_commit: String,
+}
+
+#[derive(serde::Serialize)]
+struct InstalledRelease {
+    #[serde(flatten)]
+    release: Release,
+    source_archive_sha256: String,
+    windows_source: &'static str,
+    windows_sha256: HashMap<String, String>,
 }
 
 pub struct Zapret2Installer {
@@ -82,15 +94,15 @@ impl Zapret2Installer {
             .take(5)
         {
             let resolved = async {
-                let html = self
-                    .text(format!("{REPO}/releases/expanded_assets/{tag}"))
-                    .await?;
-                let archive = format!("zapret2-{tag}.zip");
+                let (html, page) = tokio::try_join!(
+                    self.text(format!("{REPO}/releases/expanded_assets/{tag}")),
+                    self.text(format!("{REPO}/releases/tag/{tag}")),
+                )?;
                 Ok::<_, anyhow::Error>(Release {
-                    archive_sha256: asset_digest(&html, &tag, &archive)
-                        .context("Missing published SHA-256 for zapret2 ZIP")?,
                     manifest_sha256: asset_digest(&html, &tag, "sha256sum.txt")
                         .context("Missing published SHA-256 for zapret2 checksum manifest")?,
+                    source_commit: release_commit(&page)
+                        .context("Missing unambiguous source commit for zapret2 release")?,
                     tag,
                 })
             }
@@ -174,26 +186,50 @@ impl Installer for Zapret2Installer {
         verify_digest(manifest.as_bytes(), &release.manifest_sha256)
             .context("zapret2 checksum manifest integrity failure")?;
         let checksums = parse_manifest(&manifest)?;
-        let zip_path = work.path().join("release.zip");
-        let actual_hash = crate::download::to_file(
+        // The all-platform release ZIP can be blocked before we can open it,
+        // even when the four required Windows files scan clean separately.
+        // Fetch source-only data at the release's immutable commit, then the
+        // official Windows files. Every binary must match the release manifest;
+        // a newer/different bundle is never accepted as an unchecked fallback.
+        let zip_path = work.path().join("source.zip");
+        let source_archive_sha256 = crate::download::to_file(
             self.client
                 .get(format!(
-                    "{REPO}/releases/download/{0}/zapret2-{0}.zip",
-                    release.tag
+                    "https://codeload.github.com/bol-van/zapret2/zip/{}",
+                    release.source_commit
                 ))
                 .header(reqwest::header::USER_AGENT, "zapret-ui")
                 .timeout(Duration::from_secs(300)),
             &zip_path,
             MAX_DOWNLOAD,
-            |bytes, total| on_progress(InstallStage::Downloading, bytes, total),
+            |bytes, _| on_progress(InstallStage::Downloading, bytes, None),
         )
         .await
-        .context("Cannot download official zapret2 ZIP")?;
-        if !actual_hash.eq_ignore_ascii_case(&release.archive_sha256) {
-            bail!("zapret2 ZIP SHA-256 mismatch; existing installation was not changed");
+        .context("Cannot download official zapret2 source archive")?;
+        let mut downloaded = tokio::fs::metadata(&zip_path).await?.len();
+        let staged = work.path().join("staged");
+        tokio::fs::create_dir_all(staged.join("bin")).await?;
+        for binary in BINARIES {
+            let expected = binary_checksum(&checksums, &release.tag, binary)?;
+            let destination = staged.join("bin").join(binary);
+            let actual = crate::download::to_file(
+                self.client
+                    .get(format!("{WINDOWS_SOURCE}/{binary}"))
+                    .header(reqwest::header::USER_AGENT, "zapret-ui")
+                    .timeout(Duration::from_secs(60)),
+                &destination,
+                MAX_BINARY,
+                |bytes, _| on_progress(InstallStage::Downloading, downloaded + bytes, None),
+            )
+            .await
+            .with_context(|| format!("Cannot download official Windows runtime file {binary}"))?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                bail!("Official Windows bundle {binary} does not match zapret2 {}; existing installation was not changed", release.tag);
+            }
+            downloaded += tokio::fs::metadata(&destination).await?.len();
         }
         tracing::info!(
-            "Verified official zapret2 {} ZIP SHA-256 {actual_hash}",
+            "Downloaded official Windows-only zapret2 {} runtime; binary SHA-256 checks passed",
             release.tag
         );
         let install_dir = self.install_dir.clone();
@@ -201,9 +237,11 @@ impl Installer for Zapret2Installer {
             // The worker can outlive cancellation of its async caller. Keep
             // exclusive installation ownership until it finishes promotion.
             let _lock = _lock;
-            let staged = work.path().join("staged");
+            // Own the temporary directory until extraction and promotion finish.
+            let _work = work;
             on_progress(InstallStage::Extracting, 0, None);
-            extract_runtime(&zip_path, &staged, &release.tag, &checksums)?;
+            extract_sources(&zip_path, &staged, &release.source_commit)?;
+            let windows_sha256 = verify_windows_files(&staged, &release.tag, &checksums)?;
             super::catalog::write_defaults(&staged)?;
             if install_dir.exists() {
                 preserve_user_state(&install_dir, &staged)?;
@@ -211,7 +249,12 @@ impl Installer for Zapret2Installer {
             std::fs::write(staged.join("version.txt"), &release.tag)?;
             std::fs::write(
                 staged.join("release.json"),
-                serde_json::to_vec_pretty(&release)?,
+                serde_json::to_vec_pretty(&InstalledRelease {
+                    release,
+                    source_archive_sha256,
+                    windows_source: WINDOWS_SOURCE,
+                    windows_sha256,
+                })?,
             )?;
             on_progress(InstallStage::Verifying, 0, None);
             if !super::is_valid_install_dir(&staged) {
@@ -234,6 +277,20 @@ fn valid_tag(tag: &str) -> bool {
                 && v.split('.')
                     .all(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
         })
+}
+
+/// The exact release page identifies its source commit. Reject shortened,
+/// cross-repository or ambiguous links rather than guessing a moving branch.
+fn release_commit(html: &str) -> Option<String> {
+    let prefix = "href=\"/bol-van/zapret2/commit/";
+    let commits: HashSet<_> = html
+        .split(prefix)
+        .skip(1)
+        .filter_map(|tail| tail.split_once('"').map(|(commit, _)| commit))
+        .filter(|commit| commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .collect();
+    (commits.len() == 1).then(|| commits.into_iter().next().unwrap())
 }
 
 /// Read only the digest inside the exact asset's list row. A source-code ZIP,
@@ -289,12 +346,43 @@ fn digest_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn extract_runtime(
-    zip_path: &Path,
+fn binary_checksum<'a>(
+    checksums: &'a HashMap<String, String>,
+    tag: &str,
+    binary: &str,
+) -> Result<&'a str> {
+    checksums
+        .get(&format!("zapret2-{tag}/binaries/windows-x86_64/{binary}"))
+        .map(String::as_str)
+        .with_context(|| format!("Missing release SHA-256 for Windows runtime file {binary}"))
+}
+
+fn verify_windows_files(
     staged: &Path,
     tag: &str,
     checksums: &HashMap<String, String>,
-) -> Result<()> {
+) -> Result<HashMap<String, String>> {
+    let mut verified = HashMap::new();
+    for binary in BINARIES {
+        let path = staged.join("bin").join(binary);
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .with_context(|| format!("Cannot open Windows runtime file {}", path.display()))?
+            .take(MAX_BINARY + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_BINARY {
+            bail!("Windows runtime file {binary} exceeds size limit");
+        }
+        let expected = binary_checksum(checksums, tag, binary)?;
+        verify_digest(&bytes, expected)
+            .with_context(|| format!("zapret2 Windows runtime integrity failure: {binary}"))?;
+        verify_x64_pe(&path)?;
+        verified.insert((*binary).to_owned(), expected.to_owned());
+    }
+    Ok(verified)
+}
+
+fn extract_sources(zip_path: &Path, staged: &Path, commit: &str) -> Result<()> {
     let archive_file = std::fs::File::open(zip_path)
         .with_context(|| format!("Cannot open zapret2 archive {}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(archive_file)
@@ -302,7 +390,7 @@ fn extract_runtime(
     if archive.len() > MAX_ENTRIES {
         bail!("zapret2 ZIP has too many entries");
     }
-    let prefix = format!("zapret2-{tag}/");
+    let prefix = format!("zapret2-{commit}/");
     let mut size = 0u64;
     let mut paths = HashSet::new();
     for index in 0..archive.len() {
@@ -326,13 +414,7 @@ fn extract_runtime(
         let Some(relative) = entry.name().strip_prefix(&prefix) else {
             bail!("Unexpected zapret2 archive root");
         };
-        let target = if let Some(binary) = relative.strip_prefix("binaries/windows-x86_64/") {
-            if BINARIES.contains(&binary) {
-                Some(format!("bin/{binary}"))
-            } else {
-                None
-            }
-        } else if relative.starts_with("lua/")
+        let target = if relative.starts_with("lua/")
             || relative.starts_with("files/fake/")
             || matches!(relative, "LICENSE" | "COPYING" | "docs/LICENSE.txt")
         {
@@ -357,12 +439,6 @@ fn extract_runtime(
         if bytes.len() as u64 != entry.size() {
             bail!("zapret2 ZIP entry size mismatch");
         }
-        if target.starts_with("bin/") {
-            let digest = checksums
-                .get(entry.name())
-                .context("Missing Windows binary SHA-256")?;
-            verify_digest(&bytes, digest).context("zapret2 Windows binary integrity failure")?;
-        }
         let destination = staged.join(&target);
         std::fs::create_dir_all(destination.parent().context("Missing runtime parent")?)?;
         std::fs::write(&destination, &bytes).with_context(|| {
@@ -371,14 +447,11 @@ fn extract_runtime(
                 destination.display()
             )
         })?;
-        if target.starts_with("bin/") {
-            verify_x64_pe(&destination)?;
-        }
     }
-    if !super::is_valid_install_dir(staged) {
-        bail!(
-            "Official release does not contain the complete Windows x64 runtime and Lua libraries"
-        );
+    for required in ["lua/zapret-lib.lua", "lua/zapret-antidpi.lua"] {
+        if !paths.contains(required) {
+            bail!("Official source archive is missing required Lua libraries");
+        }
     }
     Ok(())
 }
@@ -668,6 +741,26 @@ mod tests {
         hashes
     }
 
+    fn fixture_runtime(zip: &Path, staged: &Path, tag: &str) {
+        std::fs::create_dir_all(staged.join("bin")).unwrap();
+        for binary in BINARIES {
+            std::fs::write(staged.join("bin").join(binary), pe()).unwrap();
+        }
+        extract_sources(zip, staged, tag).unwrap();
+    }
+
+    #[test]
+    fn source_commit_is_exact_and_unambiguous() {
+        let commit = "0123456789abcdef".repeat(2) + "01234567";
+        let link = format!("<a href=\"/bol-van/zapret2/commit/{commit}\">source</a>");
+        assert_eq!(release_commit(&link), Some(commit.clone()));
+        assert_eq!(release_commit(&(link.clone() + &link)), Some(commit));
+        assert!(release_commit(&link.replace("zapret2/commit", "other/commit")).is_none());
+        assert!(release_commit(&link.replace("01234567\"", "0123456\"")).is_none());
+        let other = link.replace("abcdef", "abcdee");
+        assert!(release_commit(&(link + &other)).is_none());
+    }
+
     #[test]
     fn release_hash_is_bound_to_exact_asset_row() {
         let digest = "a".repeat(64);
@@ -687,17 +780,64 @@ mod tests {
     }
 
     #[test]
-    fn official_layout_is_normalized_and_every_binary_must_match() {
+    fn source_and_windows_files_must_match_the_selected_release() {
         let dir = tempfile::tempdir().unwrap();
         let zip = dir.path().join("core.zip");
         let mut hashes = fixture_zip(&zip, "v1.0");
-        extract_runtime(&zip, &dir.path().join("valid"), "v1.0", &hashes).unwrap();
+        let staged = dir.path().join("valid");
+        fixture_runtime(&zip, &staged, "v1.0");
+        assert_eq!(
+            verify_windows_files(&staged, "v1.0", &hashes)
+                .unwrap()
+                .len(),
+            4
+        );
         assert!(super::super::is_valid_install_dir(
             &dir.path().join("valid")
         ));
+        assert!(extract_sources(&zip, &dir.path().join("wrong-source"), "v1.1").is_err());
+        assert!(verify_windows_files(&staged, "v1.1", &hashes).is_err());
         *hashes.values_mut().next().unwrap() = "0".repeat(64);
-        assert!(extract_runtime(&zip, &dir.path().join("invalid"), "v1.0", &hashes).is_err());
-        assert!(extract_runtime(&zip, &dir.path().join("wrong-tag"), "v1.1", &hashes).is_err());
+        assert!(verify_windows_files(&staged, "v1.0", &hashes).is_err());
+    }
+
+    #[test]
+    fn source_archive_cannot_replace_binaries_or_escape_runtime_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        for name in [
+            "lua/zapret-lib.lua",
+            "lua/zapret-antidpi.lua",
+            "bin/winws2.exe",
+            "binaries/windows-x86_64/winws2.exe",
+            "binaries/linux-x86_64/nfqws2",
+            "install.cmd",
+        ] {
+            zip.start_file(
+                format!("zapret2-test/{name}"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(b"untrusted fixture").unwrap();
+        }
+        zip.finish().unwrap();
+        let staged = dir.path().join("staged");
+        fixture_runtime(&path, &staged, "test");
+        assert_eq!(std::fs::read(staged.join("bin/winws2.exe")).unwrap(), pe());
+        assert!(!staged.join("binaries").exists());
+        assert!(!staged.join("install.cmd").exists());
+        let unsafe_path = dir.path().join("unsafe.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&unsafe_path).unwrap());
+        zip.start_file(
+            "zapret2-test/lua/../../escape",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"escape").unwrap();
+        zip.finish().unwrap();
+        assert!(extract_sources(&unsafe_path, &staged, "test").is_err());
+        assert!(!dir.path().join("escape").exists());
     }
 
     #[test]
@@ -756,10 +896,10 @@ mod tests {
         use std::os::windows::fs::OpenOptionsExt;
         let dir = tempfile::tempdir().unwrap();
         let zip = dir.path().join("core.zip");
-        let hashes = fixture_zip(&zip, "v1.0");
+        fixture_zip(&zip, "v1.0");
         let installed = dir.path().join("installed");
         let staged = prepare_work_dir(&installed).unwrap().join("staged");
-        extract_runtime(&zip, &staged, "v1.0", &hashes).unwrap();
+        fixture_runtime(&zip, &staged, "v1.0");
         std::fs::create_dir(&installed).unwrap();
         std::fs::write(installed.join("previous"), "previous core").unwrap();
         let lock = std::fs::OpenOptions::new()
@@ -812,8 +952,8 @@ mod tests {
         let temporary = tempfile::tempdir_in(&work_root).unwrap();
         let staged = temporary.path().join("staged");
         let zip = temporary.path().join("fixture.zip");
-        let hashes = fixture_zip(&zip, "v1.0");
-        extract_runtime(&zip, &staged, "v1.0", &hashes).unwrap();
+        fixture_zip(&zip, "v1.0");
+        fixture_runtime(&zip, &staged, "v1.0");
         let error = atomic_promote_with(&staged, &installed, |from, to| {
             if from == installed {
                 std::fs::rename(from, to)
@@ -825,7 +965,7 @@ mod tests {
             }
         })
         .unwrap_err();
-        assert!(error.to_string().contains("rollback failed"));
+        assert!(error.to_string().contains("rollback failed"), "{error:#}");
         drop(temporary);
         let backups: Vec<_> = std::fs::read_dir(&work_root)
             .unwrap()
@@ -843,13 +983,7 @@ mod tests {
     fn archive_and_runtime_open_errors_name_the_blocked_file() {
         let parent = tempfile::tempdir().unwrap();
         let archive = parent.path().join("missing.zip");
-        let error = extract_runtime(
-            &archive,
-            &parent.path().join("staged"),
-            "v1.0",
-            &HashMap::new(),
-        )
-        .unwrap_err();
+        let error = extract_sources(&archive, &parent.path().join("staged"), "v1.0").unwrap_err();
         assert!(error.to_string().contains("missing.zip"));
         assert!(error.to_string().contains("Cannot open zapret2 archive"));
         let error = verify_x64_pe(&parent.path().join("winws2.exe")).unwrap_err();
@@ -891,5 +1025,58 @@ mod tests {
         bytes[69] = 0x01;
         std::fs::write(&path, bytes).unwrap();
         assert!(verify_x64_pe(&path).is_err());
+    }
+
+    /// Explicit developer-machine check; never fetched or executed by normal CI.
+    #[tokio::test]
+    #[ignore = "downloads the official Windows runtime; requires explicit network opt-in"]
+    async fn live_windows_only_install_and_update() {
+        let temporary;
+        let parent = if let Some(path) = std::env::var_os("ZAPRET_UI_INSTALL_REVIEW_DIR") {
+            let path = PathBuf::from(path);
+            assert!(!path.exists(), "review directory must be new");
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        } else {
+            temporary = tempfile::tempdir().unwrap();
+            temporary.path().to_path_buf()
+        };
+        let installed = parent.join("zapret2");
+        let installer = Zapret2Installer::new(
+            installed.clone(),
+            reqwest::Client::builder()
+                .https_only(true)
+                .no_proxy()
+                .build()
+                .unwrap(),
+        );
+        let progress = || -> ProgressCb {
+            Box::new(|stage, _, _| {
+                if !matches!(stage, InstallStage::Downloading) {
+                    println!("Windows-only install: {stage:?}");
+                }
+            })
+        };
+        installer.install_or_update(progress()).await.unwrap();
+        assert!(installer.is_installed().await);
+        let release = installer.release().await.unwrap();
+        assert_eq!(
+            installer.installed_version().await.as_deref(),
+            Some(release.tag.as_str())
+        );
+        let user_file = installed.join("lists/list-general-user.txt");
+        std::fs::write(&user_file, "example.org\n").unwrap();
+        installer.install_or_update(progress()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(user_file).unwrap(), "example.org\n");
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(installed.join("release.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            record["source_commit"].as_str(),
+            Some(release.source_commit.as_str())
+        );
+        assert_eq!(record["windows_sha256"].as_object().unwrap().len(), 4);
+        assert!(!record.as_object().unwrap().contains_key("archive_sha256"));
+        println!("Verified install and update: {}", installed.display());
     }
 }

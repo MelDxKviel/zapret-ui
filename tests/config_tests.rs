@@ -22,6 +22,24 @@ fn retired_simple_dashboard_preference_keeps_other_saved_settings() {
 }
 
 #[test]
+fn telegram_relay_defaults_on_and_preserves_explicit_opt_out_and_custom_domains() {
+    let legacy_text = toml::to_string(&AppConfig::default())
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with("relay_enabled =") && !line.starts_with("relay_domains ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let legacy: AppConfig = toml::from_str(&legacy_text).unwrap();
+    assert!(legacy.telegram_proxy.relay_enabled);
+    assert!(legacy.telegram_proxy.relay_domains.is_empty());
+    let mut opted_out = legacy;
+    opted_out.telegram_proxy.relay_enabled = false;
+    opted_out.telegram_proxy.relay_domains = "relay.example.org".into();
+    let restored: AppConfig = toml::from_str(&toml::to_string(&opted_out).unwrap()).unwrap();
+    assert_eq!(restored, opted_out);
+}
+
+#[test]
 fn test_config_default() {
     let config = AppConfig::default();
     assert!(!config.zapret2_enabled);

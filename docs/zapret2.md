@@ -36,31 +36,39 @@ service explicitly for the newly selected preset if system startup is desired.
 The adapter uses [bol-van/zapret2 releases](https://github.com/bol-van/zapret2/releases),
 discovered through `releases.atom`, without the GitHub API. The Windows bundle
 linked by upstream is [bol-van/zapret-win-bundle](https://github.com/bol-van/zapret-win-bundle).
-That repository has no release assets. The zapret2 release ZIP itself contains
-the required x64 runtime, so the GUI downloads the official release directly
-instead of mixing a moving Windows bundle with unrelated Lua files.
+That repository has no release assets. The combined zapret2 ZIP includes other
+platforms and can be quarantined before Windows files can be extracted. The GUI
+instead downloads the four runtime files individually from the official Windows
+bundle and requires each to match the selected release's checksum manifest.
+Lua, fake data and licensing files come from a source-only codeload ZIP pinned
+to the full source commit linked by that exact release page. No other platform's
+compiled binaries, Cygwin helper programs or upstream startup scripts are installed.
 
 Distribution layout, source and published checksum metadata examined for
-release **v1.0.5.2** on 2026-10-08 (see the live-validation limits below):
+release **v1.0.7** on 2026-11-13 (see the live-validation limits below):
 
-| Upstream ZIP path | Installed path |
+| Upstream source | Installed path |
 | --- | --- |
-| `zapret2-<tag>/binaries/windows-x86_64/winws2.exe` | `bin/winws2.exe` |
-| `zapret2-<tag>/binaries/windows-x86_64/cygwin1.dll` | `bin/cygwin1.dll` |
-| `zapret2-<tag>/binaries/windows-x86_64/WinDivert.dll` | `bin/WinDivert.dll` |
-| `zapret2-<tag>/binaries/windows-x86_64/WinDivert64.sys` | `bin/WinDivert64.sys` |
-| `zapret2-<tag>/lua/*` | `lua/*` |
-| `zapret2-<tag>/files/fake/*` | `files/fake/*` |
+| `zapret-win-bundle/master/zapret-winws/winws2.exe` | `bin/winws2.exe` |
+| `zapret-win-bundle/master/zapret-winws/cygwin1.dll` | `bin/cygwin1.dll` |
+| `zapret-win-bundle/master/zapret-winws/WinDivert.dll` | `bin/WinDivert.dll` |
+| `zapret-win-bundle/master/zapret-winws/WinDivert64.sys` | `bin/WinDivert64.sys` |
+| `zapret2-<release-commit>/lua/*` | `lua/*` |
+| `zapret2-<release-commit>/files/fake/*` | `files/fake/*` |
 
-The [official build workflow](https://github.com/bol-van/zapret2/blob/v1.0.5.2/.github/workflows/build.yml)
+The [official build workflow](https://github.com/bol-van/zapret2/blob/v1.0.7/.github/workflows/build.yml)
 produces `zapret2-<tag>.zip` and `sha256sum.txt`. The latter covers binaries,
-including all four Windows runtime files, but does not cover Lua. Therefore the
-installer also requires GitHub's SHA-256 of the *entire release ZIP* and of the
-checksum manifest, published in that release's expanded asset list. A missing
-digest, checksum mismatch, missing dependency or non-x64 PE image prevents
-installation. This verifies the bytes delivered from the official HTTPS release;
-it is not a separate maintainer signature. A GitHub asset-page markup change can
-require an adapter update; there is no unchecked-download fallback.
+including all four Windows runtime files, but does not cover Lua. The installer
+requires GitHub's SHA-256 of the checksum manifest, published in that release's
+expanded asset list, then verifies each downloaded Windows file against its
+`zapret2-<tag>/binaries/windows-x86_64/` entry. A moving Windows bundle which has
+not yet caught up with the release, or contains a newer build, fails verification.
+Lua and data provenance relies on official HTTPS and the immutable release commit,
+not an upstream published checksum; the downloaded source ZIP's SHA-256 is recorded
+for diagnostics. A missing digest, ambiguous commit, checksum mismatch, missing
+dependency or non-x64 PE image prevents installation. These are not separate
+maintainer signatures. A GitHub page markup change can require an adapter update;
+there is no unchecked or all-platform archive fallback.
 
 Download and extraction have byte/count limits. Unsafe paths, duplicate runtime
 paths, symlinks and junctions are rejected. Downloads, extraction and rollback
@@ -72,8 +80,9 @@ failure rolls it back. If an external filesystem change prevents rollback, the
 old directory is retained for recovery. No upstream `.cmd`, `.bat`, shell script
 or Cygwin setup helper is executed.
 
-`version.txt` records the release tag and `release.json` records verified archive
-and manifest digests. zapret2 uses its own installation directory, normally
+`version.txt` records the release tag and `release.json` records the source commit,
+source archive digest, manifest digest, Windows source URL and verified per-file
+Windows digests. zapret2 uses its own installation directory, normally
 `%APPDATA%\zapret-ui\zapret2`, next to the existing zapret1 directory. In service
 mode it is restaged to the separate protected ProgramData copy, with staging
 and rollback files in `%ProgramData%\zapret-ui\zapret2-work`. Both loaded Lua
@@ -207,9 +216,21 @@ metadata, official sources and build workflow were inspected without changing
 antivirus settings. The application does not perform antivirus scanning,
 automatically create Defender exclusions or change Windows protection settings;
 this block came from the operating system.
-No real winws2 execution, DPI interception or zapret2 SCM
-startup smoke test was performed. End-to-end download, extraction and launch
-of that real archive therefore remain unverified here.
+The combined v1.0.7 release ZIP was also blocked with
+`Trojan:Win32/Suschil!rfn`. A separate official Windows x64 CI artifact from
+the same tag was verified against the release SHA-256 manifest and scanned
+with Defender without detections. Its Windows binaries already have no UPX.
+An isolated local test on 13 November 2026 accepted all three preset dry runs,
+initialized WinDivert with the real winws2, kept the process alive during
+bounded network probes, and stopped the test process. No protection settings
+or installed core/configuration were changed. The installer now uses the
+Windows-only delivery path described above; Windows binaries remain byte-for-byte
+identical to the checksummed release. The normal offline suite never contacts
+upstream; `live_windows_only_install_and_update` is an explicitly ignored
+developer-machine test for download, installation and user-data preservation.
+This test passed on the same Windows computer on 13 November 2026: both the
+initial install and a second update completed, and the custom user list survived.
+Zapret2 SCM startup and provider-specific bypass effectiveness remain unverified.
 
 The implementation includes offline archive/catalog fixtures, configuration
 checks and mock lifecycle/tester tests. The final task report records the actual

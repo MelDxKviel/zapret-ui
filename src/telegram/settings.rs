@@ -53,6 +53,7 @@ pub(super) fn prepare(mut settings: TelegramProxySettings) -> Result<TelegramPro
         "telegram.error_limit"
     );
     let map = overrides(&settings.dc_overrides)?;
+    settings.relay_domains = super::relay::domains(&settings.relay_domains)?.join(" ");
     settings.dc_overrides = map
         .iter()
         .map(|(dc, ip)| format!("{dc}:{ip}"))

@@ -40,6 +40,7 @@ async fn unreachable_upstream_is_reported_without_stopping_the_listener() {
             .prepare_settings(TelegramProxySettings {
                 port: free_port(),
                 tcp_fallback: false,
+                relay_enabled: false,
                 dc_overrides: String::new(),
                 ..Default::default()
             })
@@ -413,64 +414,97 @@ async fn live_telegram_wss_dc4_media_mtproto_roundtrip() {
 }
 
 async fn live_telegram_roundtrip(dc: i16) {
+    live_telegram_roundtrip_with_relay(dc, false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a reachable opted-in third-party relay and Telegram"]
+async fn live_telegram_relay_mtproto_roundtrip() {
+    live_telegram_roundtrip_with_relay(2, true).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a reachable opted-in third-party media relay and Telegram"]
+async fn live_telegram_relay_media_mtproto_roundtrip() {
+    live_telegram_roundtrip_with_relay(-2, true).await;
+}
+
+async fn live_telegram_roundtrip_with_relay(dc: i16, relay_enabled: bool) {
+    live_telegram_roundtrips(&[dc], relay_enabled).await;
+}
+
+#[tokio::test]
+#[ignore = "requires reachable opted-in third-party relays for all Telegram DCs"]
+async fn live_telegram_relay_all_dcs_mtproto_roundtrip() {
+    live_telegram_roundtrips(&[1, 2, 3, 4, 5, -2, -4], true).await;
+}
+
+async fn live_telegram_roundtrips(dcs: &[i16], relay_enabled: bool) {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .with_test_writer()
         .try_init();
-    timeout(Duration::from_secs(35), async {
-        let proxy = LocalTelegramProxy::default();
-        let settings = proxy
-            .prepare_settings(TelegramProxySettings {
-                port: free_port(),
-                tcp_fallback: false,
-                ..Default::default()
-            })
-            .unwrap();
-        let secret = settings::decode_secret(&settings.secret).unwrap();
-        proxy
-            .start(
-                settings.clone(),
-                Arc::new(|s| {
-                    if !s.error.is_empty() {
-                        eprintln!("{}", s.error);
-                    }
-                }),
-            )
-            .await
-            .unwrap();
-        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, settings.port))
-            .await
-            .unwrap();
-        let (init, mut encrypt, mut decrypt) = client_init(&secret, dc);
-        client.write_all(&init).await.unwrap();
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap();
-        let message_id =
-            ((now.as_secs() << 32) | ((u64::from(now.subsec_nanos()) << 32) / 1_000_000_000)) & !3;
-        let mut nonce = [0; 16];
-        getrandom::fill(&mut nonce).unwrap();
-        let mut message = Vec::new();
-        message.extend_from_slice(&40u32.to_le_bytes()); // padded intermediate, no padding
-        message.extend_from_slice(&0u64.to_le_bytes()); // unauthenticated MTProto
-        message.extend_from_slice(&message_id.to_le_bytes());
-        message.extend_from_slice(&20u32.to_le_bytes());
-        message.extend_from_slice(&0xbe7e8ef1u32.to_le_bytes()); // req_pq_multi
-        message.extend_from_slice(&nonce);
-        encrypt.apply_keystream(&mut message);
-        client.write_all(&message).await.unwrap();
-        let response =
-            protocol::read_packet(&mut client, &mut decrypt, protocol::Transport::Padded)
-                .await
-                .unwrap()
+    timeout(
+        Duration::from_secs(35 + 5 * (dcs.len() as u64 - 1)),
+        async {
+            let proxy = LocalTelegramProxy::default();
+            let settings = proxy
+                .prepare_settings(TelegramProxySettings {
+                    port: free_port(),
+                    tcp_fallback: false,
+                    relay_enabled,
+                    ..Default::default()
+                })
                 .unwrap();
-        assert!(response.len() >= 44, "DC{dc}: short MTProto response");
-        assert_eq!(&response[4..12], &[0; 8]);
-        assert_eq!(&response[24..28], &0x05162463u32.to_le_bytes()); // resPQ
-        assert_eq!(&response[28..44], &nonce);
-        proxy.stop().await.unwrap();
-    })
+            let secret = settings::decode_secret(&settings.secret).unwrap();
+            proxy
+                .start(
+                    settings.clone(),
+                    Arc::new(|s| {
+                        if !s.error.is_empty() {
+                            eprintln!("{}", s.error);
+                        }
+                    }),
+                )
+                .await
+                .unwrap();
+            for &dc in dcs {
+                let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, settings.port))
+                    .await
+                    .unwrap();
+                let (init, mut encrypt, mut decrypt) = client_init(&secret, dc);
+                client.write_all(&init).await.unwrap();
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap();
+                let message_id = ((now.as_secs() << 32)
+                    | ((u64::from(now.subsec_nanos()) << 32) / 1_000_000_000))
+                    & !3;
+                let mut nonce = [0; 16];
+                getrandom::fill(&mut nonce).unwrap();
+                let mut message = Vec::new();
+                message.extend_from_slice(&40u32.to_le_bytes()); // padded intermediate, no padding
+                message.extend_from_slice(&0u64.to_le_bytes()); // unauthenticated MTProto
+                message.extend_from_slice(&message_id.to_le_bytes());
+                message.extend_from_slice(&20u32.to_le_bytes());
+                message.extend_from_slice(&0xbe7e8ef1u32.to_le_bytes()); // req_pq_multi
+                message.extend_from_slice(&nonce);
+                encrypt.apply_keystream(&mut message);
+                client.write_all(&message).await.unwrap();
+                let response =
+                    protocol::read_packet(&mut client, &mut decrypt, protocol::Transport::Padded)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert!(response.len() >= 44, "DC{dc}: short MTProto response");
+                assert_eq!(&response[4..12], &[0; 8]);
+                assert_eq!(&response[24..28], &0x05162463u32.to_le_bytes()); // resPQ
+                assert_eq!(&response[28..44], &nonce);
+            }
+            proxy.stop().await.unwrap();
+        },
+    )
     .await
     .unwrap();
 }

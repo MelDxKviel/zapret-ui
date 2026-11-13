@@ -100,6 +100,19 @@ fn connection_diagnostics_report_safe_categories_without_upstream_text() {
     );
 }
 
+#[test]
+fn default_relay_can_be_disabled_without_creating_relay_state() {
+    let mut settings = TelegramProxySettings {
+        relay_domains: "relay.example.org".into(),
+        ..Default::default()
+    };
+    let routes = Routes::new(&settings).unwrap();
+    assert!(routes.relay.is_some());
+    assert!(routes.tls.enable_sni);
+    settings.relay_enabled = false;
+    assert!(Routes::new(&settings).unwrap().relay.is_none());
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn outbound_connection_closes_while_spawned_child_is_alive() {

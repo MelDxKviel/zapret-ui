@@ -28,6 +28,8 @@ export component TelegramPage inherits Rectangle {
     in property <string> secret;
     in property <string> dc-overrides;
     in property <bool> fallback;
+    in property <bool> relay-enabled;
+    in property <string> relay-domains;
     in property <string> timeout;
     in property <string> limit;
     in property <string> link;
@@ -35,7 +37,7 @@ export component TelegramPage inherits Rectangle {
     callback stop-clicked();
     callback connect-clicked();
     callback copy-clicked();
-    callback save-clicked(string, string, string, bool, string, string);
+    callback save-clicked(string, string, string, bool, string, string, bool, string);
     callback reset-clicked(bool);
 
     in-out property <bool> settings-open: false;
@@ -46,6 +48,8 @@ export component TelegramPage inherits Rectangle {
     property <string> draft-secret;
     property <string> draft-dc;
     property <bool> draft-fallback;
+    property <bool> draft-relay;
+    property <string> draft-relay-domains;
     property <string> draft-timeout;
     property <string> draft-limit;
     changed busy => {
@@ -63,6 +67,8 @@ export component TelegramPage inherits Rectangle {
         root.draft-secret = root.secret;
         root.draft-dc = root.dc-overrides;
         root.draft-fallback = root.fallback;
+        root.draft-relay = root.relay-enabled;
+        root.draft-relay-domains = root.relay-domains;
         root.draft-timeout = root.timeout;
         root.draft-limit = root.limit;
     }
@@ -330,6 +336,44 @@ export component TelegramPage inherits Rectangle {
                             }
                             Rectangle { height: 1px; background: ThemePalette.divider; }
                             VerticalLayout {
+                                spacing: 14px;
+                                HorizontalLayout {
+                                    spacing: 20px;
+                                    VerticalLayout {
+                                        spacing: 5px;
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        Label { text: I18n.t(I18n.lang, "telegram.relay"); }
+                                        Caption { text: I18n.t(I18n.lang, "telegram.relay_hint"); }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        horizontal-stretch: 0;
+                                        width: 38px;
+                                        AppSwitch { checked <=> root.draft-relay; enabled: !root.running && !root.busy; }
+                                    }
+                                }
+                                if root.draft-relay : VerticalLayout {
+                                    spacing: 8px;
+                                    Label { text: I18n.t(I18n.lang, "telegram.relay_domains"); }
+                                    AppInput {
+                                        text <=> root.draft-relay-domains;
+                                        enabled: !root.running && !root.busy;
+                                        placeholder: I18n.t(I18n.lang, "telegram.relay_domains_placeholder");
+                                    }
+                                    Caption {
+                                        width: min(sv.visible-width - 8px, 600px) - 48px;
+                                        text: I18n.t(I18n.lang, "telegram.relay_domains_hint");
+                                    }
+                                    Caption {
+                                        width: min(sv.visible-width - 8px, 600px) - 48px;
+                                        text: I18n.t(I18n.lang, "telegram.relay_privacy");
+                                        color: ThemePalette.warning-text;
+                                    }
+                                }
+                            }
+                            Rectangle { height: 1px; background: ThemePalette.divider; }
+                            VerticalLayout {
                                 spacing: 12px;
                                 Label { text: I18n.t(I18n.lang, "telegram.reset_title"); }
                                 Caption { text: I18n.t(I18n.lang, "telegram.reset_hint"); }
@@ -402,7 +446,7 @@ export component TelegramPage inherits Rectangle {
                     busy: root.busy;
                     clicked => {
                         root.saving = true;
-                        root.save-clicked(root.draft-port, root.draft-secret, root.draft-dc, root.draft-fallback, root.draft-timeout, root.draft-limit);
+                        root.save-clicked(root.draft-port, root.draft-secret, root.draft-dc, root.draft-fallback, root.draft-timeout, root.draft-limit, root.draft-relay, root.draft-relay-domains);
                     }
                 }
             }

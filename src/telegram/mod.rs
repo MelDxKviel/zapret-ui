@@ -2,6 +2,7 @@
 //! No Python/runtime downloads, preconnection pool, periodic probes or worker
 //! thread. Uses the app's Tokio runtime; stopping joins all connection tasks.
 mod protocol;
+mod relay;
 mod settings;
 mod tls;
 mod transport;

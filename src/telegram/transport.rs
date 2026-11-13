@@ -1,6 +1,6 @@
 use super::{
     protocol::{self, Cipher, Handshake, MAX_PACKET},
-    settings, tls,
+    relay, settings, tls,
 };
 use crate::contracts::TelegramProxySettings;
 use aes::cipher::StreamCipher;
@@ -113,6 +113,7 @@ pub(super) struct Routes {
     tls_without_sni: Arc<rustls::ClientConfig>,
     verifier: Arc<rustls::client::WebPkiServerVerifier>,
     dials: Semaphore,
+    relay: Option<relay::Relay>,
     /// Rate-limit diagnostics without a timer or work while the proxy is off.
     failure_logs: Mutex<BTreeMap<i16, Instant>>,
 }
@@ -146,12 +147,22 @@ impl Routes {
             tls_without_sni: Arc::new(tls_without_sni),
             verifier,
             dials: Semaphore::new(32),
+            relay: settings
+                .relay_enabled
+                .then(|| relay::Relay::new(&settings.relay_domains))
+                .transpose()?,
             failure_logs: Mutex::new(BTreeMap::new()),
         })
     }
 
-    async fn connect_ws(&self, domain: &str, address: SocketAddr, mode: TlsMode) -> Result<Ws> {
-        let _dial = self.dials.acquire().await?;
+    async fn connect_ws(
+        &self,
+        domain: &str,
+        address: SocketAddr,
+        mode: TlsMode,
+        dials: &Semaphore,
+    ) -> Result<Ws> {
+        let _dial = dials.acquire().await?;
         let socket = connect_tcp(address).await?;
         socket.set_nodelay(true)?;
         // The override changes only the destination IP. TLS still validates
@@ -212,7 +223,7 @@ impl Routes {
                         }))
                         .await;
                     }
-                    let result = self.connect_ws(domain, address, mode).await;
+                    let result = self.connect_ws(domain, address, mode, &self.dials).await;
                     (address, mode, result)
                 });
             }
@@ -264,6 +275,66 @@ impl Routes {
         // Preserve the signed DC in relay_init: the requested session stays media.
         domains.push(format!("kws{id}.web.telegram.org"));
         domains
+    }
+
+    async fn connect_relay(&self, dc: i16, failures: &mut Vec<String>) -> Option<Ws> {
+        let relay = self.relay.as_ref()?;
+        let id = dc.unsigned_abs();
+        if !matches!(id, 1..=5 | 203) {
+            return None;
+        }
+        let domains = relay.candidates(id).await;
+        if domains.is_empty() {
+            failures.push("relay directory unavailable or empty".into());
+            return None;
+        }
+        let mut attempts = futures_util::stream::FuturesUnordered::new();
+        for (index, base) in domains.into_iter().enumerate() {
+            attempts.push(async move {
+                tokio::time::sleep(Duration::from_millis(index as u64 * 150)).await;
+                let domain = format!("kws{id}.{base}");
+                let result = timeout(self.timeout, async {
+                    let addresses = lookup_host((domain.as_str(), 443)).await?;
+                    let addresses =
+                        alternate_ws_addresses(addresses, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+                    let mut sockets = futures_util::stream::FuturesUnordered::new();
+                    for address in addresses.into_iter().take(2) {
+                        // Relays always authenticate their own DNS name using
+                        // normal TLS. Dedicated permits keep blocked direct TCP
+                        // attempts from starving the optional fallback.
+                        sockets.push(self.connect_ws(
+                            &domain,
+                            address,
+                            TlsMode::Standard,
+                            &relay.dials,
+                        ));
+                    }
+                    let mut last_error = anyhow::anyhow!("no resolved relay address");
+                    while let Some(result) = sockets.next().await {
+                        match result {
+                            Ok(ws) => return Ok(ws),
+                            Err(error) => last_error = error,
+                        }
+                    }
+                    Err(last_error)
+                })
+                .await;
+                (base, domain, result)
+            });
+        }
+        while let Some((base, domain, result)) = attempts.next().await {
+            match result {
+                Ok(Ok(ws)) => {
+                    relay.remember(id, base).await;
+                    tracing::info!("Telegram DC{dc}: connected through WSS relay (TLS verified)");
+                    tracing::debug!("Telegram DC{dc}: relay {domain}");
+                    return Some(ws);
+                }
+                Ok(Err(error)) => failures.push(format!("Relay {domain}: {}", ws_failure(&error))),
+                Err(_) => failures.push(format!("Relay {domain}: timed out")),
+            }
+        }
+        None
     }
 
     async fn connect(&self, dc: i16) -> Result<Upstream> {
@@ -320,7 +391,28 @@ impl Routes {
                 .boxed(),
             );
         }
-        let wss = timeout(self.timeout, async {
+        if self.relay.is_some() {
+            attempts.push(
+                async {
+                    // Prefer a healthy official route; hedge IP-blocked networks
+                    // without waiting for the full direct connection timeout.
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    let mut reasons = Vec::new();
+                    let ws = self.connect_relay(dc, &mut reasons).await;
+                    (ws, reasons)
+                }
+                .boxed(),
+            );
+        }
+        // A cold relay directory has a separate bounded five-second bootstrap.
+        // No directory client or traffic exists when the feature is disabled.
+        let deadline = self.timeout
+            + if self.relay.is_some() {
+                Duration::from_secs(5)
+            } else {
+                Duration::ZERO
+            };
+        let wss = timeout(deadline, async {
             while let Some((ws, reasons)) = attempts.next().await {
                 failures.extend(reasons);
                 if ws.is_some() {

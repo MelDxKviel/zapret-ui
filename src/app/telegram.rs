@@ -18,6 +18,8 @@ pub(super) fn apply_settings(ui: &MainWindow, settings: &TelegramProxySettings) 
     ui.set_telegram_secret(settings.secret.as_str().into());
     ui.set_telegram_dc_overrides(settings.dc_overrides.as_str().into());
     ui.set_telegram_fallback(settings.tcp_fallback);
+    ui.set_telegram_relay_enabled(settings.relay_enabled);
+    ui.set_telegram_relay_domains(settings.relay_domains.as_str().into());
     ui.set_telegram_timeout(settings.connect_timeout_secs.to_string().into());
     ui.set_telegram_limit(settings.max_connections.to_string().into());
     ui.set_telegram_link(settings.link().into());
@@ -302,37 +304,41 @@ pub(super) fn bind(
     ui.on_set_telegram_autostart(move |enabled| c.dispatch(Action::Autostart(enabled)));
     let weak = ui.as_weak();
     let save_controller = controller.clone();
-    ui.on_telegram_save(move |port, secret, dc, fallback, timeout, limit| {
-        let Some(ui) = weak.upgrade() else {
-            return;
-        };
-        let parse = || -> anyhow::Result<TelegramProxySettings> {
-            Ok(TelegramProxySettings {
-                port: port
-                    .trim()
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("telegram.error_port"))?,
-                secret: secret.to_string(),
-                dc_overrides: dc.to_string(),
-                tcp_fallback: fallback,
-                connect_timeout_secs: timeout
-                    .trim()
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("telegram.error_timeout"))?,
-                max_connections: limit
-                    .trim()
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("telegram.error_limit"))?,
-            })
-        };
-        match parse() {
-            Ok(settings) => save_controller.dispatch(Action::Save(settings)),
-            Err(error) => {
-                ui.set_telegram_error(error.to_string().into());
-                ui.set_telegram_busy(false);
+    ui.on_telegram_save(
+        move |port, secret, dc, fallback, timeout, limit, relay_enabled, relay_domains| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let parse = || -> anyhow::Result<TelegramProxySettings> {
+                Ok(TelegramProxySettings {
+                    port: port
+                        .trim()
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("telegram.error_port"))?,
+                    secret: secret.to_string(),
+                    dc_overrides: dc.to_string(),
+                    tcp_fallback: fallback,
+                    relay_enabled,
+                    relay_domains: relay_domains.to_string(),
+                    connect_timeout_secs: timeout
+                        .trim()
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("telegram.error_timeout"))?,
+                    max_connections: limit
+                        .trim()
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("telegram.error_limit"))?,
+                })
+            };
+            match parse() {
+                Ok(settings) => save_controller.dispatch(Action::Save(settings)),
+                Err(error) => {
+                    ui.set_telegram_error(error.to_string().into());
+                    ui.set_telegram_busy(false);
+                }
             }
-        }
-    });
+        },
+    );
     let weak = ui.as_weak();
     ui.on_telegram_connect(move || {
         if let Some(ui) = weak.upgrade() {

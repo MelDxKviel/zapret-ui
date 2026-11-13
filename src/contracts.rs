@@ -508,6 +508,10 @@ pub struct TelegramProxySettings {
     /// Optional WS endpoint overrides, e.g. "2:149.154.167.220 4:149.154.167.220".
     pub dc_overrides: String,
     pub tcp_fallback: bool,
+    /// Third-party fallback, enabled by default; an explicit opt-out is retained.
+    pub relay_enabled: bool,
+    /// Base domains; empty uses the upstream tg-ws-proxy directory on demand.
+    pub relay_domains: String,
     pub connect_timeout_secs: u16,
     pub max_connections: u16,
 }
@@ -520,6 +524,15 @@ impl std::fmt::Debug for TelegramProxySettings {
             .field("secret", &"[redacted]")
             .field("dc_overrides", &self.dc_overrides)
             .field("tcp_fallback", &self.tcp_fallback)
+            .field("relay_enabled", &self.relay_enabled)
+            .field(
+                "relay_domains",
+                &if self.relay_domains.is_empty() {
+                    ""
+                } else {
+                    "[configured]"
+                },
+            )
             .field("connect_timeout_secs", &self.connect_timeout_secs)
             .field("max_connections", &self.max_connections)
             .finish()
@@ -533,6 +546,8 @@ impl Default for TelegramProxySettings {
             secret: String::new(),
             dc_overrides: "2:149.154.167.220 4:149.154.167.220".into(),
             tcp_fallback: true,
+            relay_enabled: true,
+            relay_domains: String::new(),
             connect_timeout_secs: 5,
             max_connections: 64,
         }

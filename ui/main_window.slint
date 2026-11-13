@@ -195,6 +195,8 @@ export component MainWindow inherits Window {
     in-out property <string> telegram_secret: "";
     in-out property <string> telegram_dc_overrides: "2:149.154.167.220 4:149.154.167.220";
     in-out property <bool> telegram_fallback: true;
+    in-out property <bool> telegram_relay_enabled: true;
+    in-out property <string> telegram_relay_domains: "";
     in-out property <string> telegram_timeout: "5";
     in-out property <string> telegram_limit: "64";
     in-out property <string> telegram_link: "";
@@ -208,7 +210,7 @@ export component MainWindow inherits Window {
     callback telegram_start();
     callback telegram_stop();
     callback telegram_reset(bool);
-    callback telegram_save(string, string, string, bool, string, string);
+    callback telegram_save(string, string, string, bool, string, string, bool, string);
     callback telegram_connect();
     callback set_telegram_visible(bool);
     callback set_telegram_autostart(bool);
@@ -838,11 +840,13 @@ export component MainWindow inherits Window {
                     settings-open <=> root.telegram_settings_open;
                     running: root.telegram_running;
                     busy: root.telegram_busy;
-                    error: root.telegram_error;
+                    error: root.telegram_error == "telegram.error_upstream" && root.telegram_relay_enabled ? "telegram.error_upstream_relay" : root.telegram_error;
                     port: root.telegram_port;
                     secret: root.telegram_secret;
                     dc-overrides: root.telegram_dc_overrides;
                     fallback: root.telegram_fallback;
+                    relay-enabled: root.telegram_relay_enabled;
+                    relay-domains: root.telegram_relay_domains;
                     timeout: root.telegram_timeout;
                     limit: root.telegram_limit;
                     link: root.telegram_link;
@@ -850,10 +854,10 @@ export component MainWindow inherits Window {
                     stop-clicked => { root.telegram_busy = true; root.telegram_error = ""; root.telegram_stop(); }
                     connect-clicked => { root.telegram_connect(); }
                     copy-clicked => { root.copy_to_clipboard(root.telegram_link); }
-                    save-clicked(p, s, d, f, t, l) => {
+                    save-clicked(p, s, d, f, t, l, r, rd) => {
                         root.telegram_busy = true;
                         root.telegram_error = "";
-                        root.telegram_save(p, s, d, f, t, l);
+                        root.telegram_save(p, s, d, f, t, l, r, rd);
                     }
                     reset-clicked(all) => {
                         root.telegram_busy = true;

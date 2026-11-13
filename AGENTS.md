@@ -252,8 +252,13 @@ also stops the proxy. Its page is instantiated only while selected
 translation, retaining MTProto payload encryption. `transport.rs` sends complete
 transport packets as WS binary messages, validates TLS names even for IP
 overrides, retries official domains, and optionally falls back to direct TCP.
-Buffers/connection count are bounded. Never log secrets or proxy links. No CF
-relay domains, public listen addresses, certificate bypass or keepalive pool.
+Buffers/connection count are bounded. Never log secrets or proxy links. CF relay
+routing is enabled by default and can be disabled in proxy settings. Preserve
+an explicitly saved opt-out. Authenticate the
+relay's hostname with normal TLS; custom base domains bypass the upstream
+directory. Fetch that directory only on demand while the proxy and relay mode
+are enabled, with bounded size/time and no refresh task. No public listen
+addresses, certificate bypass or keepalive pool.
 
 Create Telegram listeners and outbound connections through `TcpSocket`, which
 sets non-inheritable Windows handles atomically. Direct Mio-backed

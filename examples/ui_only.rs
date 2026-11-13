@@ -391,6 +391,8 @@ fn main() -> anyhow::Result<()> {
                     ui.set_telegram_port(defaults.port.to_string().into());
                     ui.set_telegram_dc_overrides(defaults.dc_overrides.into());
                     ui.set_telegram_fallback(defaults.tcp_fallback);
+                    ui.set_telegram_relay_enabled(defaults.relay_enabled);
+                    ui.set_telegram_relay_domains(defaults.relay_domains.into());
                     ui.set_telegram_timeout(defaults.connect_timeout_secs.to_string().into());
                     ui.set_telegram_limit(defaults.max_connections.to_string().into());
                     ui.set_telegram_autostart(false);
@@ -542,17 +544,21 @@ fn main() -> anyhow::Result<()> {
     }
     {
         let weak = ui.as_weak();
-        ui.on_telegram_save(move |port, secret, dc, fallback, timeout, limit| {
-            if let Some(ui) = weak.upgrade() {
-                ui.set_telegram_port(port);
-                ui.set_telegram_secret(secret);
-                ui.set_telegram_dc_overrides(dc);
-                ui.set_telegram_fallback(fallback);
-                ui.set_telegram_timeout(timeout);
-                ui.set_telegram_limit(limit);
-                ui.set_telegram_busy(false);
-            }
-        });
+        ui.on_telegram_save(
+            move |port, secret, dc, fallback, timeout, limit, relay_enabled, relay_domains| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_telegram_port(port);
+                    ui.set_telegram_secret(secret);
+                    ui.set_telegram_dc_overrides(dc);
+                    ui.set_telegram_fallback(fallback);
+                    ui.set_telegram_relay_enabled(relay_enabled);
+                    ui.set_telegram_relay_domains(relay_domains);
+                    ui.set_telegram_timeout(timeout);
+                    ui.set_telegram_limit(limit);
+                    ui.set_telegram_busy(false);
+                }
+            },
+        );
     }
     {
         let weak = ui.as_weak();
@@ -1165,16 +1171,23 @@ fn main() -> anyhow::Result<()> {
             page.as_str().into()
         });
         if page.starts_with("telegram") {
+            let preview_state = std::env::var("ZAPRET_UI_PREVIEW_STATE").unwrap_or_default();
+            if matches!(
+                preview_state.as_str(),
+                "relay" | "relay-active" | "relay-error"
+            ) {
+                ui.set_telegram_relay_enabled(true);
+            }
             ui.set_telegram_settings_open(page == "telegram-settings");
             if page == "telegram-active"
-                || std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("active")
+                || matches!(preview_state.as_str(), "active" | "relay-active")
             {
                 ui.invoke_telegram_start();
             }
             if std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("starting") {
                 ui.set_telegram_busy(true);
             }
-            if std::env::var("ZAPRET_UI_PREVIEW_STATE").as_deref() == Ok("error") {
+            if matches!(preview_state.as_str(), "error" | "relay-error") {
                 ui.set_telegram_running(true);
                 ui.set_telegram_error("telegram.error_upstream".into());
             }
